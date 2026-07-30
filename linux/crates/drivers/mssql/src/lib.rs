@@ -48,17 +48,24 @@ impl DatabaseDriver for MssqlDriver {
         config.port(opts.port);
         config.database(&opts.database);
         config.authentication(AuthMethod::sql_server(&opts.username, opts.password.expose_secret()));
-        // SQL Server always encrypts the login exchange; `Off` keeps the
-        // post-login stream in the clear, `Required` encrypts everything.
-        // No cert-path UI exists, so the server certificate is trusted
-        // without verification, matching the sqlx drivers' Require /
-        // Required modes.
-        config.encryption(if opts.use_tls {
-            EncryptionLevel::Required
-        } else {
-            EncryptionLevel::Off
-        });
-        config.trust_cert();
+        use tablepro_core::TlsMode;
+        match opts.tls.mode {
+            TlsMode::Disabled => {
+                config.encryption(EncryptionLevel::Off);
+                config.trust_cert();
+            }
+            TlsMode::Prefer | TlsMode::Require => {
+                // Encrypt without authenticating the server (legacy /
+                // TOFU transition). Prefer behaves like Require here
+                // because TDS always negotiates encryption at login.
+                config.encryption(EncryptionLevel::Required);
+                config.trust_cert();
+            }
+            TlsMode::VerifyCa | TlsMode::VerifyFull => {
+                config.encryption(EncryptionLevel::Required);
+                // Do not call trust_cert(); rustls verifies the chain.
+            }
+        }
 
         // Neither the TCP dial nor the TDS login has its own deadline,
         // and an unreachable host would otherwise hang the connect

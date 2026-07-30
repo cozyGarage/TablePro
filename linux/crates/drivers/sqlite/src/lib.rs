@@ -346,9 +346,88 @@ impl Connection for SqliteConnection {
         Ok(())
     }
 
+    async fn begin(&self) -> Result<Box<dyn tablepro_core::Transaction>, DriverError> {
+        let tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        Ok(Box::new(SqliteTransaction { tx: Some(tx) }))
+    }
+
+    async fn server_version(&self) -> Result<Option<String>, DriverError> {
+        let row = sqlx::query("SELECT sqlite_version()")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        let v: String = row.try_get(0).unwrap_or_default();
+        Ok(Some(format!("SQLite {v}")))
+    }
+
     async fn close(self: Box<Self>) -> Result<(), DriverError> {
         self.pool.close().await;
         Ok(())
+    }
+}
+
+struct SqliteTransaction {
+    tx: Option<sqlx::Transaction<'static, Sqlite>>,
+}
+
+#[async_trait]
+impl tablepro_core::Transaction for SqliteTransaction {
+    async fn query(&mut self, sql: &str) -> Result<QueryResult, DriverError> {
+        let tx = self.tx.as_mut().ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        let rows = sqlx::query(sql).fetch_all(&mut **tx).await.map_err(map_sqlx_error)?;
+        if rows.is_empty() {
+            return Ok(QueryResult {
+                columns: Vec::new(),
+                rows: Vec::new(),
+                truncated: false,
+            });
+        }
+        let columns: Vec<ColumnInfo> = rows[0]
+            .columns()
+            .iter()
+            .map(|c| ColumnInfo {
+                name: c.name().to_string(),
+                data_type: c.type_info().name().to_string(),
+                nullable: true,
+                primary_key: false,
+                is_auto_increment: false,
+                default_value: None,
+                is_generated: false,
+            })
+            .collect();
+        let data: Vec<Vec<Value>> = rows
+            .iter()
+            .map(|r| (0..columns.len()).map(|i| extract_value(r, i)).collect())
+            .collect();
+        Ok(QueryResult {
+            columns,
+            rows: data,
+            truncated: false,
+        })
+    }
+
+    async fn execute(&mut self, sql: &str) -> Result<ExecResult, DriverError> {
+        let tx = self.tx.as_mut().ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        let res = sqlx::query(sql).execute(&mut **tx).await.map_err(map_sqlx_error)?;
+        Ok(ExecResult {
+            rows_affected: res.rows_affected(),
+        })
+    }
+
+    async fn commit(mut self: Box<Self>) -> Result<(), DriverError> {
+        let tx = self
+            .tx
+            .take()
+            .ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        tx.commit().await.map_err(map_sqlx_error)
+    }
+
+    async fn rollback(mut self: Box<Self>) -> Result<(), DriverError> {
+        let tx = self
+            .tx
+            .take()
+            .ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        tx.rollback().await.map_err(map_sqlx_error)
     }
 }
 

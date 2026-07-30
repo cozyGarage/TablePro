@@ -3,11 +3,19 @@ resolver = "2"
 members = [
     "crates/app",
     "crates/core",
+    "crates/policy",
+    "crates/mcp",
+    "crates/agentd",
     "crates/ssh",
     "crates/storage",
+    "crates/drivers/clickhouse",
+    "crates/drivers/duckdb",
+    "crates/drivers/mongodb",
     "crates/drivers/mssql",
     "crates/drivers/mysql",
+    "crates/drivers/oracle",
     "crates/drivers/postgres",
+    "crates/drivers/redis",
     "crates/drivers/sqlite",
 ]
 
@@ -44,8 +52,8 @@ testcontainers = "0.27"
 testcontainers-modules = "0.15"
 oo7 = { version = "0.6", default-features = false, features = ["tokio", "native_crypto"] }
 relm4 = { version = "0.11", default-features = false, features = ["macros", "libadwaita", "gnome_47"] }
-
-[profile.release]
-lto = "fat"
-codegen-units = 1
-strip = "symbols"
+sqlparser = "0.58"
+toml = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+glob = "0.3"

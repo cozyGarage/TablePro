@@ -101,4 +101,19 @@ impl App {
         dialog.set_translator_credits(&crate::tr!("translator-credits"));
         dialog.present(Some(&self.window));
     }
+
+    pub(super) fn on_explain_active_query(&self) {
+        let Some(id) = self.selected_workspace_tab_id() else {
+            self.show_toast(&crate::tr!("Open an SQL editor tab to explain a query."));
+            return;
+        };
+        let tabs = self.workspace_tabs.borrow();
+        let Some(super::WorkspaceTab::Editor(slot)) = tabs.get(&id) else {
+            self.show_toast(&crate::tr!("Open an SQL editor tab to explain a query."));
+            return;
+        };
+        let sql = slot.query.clone();
+        drop(tabs);
+        crate::ui::explain_dialog::present(&self.window, &sql);
+    }
 }

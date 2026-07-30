@@ -1,0 +1,109 @@
+//! In-process MCP server for the GTK app. Agents talk to the same
+//! policy-gated connections the UI uses.
+
+use std::sync::{Arc, OnceLock};
+
+use async_trait::async_trait;
+use tablepro_core::Connection;
+use tablepro_mcp::{ConnectionProvider, McpBridge, TokenPermissions, TokenStore};
+use tablepro_policy::Principal;
+use tablepro_storage::{SavedConnection, load_connections, store_mcp_token};
+use uuid::Uuid;
+
+use super::database_service;
+use super::gtk_approval::GtkApprovalSink;
+
+static BRIDGE: OnceLock<Arc<McpBridge>> = OnceLock::new();
+
+struct AppConnectionProvider;
+
+#[async_trait]
+impl ConnectionProvider for AppConnectionProvider {
+    async fn list_saved_connections(&self) -> Result<Vec<SavedConnection>, String> {
+        load_connections().await.map_err(|e| e.to_string())
+    }
+
+    async fn connection(
+        &self,
+        connection_id: Uuid,
+        principal: Principal,
+    ) -> Result<Arc<dyn Connection>, String> {
+        database_service::instance()
+            .handle(connection_id, principal)
+            .ok_or_else(|| format!("connection {connection_id} is not open in the app"))
+    }
+}
+
+/// Start the loopback MCP HTTP server and install the GTK approval sink.
+pub fn start_background() -> Option<Arc<McpBridge>> {
+    database_service::instance().set_approval_sink(Arc::new(GtkApprovalSink));
+
+    let tokens = match TokenStore::open_default() {
+        Ok(t) => Arc::new(t),
+        Err(e) => {
+            tracing::warn!(error = %e, "MCP token store unavailable");
+            return None;
+        }
+    };
+    let bridge = Arc::new(McpBridge::new(Arc::new(AppConnectionProvider), tokens));
+    let _ = BRIDGE.set(bridge.clone());
+    let bridge_http = bridge.clone();
+    std::thread::Builder::new()
+        .name("tablepro-mcp".into())
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("mcp runtime");
+            rt.block_on(async move {
+                if let Err(e) = tablepro_mcp::serve_streamable_http(
+                    bridge_http,
+                    tablepro_mcp::McpServerConfig::default(),
+                )
+                .await
+                {
+                    tracing::warn!(error = %e, "MCP HTTP server stopped");
+                }
+            });
+        })
+        .ok();
+    tracing::info!("MCP HTTP listening on 127.0.0.1:17432");
+    Some(bridge)
+}
+
+pub fn bridge() -> Option<Arc<McpBridge>> {
+    BRIDGE.get().cloned()
+}
+
+/// Issue a token, store plaintext in libsecret, return plaintext once.
+pub async fn issue_token(
+    name: String,
+    permissions: TokenPermissions,
+    connection_allowlist: Vec<Uuid>,
+) -> Result<(Uuid, String), String> {
+    let bridge = bridge().ok_or_else(|| "MCP server is not running".to_string())?;
+    let (meta, plaintext) = bridge
+        .tokens()
+        .issue(name.clone(), permissions, connection_allowlist, None)?;
+    if let Err(e) = store_mcp_token(meta.id, &plaintext, &format!("TablePro MCP: {name}")).await {
+        tracing::warn!(error = %e, "failed to store MCP token in libsecret");
+    }
+    Ok((meta.id, plaintext))
+}
+
+pub fn revoke_token(id: Uuid) -> Result<(), String> {
+    let bridge = bridge().ok_or_else(|| "MCP server is not running".to_string())?;
+    bridge.tokens().revoke(id)?;
+    relm4::spawn(async move {
+        if let Err(e) = tablepro_storage::delete_mcp_token(id).await {
+            tracing::warn!(error = %e, "failed to delete MCP token from libsecret");
+        }
+    });
+    Ok(())
+}
+
+pub fn list_tokens() -> Vec<tablepro_mcp::McpToken> {
+    bridge()
+        .map(|b| b.tokens().list())
+        .unwrap_or_default()
+}

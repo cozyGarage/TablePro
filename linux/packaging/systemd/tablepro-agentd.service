@@ -1,0 +1,13 @@
+[Unit]
+Description=TablePro headless MCP agent daemon
+Documentation=https://github.com/TableProApp/TablePro
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/tablepro-agentd --policy %h/.config/tablepro/policy.toml --transport stdio
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target

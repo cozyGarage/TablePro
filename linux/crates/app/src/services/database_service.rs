@@ -4,8 +4,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use tablepro_core::{ConnectOptions, Connection, DatabaseDriver};
+use tablepro_core::{ConnectOptions, Connection, DatabaseDriver, Environment};
+use tablepro_policy::{
+    AutoApproveSink, GuardContext, NullAuditSink, PolicyConfig, PolicyGuard, Principal, load_policy,
+};
 use tablepro_ssh::{SshConfig, SshTunnel};
+use tablepro_storage::AuditJournal;
 
 use super::connection_monitor;
 
@@ -26,6 +30,9 @@ pub struct ConnectionMetadata {
     pub id: Uuid,
     pub name: String,
     pub driver_id: String,
+    pub environment: Environment,
+    pub read_only: bool,
+    pub server_version: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,14 +44,16 @@ pub enum ConnectionHealth {
 pub struct ReconnectParams {
     pub driver: Arc<dyn DatabaseDriver>,
     pub opts: ConnectOptions,
-    pub ssh: Option<SshConfig>,
+    pub ssh: Option<Vec<SshConfig>>,
     pub read_only: bool,
+    pub environment: Environment,
 }
 
 struct Entry {
     inner: Arc<Mutex<EntryInner>>,
     metadata: ConnectionMetadata,
     read_only: bool,
+    environment: Environment,
     cancel: CancellationToken,
     _monitor: tokio::task::JoinHandle<()>,
 }
@@ -52,14 +61,35 @@ struct Entry {
 pub struct DatabaseService {
     connections: Mutex<HashMap<Uuid, Entry>>,
     active: Mutex<Option<Uuid>>,
+    policy: Mutex<Arc<PolicyConfig>>,
+    audit: Arc<dyn tablepro_policy::AuditSink>,
+    approval: Mutex<Arc<dyn tablepro_policy::ApprovalSink>>,
 }
 
 impl DatabaseService {
     fn new() -> Self {
+        let audit: Arc<dyn tablepro_policy::AuditSink> = match AuditJournal::open_default() {
+            Ok(j) => Arc::new(j),
+            Err(e) => {
+                tracing::warn!("audit journal unavailable: {e}");
+                Arc::new(NullAuditSink)
+            }
+        };
         Self {
             connections: Mutex::new(HashMap::new()),
             active: Mutex::new(None),
+            policy: Mutex::new(Arc::new(load_policy())),
+            audit,
+            approval: Mutex::new(Arc::new(AutoApproveSink)),
         }
+    }
+
+    pub fn set_approval_sink(&self, sink: Arc<dyn tablepro_policy::ApprovalSink>) {
+        *self.approval.lock().expect("database_service lock") = sink;
+    }
+
+    pub fn reload_policy(&self) {
+        *self.policy.lock().expect("database_service lock") = Arc::new(load_policy());
     }
 
     pub fn add(
@@ -72,6 +102,7 @@ impl DatabaseService {
         params: ReconnectParams,
     ) {
         let arc: Arc<dyn Connection> = Arc::from(connection);
+        let environment = metadata.environment;
         let inner = Arc::new(Mutex::new(EntryInner {
             connection: arc,
             tunnel,
@@ -83,6 +114,7 @@ impl DatabaseService {
             inner,
             metadata,
             read_only,
+            environment,
             cancel,
             _monitor: monitor,
         };
@@ -106,16 +138,41 @@ impl DatabaseService {
         out
     }
 
-    pub fn get(&self, id: Uuid) -> Option<Arc<dyn Connection>> {
+    /// Policy-gated handle. Raw connections are not exposed; the returned
+    /// `Arc<dyn Connection>` is always a [`PolicyGuard`].
+    pub fn handle(&self, id: Uuid, principal: Principal) -> Option<Arc<dyn Connection>> {
         let entries = self.connections.lock().expect("database_service lock");
         let entry = entries.get(&id)?;
         let inner = entry.inner.lock().expect("entry inner lock");
-        Some(inner.connection.clone())
+        let policy = self.policy.lock().expect("database_service lock").clone();
+        let approval = self.approval.lock().expect("database_service lock").clone();
+        let ctx = GuardContext {
+            connection_id: entry.metadata.id,
+            connection_name: entry.metadata.name.clone(),
+            driver_id: entry.metadata.driver_id.clone(),
+            environment: entry.environment,
+            read_only: entry.read_only,
+            principal,
+            policy,
+            approval,
+            audit: self.audit.clone(),
+        };
+        Some(Arc::new(PolicyGuard::new(inner.connection.clone(), ctx)) as Arc<dyn Connection>)
     }
 
-    pub fn active(&self) -> Option<Arc<dyn Connection>> {
+    pub fn active_handle(&self, principal: Principal) -> Option<Arc<dyn Connection>> {
         let id = self.active_id()?;
-        self.get(id)
+        self.handle(id, principal)
+    }
+
+    /// Human GUI convenience: active connection under the GUI principal.
+    pub fn active(&self) -> Option<Arc<dyn Connection>> {
+        self.active_handle(Principal::human_gui())
+    }
+
+    /// Alias for [`handle`] with the human GUI principal.
+    pub fn get(&self, id: Uuid) -> Option<Arc<dyn Connection>> {
+        self.handle(id, Principal::human_gui())
     }
 
     pub fn active_id(&self) -> Option<Uuid> {
@@ -141,6 +198,15 @@ impl DatabaseService {
             .get(&id)
             .map(|e| e.read_only)
             .unwrap_or(false)
+    }
+
+    pub fn active_environment(&self) -> Option<Environment> {
+        let id = self.active_id()?;
+        self.connections
+            .lock()
+            .expect("database_service lock")
+            .get(&id)
+            .map(|e| e.environment)
     }
 
     pub fn remove(&self, id: Uuid) {

@@ -1,0 +1,52 @@
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
+use crate::classify::StatementFacts;
+use crate::principal::Principal;
+use tablepro_core::Environment;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequest {
+    pub principal: Principal,
+    pub environment: Environment,
+    pub connection_name: String,
+    pub sql: String,
+    pub facts: StatementFacts,
+    pub rule: String,
+    pub reason: String,
+    pub preview: Option<String>,
+    pub estimated_rows: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalOutcome {
+    AllowOnce,
+    AllowSession,
+    Deny,
+}
+
+#[async_trait]
+pub trait ApprovalSink: Send + Sync {
+    async fn request(&self, req: ApprovalRequest) -> ApprovalOutcome;
+}
+
+/// Always allows. Used for Local/Dev human paths and unit tests.
+pub struct AutoApproveSink;
+
+#[async_trait]
+impl ApprovalSink for AutoApproveSink {
+    async fn request(&self, _req: ApprovalRequest) -> ApprovalOutcome {
+        ApprovalOutcome::AllowOnce
+    }
+}
+
+/// Always denies RequireApproval. Default for headless agentd without a
+/// configured interactive strategy.
+pub struct DenyApprovalSink;
+
+#[async_trait]
+impl ApprovalSink for DenyApprovalSink {
+    async fn request(&self, _req: ApprovalRequest) -> ApprovalOutcome {
+        ApprovalOutcome::Deny
+    }
+}

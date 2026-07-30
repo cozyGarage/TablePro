@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::StorageError;
+use tablepro_core::{Environment, TlsMode};
 
 const CURRENT_VERSION: u32 = 1;
 
@@ -17,9 +18,16 @@ pub struct SavedConnection {
     pub port: u16,
     pub database: String,
     pub username: String,
+    /// Legacy boolean TLS flag. Prefer `tls_mode`. Kept for round-trip of
+    /// files written before Stage 1; new writes always set `tls_mode`.
+    #[serde(default)]
     pub use_tls: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_mode: Option<TlsMode>,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub environment: Environment,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<SavedSshConfig>,
     /// Last successful open of this connection. Drives the welcome
@@ -31,12 +39,40 @@ pub struct SavedConnection {
     pub last_opened_at: Option<DateTime<Utc>>,
 }
 
+impl SavedConnection {
+    pub fn effective_tls_mode(&self) -> TlsMode {
+        self.tls_mode.unwrap_or(if self.use_tls {
+            TlsMode::VerifyFull
+        } else {
+            TlsMode::Disabled
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedSshConfig {
     pub host: String,
     pub port: u16,
     pub username: String,
     pub auth: SavedSshAuth,
+    /// Next hop toward the database (ProxyJump-style chain).
+    /// `None` means this is the last jump before the DB host.
+    /// Omitted in legacy files via `#[serde(default)]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jump: Option<Box<SavedSshConfig>>,
+}
+
+impl SavedSshConfig {
+    /// Flatten nested `jump` links into hop order: first bastion first.
+    pub fn flatten_hops(&self) -> Vec<&SavedSshConfig> {
+        let mut out = Vec::new();
+        let mut cur = Some(self);
+        while let Some(hop) = cur {
+            out.push(hop);
+            cur = hop.jump.as_deref();
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,7 +186,9 @@ mod tests {
             database: "postgres".into(),
             username: "postgres".into(),
             use_tls: false,
+            tls_mode: Some(TlsMode::Disabled),
             read_only: false,
+            environment: Environment::Local,
             ssh: None,
             last_opened_at: None,
         }
@@ -208,6 +246,24 @@ mod tests {
         let loaded = load_from(&path).await.unwrap();
         assert_eq!(loaded.len(), 1);
         assert!(loaded[0].ssh.is_none());
+        assert_eq!(loaded[0].environment, Environment::Local);
+        assert_eq!(loaded[0].effective_tls_mode(), TlsMode::Disabled);
+    }
+
+    #[tokio::test]
+    async fn legacy_use_tls_true_maps_to_verify_full() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let id = Uuid::new_v4();
+        let legacy = format!(
+            r#"{{"version":1,"connections":[{{
+                "id":"{id}","name":"Old","driver_id":"postgres",
+                "host":"db.example","port":5432,"database":"postgres",
+                "username":"postgres","use_tls":true}}]}}"#
+        );
+        tokio::fs::write(&path, legacy).await.unwrap();
+        let loaded = load_from(&path).await.unwrap();
+        assert_eq!(loaded[0].effective_tls_mode(), TlsMode::VerifyFull);
     }
 
     #[tokio::test]
@@ -223,9 +279,58 @@ mod tests {
                 path: PathBuf::from("/home/u/.ssh/id_ed25519"),
                 has_passphrase: true,
             },
+            jump: None,
         });
         save_to(&path, &[conn.clone()]).await.unwrap();
         let loaded = load_from(&path).await.unwrap();
         assert_eq!(loaded, vec![conn]);
+    }
+
+    #[tokio::test]
+    async fn ssh_jump_chain_round_trips() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let mut conn = sample_connection();
+        conn.ssh = Some(SavedSshConfig {
+            host: "edge.example.com".into(),
+            port: 22,
+            username: "edge".into(),
+            auth: SavedSshAuth::Password,
+            jump: Some(Box::new(SavedSshConfig {
+                host: "bastion.example.com".into(),
+                port: 22,
+                username: "deploy".into(),
+                auth: SavedSshAuth::PrivateKey {
+                    path: PathBuf::from("/home/u/.ssh/id_ed25519"),
+                    has_passphrase: false,
+                },
+                jump: None,
+            })),
+        });
+        save_to(&path, &[conn.clone()]).await.unwrap();
+        let loaded = load_from(&path).await.unwrap();
+        assert_eq!(loaded, vec![conn.clone()]);
+        let hops = loaded[0].ssh.as_ref().unwrap().flatten_hops();
+        assert_eq!(hops.len(), 2);
+        assert_eq!(hops[0].host, "edge.example.com");
+        assert_eq!(hops[1].host, "bastion.example.com");
+    }
+
+    #[tokio::test]
+    async fn load_accepts_legacy_ssh_without_jump() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let id = Uuid::new_v4();
+        let legacy = format!(
+            r#"{{"version":1,"connections":[{{
+                "id":"{id}","name":"Old","driver_id":"postgres",
+                "host":"localhost","port":5432,"database":"postgres",
+                "username":"postgres","use_tls":false,
+                "ssh":{{"host":"bastion","port":22,"username":"u","auth":{{"kind":"password"}}}}
+            }}]}}"#
+        );
+        tokio::fs::write(&path, legacy).await.unwrap();
+        let loaded = load_from(&path).await.unwrap();
+        assert!(loaded[0].ssh.as_ref().unwrap().jump.is_none());
     }
 }

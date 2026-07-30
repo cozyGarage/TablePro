@@ -1,0 +1,32 @@
+[package]
+name = "tablepro-agentd"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "tablepro-agentd"
+path = "src/main.rs"
+
+[dependencies]
+tablepro-core = { path = "../core" }
+tablepro-policy = { path = "../policy" }
+tablepro-storage = { path = "../storage" }
+tablepro-mcp = { path = "../mcp" }
+tablepro-driver-clickhouse = { path = "../drivers/clickhouse" }
+tablepro-driver-duckdb = { path = "../drivers/duckdb" }
+tablepro-driver-mongodb = { path = "../drivers/mongodb" }
+tablepro-driver-mssql = { path = "../drivers/mssql" }
+tablepro-driver-mysql = { path = "../drivers/mysql" }
+tablepro-driver-oracle = { path = "../drivers/oracle" }
+tablepro-driver-postgres = { path = "../drivers/postgres" }
+tablepro-driver-redis = { path = "../drivers/redis" }
+tablepro-driver-sqlite = { path = "../drivers/sqlite" }
+async-trait.workspace = true
+clap = { version = "4", features = ["derive"] }
+secrecy.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true

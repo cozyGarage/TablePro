@@ -50,6 +50,9 @@ pub struct BrowseTab {
     current_filter: tablepro_core::FilterSet,
     current_columns: Vec<ColumnInfo>,
     current_result: Option<QueryResult>,
+    /// Last row's primary-key values from the most recent page. Used
+    /// for keyset seek when offset exceeds `KEYSET_OFFSET_THRESHOLD`.
+    keyset_cursor: Option<Vec<tablepro_core::Value>>,
     current_selection: Option<gtk::MultiSelection>,
     current_total_rows: Option<u64>,
 
@@ -348,6 +351,10 @@ impl BrowseTab {
 
     pub fn current_filter(&self) -> &tablepro_core::FilterSet {
         &self.current_filter
+    }
+
+    pub fn keyset_cursor(&self) -> Option<&[tablepro_core::Value]> {
+        self.keyset_cursor.as_deref()
     }
 
     pub fn driver_id(&self) -> &str {
@@ -1606,6 +1613,7 @@ impl SimpleComponent for BrowseTab {
             current_filter: initial_filter,
             current_columns: Vec::new(),
             current_result: None,
+            keyset_cursor: None,
             current_selection: None,
             current_total_rows: None,
             inner_stack,
@@ -1685,6 +1693,7 @@ impl SimpleComponent for BrowseTab {
                 if result.columns.is_empty() && !self.current_columns.is_empty() {
                     result.columns = self.current_columns.clone();
                 }
+                self.keyset_cursor = extract_keyset_cursor(&self.current_columns, &result);
                 self.current_result = Some(result);
                 // Defer rendering until columns are also loaded — the
                 // QueryResult's ColumnInfo lacks `primary_key` /
@@ -1794,6 +1803,7 @@ impl SimpleComponent for BrowseTab {
                 // user isn't stranded on offset N where N might be
                 // beyond the new filtered total.
                 self.current_offset = 0;
+                self.keyset_cursor = None;
                 self.refresh_filter_chrome();
                 if let Some(strip) = self.filter_strip.as_ref() {
                     strip.update_filter(set);
@@ -1805,6 +1815,7 @@ impl SimpleComponent for BrowseTab {
             BrowseTabInput::FirstPage => {
                 if self.current_offset > 0 {
                     self.current_offset = 0;
+                    self.keyset_cursor = None;
                     let _ = sender.output(BrowseTabOutput::FetchPage);
                     let _ = sender.output(BrowseTabOutput::StateChanged);
                 }
@@ -1812,6 +1823,9 @@ impl SimpleComponent for BrowseTab {
             BrowseTabInput::PrevPage => {
                 if self.current_offset >= self.page_size {
                     self.current_offset -= self.page_size;
+                    // Reverse keyset is not implemented; clear cursor so
+                    // the fetch falls back to OFFSET for this page.
+                    self.keyset_cursor = None;
                     let _ = sender.output(BrowseTabOutput::FetchPage);
                     let _ = sender.output(BrowseTabOutput::StateChanged);
                 }
@@ -1834,6 +1848,7 @@ impl SimpleComponent for BrowseTab {
                 let last_page_offset = (total - 1) / self.page_size * self.page_size;
                 if self.current_offset != last_page_offset {
                     self.current_offset = last_page_offset;
+                    self.keyset_cursor = None;
                     let _ = sender.output(BrowseTabOutput::FetchPage);
                     let _ = sender.output(BrowseTabOutput::StateChanged);
                 }
@@ -1851,6 +1866,7 @@ impl SimpleComponent for BrowseTab {
                 }
                 self.current_sort = Some(next);
                 self.current_offset = 0;
+                self.keyset_cursor = None;
                 self.capture_focus_for_restore();
                 let _ = sender.output(BrowseTabOutput::FetchPage);
                 let _ = sender.output(BrowseTabOutput::StateChanged);
@@ -1861,6 +1877,7 @@ impl SimpleComponent for BrowseTab {
                 }
                 self.page_size = size;
                 self.current_offset = 0;
+                self.keyset_cursor = None;
                 let _ = sender.output(BrowseTabOutput::FetchPage);
                 let _ = sender.output(BrowseTabOutput::StateChanged);
             }
@@ -2421,6 +2438,24 @@ impl SimpleComponent for BrowseTab {
             }
         }
     }
+}
+
+fn extract_keyset_cursor(columns: &[ColumnInfo], result: &QueryResult) -> Option<Vec<tablepro_core::Value>> {
+    let last_row = result.rows.last()?;
+    let pk_indexes: Vec<usize> = columns
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.primary_key)
+        .map(|(i, _)| i)
+        .collect();
+    if pk_indexes.is_empty() {
+        return None;
+    }
+    let mut values = Vec::with_capacity(pk_indexes.len());
+    for idx in pk_indexes {
+        values.push(last_row.get(idx)?.clone());
+    }
+    Some(values)
 }
 
 fn clear_box(b: &gtk::Box) {

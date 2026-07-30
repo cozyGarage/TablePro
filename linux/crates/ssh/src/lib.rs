@@ -40,6 +40,8 @@ pub enum SshError {
     Connect(String),
     #[error("authentication failed")]
     Auth,
+    #[error("SSH jump chain requires at least one hop")]
+    EmptyChain,
     #[error("read private key {path}: {source}")]
     Key {
         path: PathBuf,
@@ -66,41 +68,57 @@ pub enum SshError {
     Ssh(#[from] russh::Error),
 }
 
+/// Local TCP listener that forwards through one or more SSH sessions.
+///
+/// For a jump chain, intermediate hops stay alive as nested
+/// [`SshTunnel`] values so each local forward remains reachable.
 pub struct SshTunnel {
     local_port: u16,
     cancel: CancellationToken,
     _task: tokio::task::JoinHandle<()>,
+    /// Intermediate hop tunnels (dropped after this forwarder cancels).
+    _upstream: Vec<SshTunnel>,
 }
 
 impl SshTunnel {
+    /// Single-hop convenience: tunnel through `cfg` to `remote_host:remote_port`.
     pub async fn open(cfg: SshConfig, remote_host: String, remote_port: u16) -> Result<Self, SshError> {
-        let session = Arc::new(connect_and_auth(&cfg).await?);
-        let listener = TcpListener::bind((LOCAL_BIND_HOST, 0)).await.map_err(SshError::Bind)?;
-        let local_port = listener.local_addr().map_err(SshError::Bind)?.port();
+        Self::open_chain(std::slice::from_ref(&cfg), remote_host, remote_port).await
+    }
 
-        tracing::info!(
-            ssh_host = %cfg.host,
-            ssh_port = cfg.port,
-            local_port,
-            remote_host = %remote_host,
-            remote_port,
-            "ssh tunnel listening"
-        );
+    /// Multi-hop tunnel. `hops[0]` is the first bastion (TCP connect
+    /// goes there directly); `hops[n-1]` is the last jump before the
+    /// database. Nested local forwards: hop0 → hop1:22 → … → remote.
+    pub async fn open_chain(hops: &[SshConfig], remote_host: String, remote_port: u16) -> Result<Self, SshError> {
+        if hops.is_empty() {
+            return Err(SshError::EmptyChain);
+        }
 
-        let cancel = CancellationToken::new();
-        let task = tokio::spawn(forwarder_loop(
-            listener,
-            session,
-            remote_host,
-            remote_port,
-            cancel.clone(),
-        ));
+        let mut upstream: Vec<SshTunnel> = Vec::new();
+        let mut tcp_host = hops[0].host.clone();
+        let mut tcp_port = hops[0].port;
 
-        Ok(Self {
-            local_port,
-            cancel,
-            _task: task,
-        })
+        for (i, hop) in hops.iter().enumerate() {
+            let is_last = i + 1 == hops.len();
+            let (fwd_host, fwd_port) = if is_last {
+                (remote_host.as_str(), remote_port)
+            } else {
+                (hops[i + 1].host.as_str(), hops[i + 1].port)
+            };
+
+            let mut tunnel = open_single(hop, &tcp_host, tcp_port, fwd_host.to_string(), fwd_port).await?;
+
+            if is_last {
+                tunnel._upstream = upstream;
+                return Ok(tunnel);
+            }
+
+            tcp_host = tunnel.local_host().to_string();
+            tcp_port = tunnel.local_port();
+            upstream.push(tunnel);
+        }
+
+        unreachable!("open_chain loop always returns on last hop")
     }
 
     pub fn local_port(&self) -> u16 {
@@ -186,7 +204,48 @@ pub fn default_known_hosts_path() -> Option<PathBuf> {
     Some(base.join("tablepro").join("known_hosts"))
 }
 
-async fn connect_and_auth(cfg: &SshConfig) -> Result<Handle<ClientHandler>, SshError> {
+/// Open one hop: TCP to `(tcp_host, tcp_port)`, verify host key as
+/// `cfg.host:cfg.port`, forward local listeners to `fwd_host:fwd_port`.
+async fn open_single(
+    cfg: &SshConfig,
+    tcp_host: &str,
+    tcp_port: u16,
+    fwd_host: String,
+    fwd_port: u16,
+) -> Result<SshTunnel, SshError> {
+    let session = Arc::new(connect_and_auth(cfg, tcp_host, tcp_port).await?);
+    let listener = TcpListener::bind((LOCAL_BIND_HOST, 0)).await.map_err(SshError::Bind)?;
+    let local_port = listener.local_addr().map_err(SshError::Bind)?.port();
+
+    tracing::info!(
+        ssh_host = %cfg.host,
+        ssh_port = cfg.port,
+        tcp_host,
+        tcp_port,
+        local_port,
+        remote_host = %fwd_host,
+        remote_port = fwd_port,
+        "ssh tunnel listening"
+    );
+
+    let cancel = CancellationToken::new();
+    let task = tokio::spawn(forwarder_loop(
+        listener,
+        session,
+        fwd_host,
+        fwd_port,
+        cancel.clone(),
+    ));
+
+    Ok(SshTunnel {
+        local_port,
+        cancel,
+        _task: task,
+        _upstream: Vec::new(),
+    })
+}
+
+async fn connect_and_auth(cfg: &SshConfig, tcp_host: &str, tcp_port: u16) -> Result<Handle<ClientHandler>, SshError> {
     let known_hosts_path = default_known_hosts_path()
         .ok_or_else(|| SshError::KnownHosts("neither XDG_CONFIG_HOME nor HOME is set".into()))?;
     let outcome = Arc::new(Mutex::new(None));
@@ -201,7 +260,7 @@ async fn connect_and_auth(cfg: &SshConfig) -> Result<Handle<ClientHandler>, SshE
         nodelay: true,
         ..Default::default()
     });
-    let mut session = match client::connect(config, (cfg.host.as_str(), cfg.port), handler).await {
+    let mut session = match client::connect(config, (tcp_host, tcp_port), handler).await {
         Ok(s) => s,
         Err(e) => return Err(map_connect_error(e, &cfg.host, cfg.port, &known_hosts_path, &outcome)),
     };
@@ -367,6 +426,31 @@ mod tests {
         };
         let dbg = format!("{auth:?}");
         assert!(!dbg.contains("topsecret"), "password leaked in Debug: {dbg}");
+    }
+
+    #[test]
+    fn empty_chain_is_rejected() {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(SshTunnel::open_chain(&[], "db".into(), 5432));
+        assert!(matches!(result, Err(SshError::EmptyChain)));
+    }
+
+    #[test]
+    fn open_is_single_hop_wrapper_shape() {
+        let cfg = SshConfig {
+            host: "bastion.example".into(),
+            port: 22,
+            username: "deploy".into(),
+            auth: SshAuth::Password {
+                password: SecretString::new("x".to_string().into()),
+            },
+        };
+        let hops = std::slice::from_ref(&cfg);
+        assert_eq!(hops.len(), 1);
+        assert_eq!(hops[0].host, "bastion.example");
     }
 
     const KEY_A_BASE64: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIGAdbe+Xv3hfmzwpfcGVeMHE/jfo5bmR1IgIpfuP4ypR";

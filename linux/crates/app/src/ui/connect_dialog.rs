@@ -6,7 +6,7 @@ use relm4::{adw, gtk};
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
-use tablepro_core::{ConnectOptions, DriverRegistry, TableInfo};
+use tablepro_core::{ConnectOptions, DriverRegistry, Environment, TableInfo};
 use tablepro_storage::{
     SavedConnection, SavedSshConfig, save_connections, store_password, store_ssh_passphrase, store_ssh_password,
 };
@@ -26,6 +26,7 @@ pub struct ConnectDialog {
     password: adw::PasswordEntryRow,
     use_tls: adw::SwitchRow,
     read_only: adw::SwitchRow,
+    environment: adw::ComboRow,
     auth_group: adw::PreferencesGroup,
     ssh: SshSection,
     test_button: gtk::Button,
@@ -152,14 +153,21 @@ impl Component for ConnectDialog {
         let password = adw::PasswordEntryRow::builder().title(crate::tr!("Password")).build();
         let use_tls = adw::SwitchRow::builder()
             .title(crate::tr!("Use TLS"))
-            .subtitle(crate::tr!("Require encrypted connection"))
+            .subtitle(crate::tr!("VerifyFull: encrypt and authenticate the server"))
             .active(false)
             .build();
         let read_only = adw::SwitchRow::builder()
             .title(crate::tr!("Read-only mode"))
-            .subtitle(crate::tr!("Block INSERT, UPDATE, DELETE, and DDL on this connection"))
+            .subtitle(crate::tr!("Block writes at the policy layer"))
             .active(false)
             .build();
+        let environment = adw::ComboRow::builder()
+            .title(crate::tr!("Environment"))
+            .subtitle(crate::tr!("Drives agent and approval defaults"))
+            .build();
+        let env_model = gtk::StringList::new(&["Local", "Dev", "Staging", "Prod"]);
+        environment.set_model(Some(&env_model));
+        environment.set_selected(0);
 
         let ssh = SshSection::build();
         let sender_for_ssh = sender.clone();
@@ -196,6 +204,7 @@ impl Component for ConnectDialog {
         let options_group = adw::PreferencesGroup::builder().title(crate::tr!("Options")).build();
         options_group.add(&use_tls);
         options_group.add(&read_only);
+        options_group.add(&environment);
 
         let test_button = gtk::Button::builder().label(crate::tr!("Test")).build();
         let sender_for_test = sender.clone();
@@ -229,6 +238,7 @@ impl Component for ConnectDialog {
             password,
             use_tls,
             read_only,
+            environment,
             auth_group,
             ssh,
             test_button,
@@ -306,7 +316,7 @@ impl Component for ConnectDialog {
                     database: self.database.text().to_string(),
                     username: self.username.text().to_string(),
                     password: SecretString::new(self.password.text().to_string().into()),
-                    use_tls: self.use_tls.is_active(),
+                    tls: crate::services::connection_service::tls_from_toggle(self.use_tls.is_active()),
                 };
 
                 let label = if entry.id == "sqlite" {
@@ -329,12 +339,21 @@ impl Component for ConnectDialog {
                     None
                 };
                 let read_only = self.read_only.is_active();
+                let environment = self.selected_environment();
 
                 sender.command(move |out, shutdown| {
                     shutdown
                         .register(async move {
-                            let result =
-                                run_connect(driver.clone(), driver_id, label, opts, ssh_inputs, read_only).await;
+                            let result = run_connect(
+                                driver.clone(),
+                                driver_id,
+                                label,
+                                opts,
+                                ssh_inputs,
+                                read_only,
+                                environment,
+                            )
+                            .await;
                             out.send(ConnectDialogCmd::Result(result)).ok();
                         })
                         .drop_on_shutdown()
@@ -361,11 +380,11 @@ impl Component for ConnectDialog {
                     database: self.database.text().to_string(),
                     username: self.username.text().to_string(),
                     password: SecretString::new(self.password.text().to_string().into()),
-                    use_tls: self.use_tls.is_active(),
+                    tls: crate::services::connection_service::tls_from_toggle(self.use_tls.is_active()),
                 };
                 let ssh_inputs = if self.ssh.is_enabled() {
                     match self.ssh.collect() {
-                        Ok(inputs) => Some(inputs.cfg),
+                        Ok(inputs) => Some(vec![inputs.cfg]),
                         Err(e) => {
                             self.set_busy(BusyKind::None);
                             self.show_toast(&e);
@@ -380,7 +399,7 @@ impl Component for ConnectDialog {
                     shutdown
                         .register(async move {
                             let result =
-                                match connection_service::establish(driver.as_ref(), opts, ssh_inputs, false).await {
+                                match connection_service::establish(driver.as_ref(), opts, ssh_inputs).await {
                                     Ok((conn, _tunnel)) => match conn.list_tables().await {
                                         Ok(tables) => Ok(tables.len()),
                                         Err(e) => Err(format!("list_tables: {e}")),
@@ -462,6 +481,15 @@ impl ConnectDialog {
         true
     }
 
+    fn selected_environment(&self) -> Environment {
+        match self.environment.selected() {
+            1 => Environment::Dev,
+            2 => Environment::Staging,
+            3 => Environment::Prod,
+            _ => Environment::Local,
+        }
+    }
+
     fn apply_driver_form_visibility(&self, driver: &dyn tablepro_core::DatabaseDriver) {
         let file_based = driver.is_file_based();
         self.host.set_visible(!file_based);
@@ -527,13 +555,14 @@ async fn run_connect(
     opts: ConnectOptions,
     ssh: Option<SshInputs>,
     read_only: bool,
+    environment: Environment,
 ) -> Result<(SavedConnection, Vec<TableInfo>), String> {
     let stored_password: SecretString = opts.password.clone();
-    let ssh_for_establish = ssh.as_ref().map(|s| s.cfg.clone());
+    let ssh_for_establish = ssh.as_ref().map(|s| vec![s.cfg.clone()]);
     let opts_clone = opts.clone();
 
-    let (conn, tunnel) =
-        connection_service::establish(driver.as_ref(), opts.clone(), ssh_for_establish, read_only).await?;
+    let (conn, tunnel) = connection_service::establish(driver.as_ref(), opts.clone(), ssh_for_establish.clone()).await?;
+    let server_version = conn.server_version().await.ok().flatten();
     let tables = conn.list_tables().await.map_err(|e| format!("list_tables: {e}"))?;
 
     let id = match find_existing_id(&driver_id, &opts_clone, ssh.as_ref()).await {
@@ -541,6 +570,7 @@ async fn run_connect(
         None => Uuid::new_v4(),
     };
 
+    let tls_mode = opts_clone.tls.mode;
     let saved = SavedConnection {
         id,
         name: label.clone(),
@@ -549,12 +579,11 @@ async fn run_connect(
         port: opts_clone.port,
         database: opts_clone.database.clone(),
         username: opts_clone.username.clone(),
-        use_tls: opts_clone.use_tls,
+        use_tls: tls_mode.encrypts(),
+        tls_mode: Some(tls_mode),
         read_only,
+        environment,
         ssh: ssh.as_ref().map(|s| s.saved.clone()),
-        // Stays None until `App::on_connected` stamps it. Save then
-        // connect arrives in that order, so a freshly-saved entry is
-        // briefly None on disk before the touch lands.
         last_opened_at: None,
     };
 
@@ -575,13 +604,17 @@ async fn run_connect(
     let params = ReconnectParams {
         driver: driver.clone(),
         opts: opts_clone,
-        ssh: ssh.as_ref().map(|s| s.cfg.clone()),
+        ssh: ssh_for_establish,
         read_only,
+        environment,
     };
     let metadata = crate::services::database_service::ConnectionMetadata {
         id: saved.id,
         name: saved.name.clone(),
         driver_id: saved.driver_id.clone(),
+        environment,
+        read_only,
+        server_version,
     };
     database_service::instance().add(saved.id, metadata, conn, tunnel, read_only, params);
     Ok((saved, tables))

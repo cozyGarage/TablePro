@@ -79,9 +79,12 @@ pub enum Value {
     Json(serde_json::Value),
 }
 
-/// Default upper bound on rows materialized by an arbitrary SQL `query` call.
-/// Pagination via `fetch_rows` uses its caller-supplied `limit` and is not capped here.
-pub const MAX_QUERY_ROWS: usize = 10_000;
+/// Soft upper bound on rows materialized by an arbitrary SQL `query` call.
+/// When a result hits this limit, drivers set `QueryResult::truncated = true`.
+/// Browse pagination via `fetch_rows` uses its caller-supplied `limit` and
+/// is not capped here. Prefer streaming export ([`crate::export`]) for
+/// large result sets instead of raising this further for GUI queries.
+pub const MAX_QUERY_ROWS: usize = 1_000_000;
 
 #[derive(Debug, Clone)]
 pub struct QueryResult {

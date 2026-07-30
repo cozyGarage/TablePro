@@ -81,6 +81,8 @@ pub enum SqlEditorInput {
     /// Ctrl+/ → toggle SQL line-comment for the selected lines (or
     /// the cursor's line). Standard IDE shortcut.
     ToggleLineComment,
+    /// Run EXPLAIN on the buffer (or selection) and show the plan.
+    Explain,
 }
 
 #[derive(Debug)]
@@ -146,6 +148,14 @@ impl SimpleComponent for SqlEditor {
                     set_visible: false,
                     add_css_class: "flat",
                     connect_clicked => SqlEditorInput::Cancel,
+                },
+
+                #[name = "explain_button"]
+                gtk::Button {
+                    set_label: &crate::tr!("Explain"),
+                    set_tooltip_text: Some(crate::tr!("Explain query plan").as_str()),
+                    add_css_class: "flat",
+                    connect_clicked => SqlEditorInput::Explain,
                 },
 
                 #[name = "run_button"]
@@ -384,6 +394,23 @@ impl SimpleComponent for SqlEditor {
 
             SqlEditorInput::ToggleLineComment => {
                 toggle_line_comment(&self.source_view.buffer());
+            }
+
+            SqlEditorInput::Explain => {
+                let buffer = self.source_view.buffer();
+                let text = if let Some((a, b)) = buffer.selection_bounds() {
+                    buffer.text(&a, &b, true).to_string()
+                } else {
+                    let (start, end) = buffer.bounds();
+                    buffer.text(&start, &end, true).to_string()
+                };
+                if let Some(window) = self
+                    .source_view
+                    .root()
+                    .and_then(|r| r.downcast::<gtk::Window>().ok())
+                {
+                    crate::ui::explain_dialog::present(&window, &text);
+                }
             }
 
             SqlEditorInput::RunAtCursor => {

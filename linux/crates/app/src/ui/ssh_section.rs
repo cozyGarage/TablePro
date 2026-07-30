@@ -47,7 +47,9 @@ impl SshSection {
 
         let expander = adw::ExpanderRow::builder()
             .title(crate::tr!("Use SSH tunnel"))
-            .subtitle(crate::tr!("Reach the database through a bastion host"))
+            .subtitle(crate::tr!(
+                "Reach the database through a bastion host. Jump chains can be set in the saved connection JSON (ssh.jump)."
+            ))
             .show_enable_switch(true)
             .enable_expansion(false)
             .build();
@@ -179,6 +181,7 @@ impl SshSection {
                 port,
                 username,
                 auth: saved_auth,
+                jump: None,
             },
             secret_to_store: secret,
         })

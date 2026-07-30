@@ -3,6 +3,8 @@ use secrecy::SecretString;
 
 use crate::error::DriverError;
 use crate::query::{ColumnInfo, ExecResult, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo, Value};
+use crate::tls::TlsConfig;
+use crate::transaction::Transaction;
 
 #[derive(Debug, Clone)]
 pub struct ConnectOptions {
@@ -11,7 +13,7 @@ pub struct ConnectOptions {
     pub database: String,
     pub username: String,
     pub password: SecretString,
-    pub use_tls: bool,
+    pub tls: TlsConfig,
 }
 
 impl Default for ConnectOptions {
@@ -22,7 +24,7 @@ impl Default for ConnectOptions {
             database: String::new(),
             username: String::new(),
             password: SecretString::new(String::new().into()),
-            use_tls: false,
+            tls: TlsConfig::disabled(),
         }
     }
 }
@@ -78,6 +80,16 @@ pub trait Connection: Send + Sync {
         _table: &str,
     ) -> Result<Vec<ForeignKeyInfo>, DriverError> {
         Ok(Vec::new())
+    }
+    /// Open an interactive transaction for preview-then-commit flows.
+    /// Default returns `Unsupported` so drivers adopt incrementally.
+    async fn begin(&self) -> Result<Box<dyn Transaction>, DriverError> {
+        Err(DriverError::Unsupported("begin is not implemented for this driver".into()))
+    }
+    /// Best-effort server version string (e.g. `PostgreSQL 16.3`). Default
+    /// returns `None` when the driver has not implemented detection.
+    async fn server_version(&self) -> Result<Option<String>, DriverError> {
+        Ok(None)
     }
     async fn ping(&self) -> Result<(), DriverError>;
     async fn close(self: Box<Self>) -> Result<(), DriverError>;

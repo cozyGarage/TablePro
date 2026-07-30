@@ -33,17 +33,23 @@ impl DatabaseDriver for PgDriver {
     }
 
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
-        let pg_opts = PgConnectOptions::new()
+        use tablepro_core::TlsMode;
+        let mut pg_opts = PgConnectOptions::new()
             .host(&opts.host)
             .port(opts.port)
             .database(&opts.database)
             .username(&opts.username)
             .password(opts.password.expose_secret())
-            .ssl_mode(if opts.use_tls {
-                sqlx::postgres::PgSslMode::Require
-            } else {
-                sqlx::postgres::PgSslMode::Disable
+            .ssl_mode(match opts.tls.mode {
+                TlsMode::Disabled => sqlx::postgres::PgSslMode::Disable,
+                TlsMode::Prefer => sqlx::postgres::PgSslMode::Prefer,
+                TlsMode::Require => sqlx::postgres::PgSslMode::Require,
+                TlsMode::VerifyCa => sqlx::postgres::PgSslMode::VerifyCa,
+                TlsMode::VerifyFull => sqlx::postgres::PgSslMode::VerifyFull,
             });
+        if let Some(path) = &opts.tls.root_cert {
+            pg_opts = pg_opts.ssl_root_cert(path);
+        }
         let pool = PgPoolOptions::new()
             .max_connections(4)
             .acquire_timeout(Duration::from_secs(5))
@@ -352,10 +358,107 @@ impl Connection for PgConnection {
         Ok(())
     }
 
+    async fn begin(&self) -> Result<Box<dyn tablepro_core::Transaction>, DriverError> {
+        let tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        Ok(Box::new(PgTransaction { tx: Some(tx) }))
+    }
+
+    async fn server_version(&self) -> Result<Option<String>, DriverError> {
+        let row = sqlx::query("SHOW server_version")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        let v: String = row.try_get(0).unwrap_or_default();
+        Ok(Some(format!("PostgreSQL {v}")))
+    }
+
     async fn close(self: Box<Self>) -> Result<(), DriverError> {
         self.pool.close().await;
         Ok(())
     }
+}
+
+struct PgTransaction {
+    tx: Option<sqlx::Transaction<'static, Postgres>>,
+}
+
+#[async_trait]
+impl tablepro_core::Transaction for PgTransaction {
+    async fn query(&mut self, sql: &str) -> Result<QueryResult, DriverError> {
+        let tx = self.tx.as_mut().ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        stream_into_result_tx(tx, sql, MAX_QUERY_ROWS).await
+    }
+
+    async fn execute(&mut self, sql: &str) -> Result<ExecResult, DriverError> {
+        let tx = self.tx.as_mut().ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        let res = sqlx::query(sql).execute(&mut **tx).await.map_err(map_sqlx_error)?;
+        Ok(ExecResult {
+            rows_affected: res.rows_affected(),
+        })
+    }
+
+    async fn commit(mut self: Box<Self>) -> Result<(), DriverError> {
+        let tx = self
+            .tx
+            .take()
+            .ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        tx.commit().await.map_err(map_sqlx_error)
+    }
+
+    async fn rollback(mut self: Box<Self>) -> Result<(), DriverError> {
+        let tx = self
+            .tx
+            .take()
+            .ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        tx.rollback().await.map_err(map_sqlx_error)
+    }
+}
+
+async fn stream_into_result_tx(
+    tx: &mut sqlx::Transaction<'static, Postgres>,
+    sql: &str,
+    limit: usize,
+) -> Result<QueryResult, DriverError> {
+    let mut stream = sqlx::query(sql).fetch(&mut **tx);
+    let mut collected: Vec<PgRow> = Vec::new();
+    let mut truncated = false;
+    while let Some(row_result) = stream.next().await {
+        let row = row_result.map_err(map_sqlx_error)?;
+        if collected.len() >= limit {
+            truncated = true;
+            break;
+        }
+        collected.push(row);
+    }
+    if collected.is_empty() {
+        return Ok(QueryResult {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            truncated,
+        });
+    }
+    let columns = collected[0]
+        .columns()
+        .iter()
+        .map(|c| ColumnInfo {
+            name: c.name().to_string(),
+            data_type: c.type_info().name().to_string(),
+            nullable: true,
+            primary_key: false,
+            is_auto_increment: false,
+            default_value: None,
+            is_generated: false,
+        })
+        .collect::<Vec<_>>();
+    let rows = collected
+        .iter()
+        .map(|r| (0..columns.len()).map(|i| extract_value(r, i)).collect::<Vec<_>>())
+        .collect();
+    Ok(QueryResult {
+        columns,
+        rows,
+        truncated,
+    })
 }
 
 async fn stream_into_result(pool: &Pool<Postgres>, sql: &str, limit: usize) -> Result<QueryResult, DriverError> {

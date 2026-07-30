@@ -1,0 +1,25 @@
+[package]
+name = "tablepro-driver-oracle"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "drivers_oracle"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Enable when Oracle Instant Client / ODPI-C is available on the build host.
+odpi = ["dep:oracle", "dep:tokio"]
+
+[dependencies]
+tablepro-core = { path = "../../core" }
+async-trait.workspace = true
+secrecy.workspace = true
+oracle = { version = "0.6", optional = true }
+tokio = { workspace = true, optional = true, features = ["rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -156,6 +156,7 @@ pub fn present(parent: &impl IsA<gtk::Widget>) {
 
     window.add(&general);
     window.add(&editor);
+    window.add(&super::mcp_preferences::build_page());
 
     // Live save — write on every value change instead of batching to
     // window.connect_closed. GNOME Settings applies its preferences

@@ -145,6 +145,9 @@ pub struct App {
     /// dirty tabs lose their pending row/DDL edits because the
     /// trackers have already been cleared by the close path.
     closed_tabs_stack: std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<ClosedTabDescriptor>>>,
+    /// Extra ApplicationWindows spawned via New Window. Kept alive so
+    /// closing the primary window does not drop them mid-use.
+    extra_windows: Vec<Controller<App>>,
 }
 
 /// Snapshot of a tab the user just closed, retained for Ctrl+Shift+T
@@ -317,7 +320,10 @@ pub enum AppMsg {
     RefreshPage,
     ShowShortcuts,
     ShowAbout,
+    ShowActivity,
+    ExplainActiveQuery,
     ShowPreferences,
+    NewWindow,
     /// Sort flipped on tab_id's grid for column idx.
     RowCountLoaded(Uuid, u64),
     ExportCsv,
@@ -1238,6 +1244,7 @@ impl SimpleComponent for App {
             closed_tabs_stack: std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::with_capacity(
                 CLOSED_TABS_CAPACITY,
             ))),
+            extra_windows: Vec::new(),
         };
         sender.input(AppMsg::ReloadConnections);
         model.show_welcome_page(sender.clone());
@@ -1431,7 +1438,15 @@ impl SimpleComponent for App {
             AppMsg::RefreshPage => self.on_refresh_active_tab(),
             AppMsg::ShowShortcuts => self.on_show_shortcuts(),
             AppMsg::ShowAbout => self.on_show_about(),
+            AppMsg::ShowActivity => {
+                crate::ui::activity_dialog::present(self.window.upcast_ref::<gtk::Window>());
+            }
+            AppMsg::ExplainActiveQuery => self.on_explain_active_query(),
             AppMsg::ShowPreferences => super::preferences::present(&self.window),
+            AppMsg::NewWindow => {
+                let ctrl = App::builder().launch(self.registry.clone()).detach();
+                self.extra_windows.push(ctrl);
+            }
             AppMsg::ExportCsv => self.on_export(ExportFormat::Csv),
             AppMsg::ExportJson => self.on_export(ExportFormat::Json),
             AppMsg::CopyToClipboard(text) => self.on_copy_to_clipboard(text),
@@ -1441,30 +1456,6 @@ impl SimpleComponent for App {
             AppMsg::ReopenClosedTab => self.on_reopen_closed_tab(sender),
             AppMsg::ShowFilterDialog => self.on_show_filter_dialog(),
         }
-    }
-}
-
-fn render_csv(result: &QueryResult) -> Vec<u8> {
-    let mut out = String::new();
-    let cols: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
-    out.push_str(&cols.iter().map(|c| csv_escape(c)).collect::<Vec<_>>().join(","));
-    out.push('\n');
-    for row in &result.rows {
-        let cells: Vec<String> = row
-            .iter()
-            .map(|v| csv_escape(&super::grid::value_to_display_text(v)))
-            .collect();
-        out.push_str(&cells.join(","));
-        out.push('\n');
-    }
-    out.into_bytes()
-}
-
-fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
     }
 }
 
@@ -1520,9 +1511,12 @@ fn primary_menu_model() -> gio::Menu {
     menu.append_section(None, &connection_section);
     let history_section = gio::Menu::new();
     history_section.append(Some(&crate::tr!("Query History")), Some("win.show-history"));
+    history_section.append(Some(&crate::tr!("Server activity")), Some("win.show-activity"));
+    history_section.append(Some(&crate::tr!("Explain query")), Some("win.explain-query"));
     menu.append_section(None, &history_section);
     let prefs_section = gio::Menu::new();
     prefs_section.append(Some(&crate::tr!("Preferences")), Some("win.preferences"));
+    prefs_section.append(Some(&crate::tr!("New Window")), Some("win.new-window"));
     menu.append_section(None, &prefs_section);
     let app_section = gio::Menu::new();
     app_section.append(Some(&crate::tr!("Keyboard Shortcuts")), Some("win.shortcuts"));
@@ -1559,7 +1553,10 @@ fn install_window_actions(window: &adw::ApplicationWindow, sender: ComponentSend
         input_action!("disconnect", AppMsg::Disconnect),
         input_action!("close-current", AppMsg::CloseActiveWorkspaceTab),
         input_action!("preferences", AppMsg::ShowPreferences),
+        input_action!("new-window", AppMsg::NewWindow),
         input_action!("show-history", AppMsg::ShowHistory),
+        input_action!("show-activity", AppMsg::ShowActivity),
+        input_action!("explain-query", AppMsg::ExplainActiveQuery),
         input_action!("refresh-page", AppMsg::RefreshPage),
         input_action!("export-csv", AppMsg::ExportCsv),
         input_action!("export-json", AppMsg::ExportJson),

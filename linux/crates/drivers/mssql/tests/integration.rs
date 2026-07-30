@@ -24,7 +24,7 @@ async fn start_mssql() -> (ContainerAsync<MssqlServer>, ConnectOptions) {
         database: "master".into(),
         username: "sa".into(),
         password: SecretString::new(MssqlServer::DEFAULT_SA_PASSWORD.to_string().into()),
-        use_tls: false,
+        tls: tablepro_core::TlsConfig::disabled(),
     };
     (container, opts)
 }

@@ -29,17 +29,23 @@ impl DatabaseDriver for MysqlDriver {
     }
 
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
-        let mysql_opts = MySqlConnectOptions::new()
+        use tablepro_core::TlsMode;
+        let mut mysql_opts = MySqlConnectOptions::new()
             .host(&opts.host)
             .port(opts.port)
             .database(&opts.database)
             .username(&opts.username)
             .password(opts.password.expose_secret())
-            .ssl_mode(if opts.use_tls {
-                sqlx::mysql::MySqlSslMode::Required
-            } else {
-                sqlx::mysql::MySqlSslMode::Disabled
+            .ssl_mode(match opts.tls.mode {
+                TlsMode::Disabled => sqlx::mysql::MySqlSslMode::Disabled,
+                TlsMode::Prefer => sqlx::mysql::MySqlSslMode::Preferred,
+                TlsMode::Require => sqlx::mysql::MySqlSslMode::Required,
+                TlsMode::VerifyCa => sqlx::mysql::MySqlSslMode::VerifyCa,
+                TlsMode::VerifyFull => sqlx::mysql::MySqlSslMode::VerifyIdentity,
             });
+        if let Some(path) = &opts.tls.root_cert {
+            mysql_opts = mysql_opts.ssl_ca(path);
+        }
         let pool = MySqlPoolOptions::new()
             .max_connections(4)
             .acquire_timeout(Duration::from_secs(5))
@@ -330,9 +336,88 @@ impl Connection for MysqlConnection {
         Ok(())
     }
 
+    async fn begin(&self) -> Result<Box<dyn tablepro_core::Transaction>, DriverError> {
+        let tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        Ok(Box::new(MysqlTransaction { tx: Some(tx) }))
+    }
+
+    async fn server_version(&self) -> Result<Option<String>, DriverError> {
+        let row = sqlx::query("SELECT VERSION()")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        let v: String = row.try_get(0).unwrap_or_default();
+        Ok(Some(v))
+    }
+
     async fn close(self: Box<Self>) -> Result<(), DriverError> {
         self.pool.close().await;
         Ok(())
+    }
+}
+
+struct MysqlTransaction {
+    tx: Option<sqlx::Transaction<'static, MySql>>,
+}
+
+#[async_trait]
+impl tablepro_core::Transaction for MysqlTransaction {
+    async fn query(&mut self, sql: &str) -> Result<QueryResult, DriverError> {
+        let tx = self.tx.as_mut().ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        let rows = sqlx::query(sql).fetch_all(&mut **tx).await.map_err(map_sqlx_error)?;
+        if rows.is_empty() {
+            return Ok(QueryResult {
+                columns: Vec::new(),
+                rows: Vec::new(),
+                truncated: false,
+            });
+        }
+        let columns: Vec<ColumnInfo> = rows[0]
+            .columns()
+            .iter()
+            .map(|c| ColumnInfo {
+                name: c.name().to_string(),
+                data_type: c.type_info().name().to_string(),
+                nullable: true,
+                primary_key: false,
+                is_auto_increment: false,
+                default_value: None,
+                is_generated: false,
+            })
+            .collect();
+        let data: Vec<Vec<Value>> = rows
+            .iter()
+            .map(|r| (0..columns.len()).map(|i| extract_value(r, i)).collect())
+            .collect();
+        Ok(QueryResult {
+            columns,
+            rows: data,
+            truncated: false,
+        })
+    }
+
+    async fn execute(&mut self, sql: &str) -> Result<ExecResult, DriverError> {
+        let tx = self.tx.as_mut().ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        let res = sqlx::query(sql).execute(&mut **tx).await.map_err(map_sqlx_error)?;
+        Ok(ExecResult {
+            rows_affected: res.rows_affected(),
+        })
+    }
+
+    async fn commit(mut self: Box<Self>) -> Result<(), DriverError> {
+        let tx = self
+            .tx
+            .take()
+            .ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        tx.commit().await.map_err(map_sqlx_error)
+    }
+
+    async fn rollback(mut self: Box<Self>) -> Result<(), DriverError> {
+        let tx = self
+            .tx
+            .take()
+            .ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        tx.rollback().await.map_err(map_sqlx_error)
     }
 }
 

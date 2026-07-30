@@ -11,17 +11,21 @@ path = "src/lib.rs"
 
 [dependencies]
 tablepro-core = { path = "../core" }
+tablepro-policy = { path = "../policy" }
 tablepro-ssh = { path = "../ssh" }
 oo7.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "io-util"] }
 uuid.workspace = true
 sqlx = { workspace = true, features = ["sqlite"] }
 chrono.workspace = true
 tracing.workspace = true
+sha2.workspace = true
+hex.workspace = true
+async-trait.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

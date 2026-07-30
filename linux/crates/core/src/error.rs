@@ -20,6 +20,12 @@ pub enum DriverError {
     #[error("connection is read-only; mutations are not permitted")]
     ReadOnly,
 
+    #[error("policy denied: {0}")]
+    PolicyDenied(String),
+
+    #[error("unsupported operation: {0}")]
+    Unsupported(String),
+
     #[error("driver internal error: {0}")]
     Internal(String),
 

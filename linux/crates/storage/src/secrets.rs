@@ -11,6 +11,7 @@ const SCHEMA: &str = "com.tablepro.linux.Password";
 const KIND_DB_PASSWORD: &str = "db_password";
 const KIND_SSH_PASSWORD: &str = "ssh_password";
 const KIND_SSH_PASSPHRASE: &str = "ssh_passphrase";
+const KIND_MCP_TOKEN: &str = "mcp_token";
 
 pub async fn store_password(id: Uuid, password: &str, label: &str) -> Result<(), StorageError> {
     store_secret(id, KIND_DB_PASSWORD, password, label).await
@@ -46,6 +47,18 @@ pub async fn load_ssh_passphrase(id: Uuid) -> Result<Option<SecretString>, Stora
 
 pub async fn delete_ssh_passphrase(id: Uuid) -> Result<(), StorageError> {
     delete_secret(id, KIND_SSH_PASSPHRASE).await
+}
+
+pub async fn store_mcp_token(id: Uuid, plaintext: &str, label: &str) -> Result<(), StorageError> {
+    store_secret(id, KIND_MCP_TOKEN, plaintext, label).await
+}
+
+pub async fn load_mcp_token(id: Uuid) -> Result<Option<SecretString>, StorageError> {
+    load_secret(id, KIND_MCP_TOKEN).await
+}
+
+pub async fn delete_mcp_token(id: Uuid) -> Result<(), StorageError> {
+    delete_secret(id, KIND_MCP_TOKEN).await
 }
 
 async fn store_secret(id: Uuid, kind: &str, value: &str, label: &str) -> Result<(), StorageError> {

@@ -78,7 +78,6 @@ async fn try_reconnect(params: &ReconnectParams) -> Result<(Box<dyn Connection>,
         params.driver.as_ref(),
         params.opts.clone(),
         params.ssh.clone(),
-        params.read_only,
     )
     .await
 }

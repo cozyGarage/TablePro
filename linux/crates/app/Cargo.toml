@@ -11,9 +11,16 @@ path = "src/main.rs"
 
 [dependencies]
 tablepro-core = { path = "../core" }
+tablepro-policy = { path = "../policy" }
+tablepro-mcp = { path = "../mcp" }
+tablepro-driver-clickhouse = { path = "../drivers/clickhouse" }
+tablepro-driver-duckdb = { path = "../drivers/duckdb" }
+tablepro-driver-mongodb = { path = "../drivers/mongodb" }
 tablepro-driver-mssql = { path = "../drivers/mssql" }
 tablepro-driver-mysql = { path = "../drivers/mysql" }
+tablepro-driver-oracle = { path = "../drivers/oracle" }
 tablepro-driver-postgres = { path = "../drivers/postgres" }
+tablepro-driver-redis = { path = "../drivers/redis" }
 tablepro-driver-sqlite = { path = "../drivers/sqlite" }
 chrono.workspace = true
 rust_decimal.workspace = true
@@ -38,3 +45,4 @@ uuid.workspace = true
 gettext-rs = { version = "0.7", features = ["gettext-system"] }
 libc = "0.2"
 sqlformat = "0.5"
+async-trait.workspace = true

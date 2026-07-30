@@ -8,17 +8,19 @@
   <description>
     <p>
       TablePro is a fast, native database client for Linux. It connects to
-      PostgreSQL, MySQL, and SQLite, and lets you browse tables, edit data
-      in place, run SQL, and tunnel through SSH bastions — all from a clean
-      GTK4 / libadwaita interface.
+      PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse, Redis, DuckDB,
+      MongoDB, and Oracle, and lets you browse tables, edit data in place,
+      run SQL, and tunnel through SSH bastions, all from a clean GTK4 /
+      libadwaita interface.
     </p>
     <p>Features:</p>
     <ul>
-      <li>PostgreSQL, MySQL, and SQLite drivers</li>
+      <li>PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse, Redis, DuckDB, MongoDB, and Oracle drivers</li>
       <li>In-place cell editing with primary-key safety</li>
       <li>SQL editor with syntax highlighting and Run / Cancel</li>
       <li>SSH tunneling with TOFU host-key checking</li>
       <li>TLS, read-only mode, auto-reconnect, and saved connections</li>
+      <li>Multi-tab workspace with structure / DDL editor</li>
     </ul>
   </description>
   <launchable type="desktop-id">com.tablepro.linux.desktop</launchable>
@@ -36,13 +38,24 @@
     <keyword>postgres</keyword>
     <keyword>mysql</keyword>
     <keyword>sqlite</keyword>
+    <keyword>mssql</keyword>
+    <keyword>sqlserver</keyword>
+    <keyword>clickhouse</keyword>
+    <keyword>redis</keyword>
+    <keyword>duckdb</keyword>
+    <keyword>mongodb</keyword>
+    <keyword>oracle</keyword>
     <keyword>database</keyword>
   </keywords>
   <content_rating type="oars-1.1" />
   <releases>
-    <release version="0.1.0" date="2026-04-26">
+    <release version="0.1.0" date="2026-07-30">
       <description>
-        <p>Initial pre-release tracking the Phase 2 Sprint 1 production-hardening pass.</p>
+        <p>
+          Working client with four drivers, multi-tab workspace, SSH tunnels,
+          structure editor, and query history. Pre-release ahead of the
+          governed data-plane (policy + MCP) stages.
+        </p>
       </description>
     </release>
   </releases>

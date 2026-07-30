@@ -1,0 +1,57 @@
+# TablePro policy defaults
+#
+# Copy to ~/.config/tablepro/policy.toml and adjust.
+# Environments: local, dev, staging, prod
+
+[environments.local]
+agent_writes = "approve"
+human_approve_writes = false
+human_approve_ddl = false
+blast_radius_max_rows = 100000
+mask_agent_results = true
+
+[environments.dev]
+agent_writes = "approve"
+human_approve_writes = false
+human_approve_ddl = false
+blast_radius_max_rows = 100000
+mask_agent_results = true
+
+[environments.staging]
+agent_writes = "approve"
+human_approve_writes = false
+human_approve_ddl = true
+blast_radius_max_rows = 5000
+mask_agent_results = true
+
+[environments.prod]
+agent_writes = "deny"
+agent_allow_ddl = false
+human_approve_writes = true
+human_approve_ddl = true
+blast_radius_max_rows = 1000
+mask_agent_results = true
+
+[[mask_patterns]]
+pattern = "*pan*"
+
+[[mask_patterns]]
+pattern = "*card*"
+
+[[mask_patterns]]
+pattern = "*cvv*"
+
+[[mask_patterns]]
+pattern = "*ssn*"
+
+[[mask_patterns]]
+pattern = "*iban*"
+
+[[mask_patterns]]
+pattern = "*secret*"
+
+[[mask_patterns]]
+pattern = "*token*"
+
+[[mask_patterns]]
+pattern = "*password*"

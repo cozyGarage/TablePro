@@ -153,3 +153,7 @@ Libs/ios/
 
 # Claude Code session data
 .claude/
+
+# Local Linux build deps and packaging output
+.local-deps/
+linux/packaging/out/

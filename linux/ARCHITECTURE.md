@@ -10,39 +10,49 @@ linux/
 ├── flatpak/                       Flatpak manifest, icons, .desktop file
 └── crates/
     ├── app/                       binary, GTK4 entry point, Relm4 components
+    ├── agentd/                    headless MCP daemon (no GTK)
+    ├── mcp/                       MCP bridge, tokens, rate limit
+    ├── policy/                    classify, PolicyGuard, mask, blast radius
     ├── core/                      domain types and traits, no GUI deps
-    ├── storage/                   libsecret, gio::Settings, file persistence
+    ├── storage/                   libsecret, JSON, history, audit journal
+    ├── ssh/                       russh tunnel
     └── drivers/
         ├── postgres/              sqlx-postgres impl
         ├── mysql/                 sqlx-mysql impl
         ├── sqlite/                sqlx-sqlite impl
+        ├── mssql/                 tiberius impl
         └── ...                    one crate per database engine
 ```
 
 ## Dependency graph
 
 ```
-                       ┌─────────┐
-                       │   app   │  binary, all GUI code
-                       └────┬────┘
-                  ┌─────────┼──────────────────┐
-                  ▼         ▼                  ▼
-             ┌────────┐ ┌─────────┐   ┌──────────────────┐
-             │  core  │ │ storage │   │   drivers/*      │
-             └────────┘ └────┬────┘   └─────────┬────────┘
-                             │                   │
-                             └────►  ┌────────┐  ◄
-                                     │  core  │
-                                     └────────┘
+                       ┌─────────┐     ┌──────────┐
+                       │   app   │     │  agentd  │
+                       └────┬────┘     └─────┬────┘
+                  ┌─────────┼──────────┐     │
+                  ▼         ▼          ▼     ▼
+             ┌────────┐ ┌─────────┐  ┌─────┐
+             │ policy │ │   mcp   │  │ mcp │
+             └───┬────┘ └────┬────┘  └──┬──┘
+                 │           │          │
+                 ▼           ▼          ▼
+             ┌────────┐ ┌─────────┐ ┌────────┐
+             │  core  │ │ storage │ │ policy │
+             └────────┘ └────┬────┘ └───┬────┘
+                             │          │
+                             └────► core ◄──── drivers/*
 ```
 
 Rules, enforced by review:
 
-- `core` depends on **no other workspace crate**. Only the standard library and small utility crates (`async-trait`, `serde`, `thiserror`).
-- `storage` depends on `core` only.
-- Each `drivers/<engine>` crate depends on `core` only. **Drivers never depend on each other.**
-- `app` depends on `core`, `storage`, and every `drivers/*`. It is the only crate that knows about every driver.
-- No reverse dependencies. `core` never imports anything from `drivers/*` or `app`.
+- `core` depends on **no other workspace crate**.
+- `policy` depends on `core` only.
+- `storage` depends on `core` + `policy` (audit types) + `ssh`.
+- `mcp` depends on `core` + `policy` + `storage`.
+- Each `drivers/<engine>` crate depends on `core` only.
+- `app` and `agentd` are composition roots.
+- Every consumer obtains connections only through a policy-gated handle.
 
 Consequences:
 

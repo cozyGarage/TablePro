@@ -2,13 +2,15 @@ use relm4::adw::prelude::*;
 use relm4::gtk::gio;
 use relm4::{ComponentController, ComponentSender, adw, gtk};
 
-use tablepro_core::{ColumnInfo, QueryResult};
+use tablepro_core::{
+    ColumnInfo, KEYSET_OFFSET_THRESHOLD, QueryResult, keyset_order_by, keyset_where_clause,
+};
 use uuid::Uuid;
 
 use crate::services::database_service;
 use crate::ui::browse_tab::BrowseTabInput;
 
-use super::{App, AppMsg, ExportFormat, OpenMode, render_csv, render_json};
+use super::{App, AppMsg, ExportFormat, OpenMode, render_json};
 
 impl App {
     /// Sidebar click — routes via OpenMode (smart switch / new tab).
@@ -27,9 +29,10 @@ impl App {
     /// SELECT from the tab's current sort + filter + pagination state.
     /// Filter and sort are server-side; the row window is rendered by
     /// `sql_dialect::build_order_and_pagination` because the syntax is
-    /// dialect-specific.
+    /// dialect-specific. Past `KEYSET_OFFSET_THRESHOLD`, sequential Next
+    /// uses a primary-key seek when PKs and a cursor are available.
     pub(super) fn fetch_browse_page(&self, tab_id: Uuid, sender: ComponentSender<Self>) {
-        let (schema, table, offset, limit, sort, filter, columns, driver_id) = {
+        let (schema, table, offset, limit, sort, filter, columns, driver_id, keyset_cursor) = {
             let tabs = self.workspace_tabs.borrow();
             let Some(controller) = tabs.get(&tab_id).and_then(|t| t.browse_controller()) else {
                 return;
@@ -44,6 +47,7 @@ impl App {
                 model.current_filter().clone(),
                 model.columns().to_vec(),
                 model.driver_id().to_string(),
+                model.keyset_cursor().map(|v| v.to_vec()),
             )
         };
 
@@ -59,12 +63,8 @@ impl App {
             })
         });
 
-        // Build WHERE up front so a filter validation error short-
-        // circuits to a toast without spawning the async command.
-        // Build returns None when the filter is empty; that path
-        // matches today's no-filter behaviour exactly.
         let where_result = tablepro_core::build_filter_where(&driver_id, &columns, &filter);
-        let (where_sql, params) = match where_result {
+        let (where_sql, mut params) = match where_result {
             Ok(Some((sql, p))) => (Some(sql), p),
             Ok(None) => (None, Vec::new()),
             Err(e) => {
@@ -73,14 +73,66 @@ impl App {
             }
         };
 
+        let pk_names: Vec<String> = columns
+            .iter()
+            .filter(|c| c.primary_key)
+            .map(|c| c.name.clone())
+            .collect();
+        let use_keyset = offset >= KEYSET_OFFSET_THRESHOLD
+            && order_by.is_none()
+            && !pk_names.is_empty()
+            && keyset_cursor
+                .as_ref()
+                .is_some_and(|c| c.len() == pk_names.len());
+
         let sender_clone = sender.clone();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    // No WHERE + no ORDER BY: keep the existing
-                    // fetch_rows fast-path so unchanged callers don't
-                    // pay the parametric overhead.
-                    let result = if where_sql.is_none() && order_by.is_none() {
+                    let result = if use_keyset {
+                        let cursor = keyset_cursor.expect("guarded by use_keyset");
+                        let qualified = match &schema {
+                            Some(s) => format!(
+                                "{}.{}",
+                                tablepro_core::sql_dialect::quote_ident(&driver_id, s),
+                                tablepro_core::sql_dialect::quote_ident(&driver_id, &table)
+                            ),
+                            None => tablepro_core::sql_dialect::quote_ident(&driver_id, &table),
+                        };
+                        let mut sql = format!("SELECT * FROM {qualified}");
+                        let mut clauses: Vec<String> = Vec::new();
+                        if let Some(w) = &where_sql {
+                            clauses.push(w.clone());
+                        }
+                        let pk_refs: Vec<&str> = pk_names.iter().map(String::as_str).collect();
+                        match keyset_where_clause(&driver_id, &pk_refs, &cursor, params.len()) {
+                            Ok((ks, ks_params)) => {
+                                clauses.push(ks);
+                                params.extend(ks_params);
+                            }
+                            Err(e) => {
+                                sender_clone.input(AppMsg::LoadFailed(Some(tab_id), e.to_string()));
+                                return;
+                            }
+                        }
+                        if !clauses.is_empty() {
+                            sql.push_str(" WHERE ");
+                            sql.push_str(&clauses.join(" AND "));
+                        }
+                        let order_sql = keyset_order_by(&driver_id, &pk_refs);
+                        let order_inner = order_sql
+                            .trim()
+                            .strip_prefix("ORDER BY")
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty());
+                        sql.push_str(&tablepro_core::sql_dialect::build_order_and_pagination(
+                            &driver_id,
+                            order_inner,
+                            limit,
+                            0,
+                        ));
+                        conn.query_params(&sql, &params).await
+                    } else if where_sql.is_none() && order_by.is_none() {
                         conn.fetch_rows(schema.as_deref(), &table, offset, limit).await
                     } else {
                         let qualified = match &schema {
@@ -161,10 +213,6 @@ impl App {
             return;
         };
 
-        // Same WHERE the page fetch uses, so the "of N" total matches
-        // the filtered result set. Validation errors are silently
-        // suppressed here — fetch_browse_page surfaces the toast for
-        // the same filter on the same tick, no need to double-toast.
         let (where_sql, params) = match tablepro_core::build_filter_where(&driver_id, &columns, &filter) {
             Ok(Some((sql, p))) => (Some(sql), p),
             _ => (None, Vec::new()),
@@ -228,8 +276,6 @@ impl App {
             Some(id) => self.dispatch_to_tab(id, BrowseTabInput::ShowError(msg)),
             None => {
                 tracing::warn!(error = %msg, "app-level load failed");
-                // Connect attempt failed → drop the in-progress toast so
-                // the alert isn't competing with stale "Connecting…" UI.
                 self.dismiss_loading_page();
                 self.set_status_page(super::StatusKind::Error, &crate::tr!("Failed"), &msg);
             }
@@ -245,6 +291,12 @@ impl App {
             self.show_toast(&crate::tr!("Nothing to export"));
             return;
         };
+
+        if matches!(format, ExportFormat::Csv) {
+            self.on_export_csv_streaming(schema, table);
+            return;
+        }
+
         let result = {
             let tabs = self.workspace_tabs.borrow();
             tabs.get(&active_id)
@@ -259,30 +311,15 @@ impl App {
             Some(s) => format!("{s}.{table}"),
             None => table.clone(),
         };
-        let suggested = match format {
-            ExportFormat::Csv => format!("{table_label}.csv"),
-            ExportFormat::Json => format!("{table_label}.json"),
-        };
+        let suggested = format!("{table_label}.json");
         let filter = gtk::FileFilter::new();
-        match format {
-            ExportFormat::Csv => {
-                filter.set_name(Some(&crate::tr!("CSV files")));
-                filter.add_mime_type("text/csv");
-                filter.add_suffix("csv");
-            }
-            ExportFormat::Json => {
-                filter.set_name(Some(&crate::tr!("JSON files")));
-                filter.add_mime_type("application/json");
-                filter.add_suffix("json");
-            }
-        };
+        filter.set_name(Some(&crate::tr!("JSON files")));
+        filter.add_mime_type("application/json");
+        filter.add_suffix("json");
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         let dialog = gtk::FileDialog::builder()
-            .title(match format {
-                ExportFormat::Csv => crate::tr!("Export as CSV"),
-                ExportFormat::Json => crate::tr!("Export as JSON"),
-            })
+            .title(crate::tr!("Export as JSON"))
             .modal(true)
             .initial_name(&suggested)
             .default_filter(&filter)
@@ -294,18 +331,11 @@ impl App {
         dialog.save(Some(&parent), gtk::gio::Cancellable::NONE, move |outcome| {
             let Ok(file) = outcome else { return };
             let Some(path) = file.path() else { return };
-            let bytes = match format {
-                ExportFormat::Csv => render_csv(&result),
-                ExportFormat::Json => render_json(&result),
-            };
+            let bytes = render_json(&result);
             match std::fs::write(&path, bytes) {
                 Ok(()) => toast_overlay.add_toast(relm4::adw::Toast::new(
                     &crate::tr!("Exported to {path}").replace("{path}", &path.display().to_string()),
                 )),
-                // Failures use AdwAlertDialog instead of a transient
-                // toast — the user needs time to read the IO error
-                // (and probably copy the path to retry elsewhere).
-                // Matches the Save / Drop error-handling pattern.
                 Err(e) => {
                     let alert = adw::AlertDialog::new(
                         Some(&crate::tr!("Couldn't export")),
@@ -321,6 +351,77 @@ impl App {
                     alert.present(Some(&parent_for_alert));
                 }
             }
+        });
+    }
+
+    fn on_export_csv_streaming(&self, schema: Option<String>, table: String) {
+        let table_label = match &schema {
+            Some(s) => format!("{s}.{table}"),
+            None => table.clone(),
+        };
+        let suggested = format!("{table_label}.csv");
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some(&crate::tr!("CSV files")));
+        filter.add_mime_type("text/csv");
+        filter.add_suffix("csv");
+        let filters = gio::ListStore::new::<gtk::FileFilter>();
+        filters.append(&filter);
+        let dialog = gtk::FileDialog::builder()
+            .title(crate::tr!("Export as CSV"))
+            .modal(true)
+            .initial_name(&suggested)
+            .default_filter(&filter)
+            .filters(&filters)
+            .build();
+        let parent = self.window.clone();
+        let parent_for_alert = parent.clone();
+        let toast_overlay = self.toast_overlay.clone();
+        let Some(conn) = database_service::instance().active() else {
+            self.show_toast(&crate::tr!("no active connection"));
+            return;
+        };
+        dialog.save(Some(&parent), gtk::gio::Cancellable::NONE, move |outcome| {
+            let Ok(file) = outcome else { return };
+            let Some(path) = file.path() else { return };
+            glib::spawn_future_local(async move {
+                let result = (|| async {
+                    let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
+                    let n = tablepro_core::export::stream_table_to_csv(
+                        conn.as_ref(),
+                        schema.as_deref(),
+                        &table,
+                        &mut file,
+                        1_000,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    Ok::<_, String>(n)
+                })()
+                .await;
+                match result {
+                    Ok(n) => {
+                        toast_overlay.add_toast(relm4::adw::Toast::new(
+                            &crate::tr!("Exported {n} rows to {path}")
+                                .replace("{n}", &n.to_string())
+                                .replace("{path}", &path.display().to_string()),
+                        ));
+                    }
+                    Err(e) => {
+                        let alert = adw::AlertDialog::new(
+                            Some(&crate::tr!("Couldn't export")),
+                            Some(
+                                &crate::tr!("Writing {path} failed: {error}")
+                                    .replace("{path}", &path.display().to_string())
+                                    .replace("{error}", &e),
+                            ),
+                        );
+                        alert.add_response("close", &crate::tr!("Close"));
+                        alert.set_default_response(Some("close"));
+                        alert.set_close_response("close");
+                        alert.present(Some(&parent_for_alert));
+                    }
+                }
+            });
         });
     }
 
@@ -344,10 +445,6 @@ impl App {
             self.dispatch_to_tab(id, BrowseTabInput::Refresh);
             return;
         }
-        // F5 mid-edit: a refetch overwrites the model and silently
-        // drops every pending row edit / insert / delete. Confirm
-        // with a destructive AlertDialog mirroring the close-with-
-        // pending path so the user has to opt in to the data loss.
         let dialog = adw::AlertDialog::new(
             Some(&crate::tr!("Discard pending changes?")),
             Some(&crate::tr!(

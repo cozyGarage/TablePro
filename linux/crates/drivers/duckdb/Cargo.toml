@@ -1,0 +1,20 @@
+[package]
+name = "tablepro-driver-duckdb"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "drivers_duckdb"
+path = "src/lib.rs"
+
+[dependencies]
+tablepro-core = { path = "../../core" }
+async-trait.workspace = true
+duckdb = { version = "1.10505", features = ["bundled"] }
+tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -277,9 +277,15 @@ impl App {
         let (mut os_title, subtitle) = match (connection_name, &self.current_driver_id, table_pair) {
             (Some(name), Some(driver), Some((schema, table))) => {
                 let label = qualified_label(schema, table);
-                (format!("{label} · {name} — TablePro"), format!("{name} · {driver}"))
+                (
+                    format!("{label} · {name} — TablePro"),
+                    format_connection_subtitle(name, driver, metadata.as_ref()),
+                )
             }
-            (Some(name), Some(driver), None) => (format!("{name} — TablePro"), format!("{name} · {driver}")),
+            (Some(name), Some(driver), None) => (
+                format!("{name} — TablePro"),
+                format_connection_subtitle(name, driver, metadata.as_ref()),
+            ),
             (None, Some(driver), _) => (format!("{driver} — TablePro"), driver.clone()),
             _ => ("TablePro".to_string(), String::new()),
         };
@@ -305,6 +311,17 @@ impl App {
                 self.sidebar_title.set_title(&crate::tr!("Tables"));
             }
         }
+    }
+}
+
+fn format_connection_subtitle(
+    name: &str,
+    driver: &str,
+    metadata: Option<&crate::services::database_service::ConnectionMetadata>,
+) -> String {
+    match metadata.and_then(|m| m.server_version.as_deref()) {
+        Some(version) if !version.is_empty() => format!("{name} · {driver} · {version}"),
+        _ => format!("{name} · {driver}"),
     }
 }
 

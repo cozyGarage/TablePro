@@ -63,6 +63,16 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
+      - name: Install cargo-deny and cargo-audit
+        run: |
+          cargo install cargo-deny --locked
+          cargo install cargo-audit --locked
+      - name: cargo-deny
+        run: cargo deny check
+        continue-on-error: true
+      - name: cargo-audit
+        run: cargo audit
+        continue-on-error: true
       - name: Build
         run: cargo build --workspace
       - name: Unit tests
@@ -96,3 +106,5 @@ jobs:
         run: cargo test --test integration -p tablepro-driver-postgres -- --include-ignored --test-threads=1
       - name: MySQL integration tests
         run: cargo test --test integration -p tablepro-driver-mysql -- --include-ignored --test-threads=1
+      - name: MSSQL integration tests
+        run: cargo test --test integration -p tablepro-driver-mssql -- --include-ignored --test-threads=1
