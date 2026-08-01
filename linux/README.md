@@ -5,23 +5,26 @@ sharing no code but matching the feature set over time.
 
 ## Status
 
-Working GTK4 / libadwaita client: PostgreSQL, MySQL, SQLite, and MSSQL;
-SSH tunnels; multi-tab browse / SQL editor / structure editor; inline
-cell edit; query history; Flatpak scaffolding. See
-[ROADMAP.md](ROADMAP.md) for the governed-data-plane stages (policy,
-MCP, headless agentd).
+Working GTK4 / libadwaita client with PostgreSQL, MySQL, SQLite, MSSQL,
+ClickHouse, Redis, DuckDB, MongoDB, and Oracle (stub without Instant
+Client). SSH tunnels, multi-tab browse / SQL editor / structure editor,
+inline cell edit, query history, Flatpak scaffolding, and a governed
+data plane (policy chokepoint, MCP server, headless agentd). See
+[ROADMAP.md](ROADMAP.md).
+
+It is past demo-grade, but still not beta-shippable for Flathub.
 
 ## Stack
 
 | Layer | Pick |
 |---|---|
 | Language | Rust 1.93+ |
-| GUI toolkit | GTK4 4.14+ + libadwaita 1.5+ |
+| GUI toolkit | GTK4 4.14+ + libadwaita 1.6+ + GtkSourceView 5.12+ |
 | App architecture | [Relm4](https://relm4.org) — Elm-style components on gtk4-rs |
 | Async | tokio (DB drivers) bridged to glib main loop (UI) |
-| DB drivers | sqlx (PG / MySQL / SQLite), tiberius (MSSQL); more via static crates |
+| DB drivers | sqlx (PG / MySQL / SQLite), tiberius (MSSQL), official `clickhouse` crate; Redis / DuckDB / MongoDB / Oracle crates |
 | Persistence | libsecret (passwords), JSON files (connections / prefs / workspace) |
-| Distribution | Flathub primary |
+| Distribution | Flathub primary; `.deb` / AUR secondary |
 
 ## What this is not
 
@@ -51,11 +54,39 @@ sudo pacman -S --needed base-devel pkg-config gtk4 libadwaita \
 ```
 
 ```bash
-pkg-config --modversion gtk4 libadwaita-1   # need 4.14+ / 1.5+
-rustc --version                              # need 1.93+
+pkg-config --modversion gtk4 libadwaita-1 gtksourceview-5   # need 4.14+ / 1.6+ / 5.12+
+rustc --version                                             # need 1.93+
+```
 
+Build and run:
+
+```bash
 cd linux
 cargo run -p tablepro-app
+```
+
+Local CI mirror (fmt + clippy + build + unit tests):
+
+```bash
+./scripts/ci-local.sh
+```
+
+Driver smoke against a Postgres you already run, no Docker needed:
+
+```bash
+./scripts/smoke-postgres.sh
+```
+
+Optional: if the system `-dev` packages above are missing, extract the package payloads under `../.local-deps/root/` (so headers land in `../.local-deps/root/usr/include`) and `source scripts/dev-env.sh` before cargo. Debian-family layouts only.
+
+## Packaging
+
+See [packaging/README.md](packaging/README.md) once present on this branch.
+Quick local `.deb`:
+
+```bash
+./scripts/build-deb.sh
+# → packaging/out/tablepro_0.1.0-1_amd64.deb
 ```
 
 ## Documentation index
