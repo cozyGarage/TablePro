@@ -278,10 +278,10 @@ fn run_query(
                 .collect(),
         );
     }
-    if column_count == 0 {
-        if let Some(stmt_ref) = rows.as_ref() {
-            column_count = stmt_ref.column_count();
-        }
+    if column_count == 0
+        && let Some(stmt_ref) = rows.as_ref()
+    {
+        column_count = stmt_ref.column_count();
     }
     let columns: Vec<ColumnInfo> = if let Some(stmt_ref) = rows.as_ref() {
         (0..column_count)

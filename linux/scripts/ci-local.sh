@@ -28,12 +28,13 @@ run_full() {
   cargo fmt --all -- --check
 
   echo "==> cargo clippy"
-  cargo clippy --all-targets -- -D warnings
+  cargo clippy --workspace --exclude tablepro-driver-duckdb --all-targets -- -D warnings
 
   echo "==> cargo test --workspace --lib --bins"
   # Compiling tests already builds the crates; a separate `cargo build`
   # beforehand doubles wall time for little signal.
-  cargo test --workspace --lib --bins
+  # DuckDB is optional (--features duckdb) and expensive to compile.
+  cargo test --workspace --exclude tablepro-driver-duckdb --lib --bins
 
   echo "Full fast checks passed."
   echo "Driver integration: ./scripts/ci-local.sh integration"

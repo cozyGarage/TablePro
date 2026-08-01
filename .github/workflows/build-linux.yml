@@ -88,9 +88,10 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        # DuckDB is an optional heavy crate; keep it out of the default GTK gate.
+        run: cargo clippy --workspace --exclude tablepro-driver-duckdb --all-targets -- -D warnings
       - name: Unit tests (build via test)
-        run: cargo test --workspace --lib --bins
+        run: cargo test --workspace --exclude tablepro-driver-duckdb --lib --bins
       - name: Install cargo-deny and cargo-audit
         run: |
           cargo install cargo-deny --locked
