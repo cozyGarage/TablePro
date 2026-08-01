@@ -3,11 +3,37 @@ use async_trait::async_trait;
 use crate::connection::{ConnectOptions, Connection};
 use crate::error::DriverError;
 
+/// How complete a driver is for day-to-day use.
+///
+/// `Stable` drivers support browse, SQL (or the engine's query dialect),
+/// and the common write paths. `Experimental` drivers connect and browse
+/// but may lack parameter binding, interactive transactions, or full
+/// write coverage. See `docs/driver-maturity.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DriverMaturity {
+    #[default]
+    Stable,
+    Experimental,
+}
+
+impl DriverMaturity {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Stable => "Stable",
+            Self::Experimental => "Experimental",
+        }
+    }
+}
+
 #[async_trait]
 pub trait DatabaseDriver: Send + Sync {
     fn id(&self) -> &'static str;
     fn display_name(&self) -> &'static str;
     fn default_port(&self) -> u16;
+
+    fn maturity(&self) -> DriverMaturity {
+        DriverMaturity::Stable
+    }
 
     fn is_file_based(&self) -> bool {
         false

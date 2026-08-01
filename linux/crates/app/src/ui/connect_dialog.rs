@@ -6,7 +6,7 @@ use relm4::{adw, gtk};
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
-use tablepro_core::{ConnectOptions, DriverRegistry, Environment, TableInfo, TlsMode};
+use tablepro_core::{ConnectOptions, DriverMaturity, DriverRegistry, Environment, TableInfo, TlsMode};
 use tablepro_storage::{
     SavedConnection, SavedSshConfig, save_connections, store_password, store_ssh_passphrase, store_ssh_password,
 };
@@ -38,6 +38,7 @@ pub struct ConnectDialog {
 struct DriverEntry {
     id: String,
     display_name: String,
+    maturity: DriverMaturity,
 }
 
 pub struct ConnectDialogInit {
@@ -116,6 +117,7 @@ impl Component for ConnectDialog {
             .map(|d| DriverEntry {
                 id: d.id().to_string(),
                 display_name: d.display_name().to_string(),
+                maturity: d.maturity(),
             })
             .collect();
         drivers.sort_by(|a, b| a.display_name.cmp(&b.display_name));
@@ -256,6 +258,7 @@ impl Component for ConnectDialog {
             }
             root.set_title(&crate::tr!("Connect to {name}").replace("{name}", &first.display_name));
         }
+        model.refresh_driver_maturity_subtitle();
         model.refresh_validity();
 
         // Make Connect the dialog's default widget so pressing Enter
@@ -278,6 +281,7 @@ impl Component for ConnectDialog {
                     self.apply_driver_form_visibility(driver.as_ref());
                     self.port.set_value(driver.default_port() as f64);
                 }
+                self.refresh_driver_maturity_subtitle();
                 root.set_title(&crate::tr!("Connect to {name}").replace("{name}", &entry.display_name));
             }
 
@@ -521,6 +525,17 @@ impl ConnectDialog {
         } else {
             crate::tr!("Database")
         });
+    }
+
+    fn refresh_driver_maturity_subtitle(&self) {
+        let idx = self.driver_combo.selected() as usize;
+        let subtitle = match self.drivers.get(idx).map(|d| d.maturity) {
+            Some(DriverMaturity::Experimental) => {
+                crate::tr!("Experimental: connect and browse work; some writes and transactions are limited")
+            }
+            _ => String::new(),
+        };
+        self.driver_combo.set_subtitle(&subtitle);
     }
 
     fn show_toast(&self, message: &str) {

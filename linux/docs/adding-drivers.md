@@ -6,9 +6,9 @@ End to end, adding a driver is six steps:
 
 1. Pick the underlying Rust library
 2. Create a new crate
-3. Implement `core::DatabaseDriver` and `core::Connection`
+3. Implement `core::DatabaseDriver` and `core::Connection` (set `maturity()` when incomplete; see [driver-maturity.md](driver-maturity.md))
 4. Add the crate to the workspace
-5. Register the driver in `app::main`
+5. Register the driver in `app::main` and `agentd` (Cargo-feature-gate when connect needs native libs or a huge build)
 6. Add tests
 
 Each step is small. The whole task takes between half a day (PG-shaped engines) and a week (Oracle-shaped engines that need C FFI).

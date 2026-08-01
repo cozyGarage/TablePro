@@ -61,6 +61,21 @@ Consequences:
 - Drivers can be unit-tested against `core` traits without pulling GTK.
 - The build graph is shallow — incremental rebuilds stay fast.
 
+## Policy boundaries
+
+Two layers gate agent and MCP access. They answer different questions and must not be collapsed into one check.
+
+| Layer | Answers | Lives in |
+|---|---|---|
+| MCP token scopes + connection allowlist | Who is calling, and which saved connections may they touch | `crates/mcp` (`McpScope`, `TokenPermissions`, allowlist) |
+| `PolicyGuard` | What SQL may run (classify → rules → approval → mask → audit) | `crates/policy` |
+
+Rules:
+
+- Scopes never substitute for policy. A token with `ToolsWrite` still hits `PolicyGuard` on every statement.
+- Policy never replaces allowlists. An approved write on a connection outside the token allowlist is still denied at the bridge.
+- GUI, MCP (in-app), and `tablepro-agentd` all obtain connections only through a provider that wraps `PolicyGuard`. Preview/`begin` paths use the same guard.
+
 ## Composition root
 
 The driver registry is built once in `app::main` before the GTK application starts running:

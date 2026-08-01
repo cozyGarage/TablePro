@@ -1,8 +1,10 @@
 //! MCP server surface for TablePro Linux.
 //!
-//! Every tool call obtains a connection through a [`ConnectionProvider`]
-//! that must return a policy-gated handle. There is no path to a raw
-//! driver connection from this crate.
+//! Token scopes and connection allowlists answer **who** and **which
+//! connections**. Every tool call then obtains a connection through a
+//! [`ConnectionProvider`] that must return a policy-gated handle, so
+//! **what SQL** still goes through `PolicyGuard`. There is no path to a
+//! raw driver connection from this crate.
 
 mod auth;
 mod bridge;

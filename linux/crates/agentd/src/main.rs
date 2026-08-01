@@ -12,6 +12,7 @@ use drivers_duckdb::DuckdbDriver;
 use drivers_mongodb::MongodbDriver;
 use drivers_mssql::MssqlDriver;
 use drivers_mysql::MysqlDriver;
+#[cfg(feature = "odpi")]
 use drivers_oracle::OracleDriver;
 use drivers_postgres::PgDriver;
 use drivers_redis::RedisDriver;
@@ -153,6 +154,7 @@ fn build_registry() -> DriverRegistry {
     r.register(Arc::new(MongodbDriver));
     r.register(Arc::new(MssqlDriver));
     r.register(Arc::new(MysqlDriver));
+    #[cfg(feature = "odpi")]
     r.register(Arc::new(OracleDriver));
     r.register(Arc::new(PgDriver));
     r.register(Arc::new(RedisDriver));

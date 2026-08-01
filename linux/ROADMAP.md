@@ -101,6 +101,8 @@ statement leaves a journal entry.
       loopback bind by default; Preferences → MCP pairing UI
 - [x] Integration test: tool path requires provider + token; read-only
       token cannot write
+- [x] Boundary documented: scopes/allowlist = who/which connection;
+      `PolicyGuard` = what SQL (`ARCHITECTURE.md`)
 
 **Tools**: `list_connections`, `list_schemas`, `list_tables`,
 `describe_table`, `get_table_ddl`, `execute_query`, `execute_write`,
@@ -154,7 +156,8 @@ Reprioritized around the persona, not DBeaver parity.
       (CSV streams; Parquet stub returns Unsupported)
 - [x] Server version and capability detection
 - [x] Drivers in persona order: ClickHouse, Redis, DuckDB, MongoDB, Oracle
-      (Oracle stubbed without Instant Client / `--features odpi`)
+      (Oracle registered only with `--features odpi`; maturity matrix in
+      `docs/driver-maturity.md`)
 - [x] SSH jump-host chains
 
 ---

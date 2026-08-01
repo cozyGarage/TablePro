@@ -6,11 +6,12 @@ sharing no code but matching the feature set over time.
 ## Status
 
 Working GTK4 / libadwaita client with PostgreSQL, MySQL, SQLite, MSSQL,
-ClickHouse, Redis, DuckDB, MongoDB, and Oracle (stub without Instant
-Client). SSH tunnels, multi-tab browse / SQL editor / structure editor,
-inline cell edit, query history, Flatpak scaffolding, and a governed
-data plane (policy chokepoint, MCP server, headless agentd). See
-[ROADMAP.md](ROADMAP.md).
+and ClickHouse stable, plus Experimental Redis / MongoDB (DuckDB and
+Oracle behind `--features duckdb` / `--features odpi`). SSH tunnels,
+multi-tab browse / SQL editor / structure editor, inline cell edit,
+query history, Flatpak scaffolding, and a governed data plane (policy
+chokepoint, MCP server, headless agentd). See [ROADMAP.md](ROADMAP.md)
+and [docs/driver-maturity.md](docs/driver-maturity.md).
 
 It is past demo-grade, but still not beta-shippable for Flathub.
 
@@ -100,6 +101,7 @@ Quick local `.deb`:
 | Production gap analysis | [docs/production-audit.md](docs/production-audit.md) |
 | Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Adding a database driver | [docs/adding-drivers.md](docs/adding-drivers.md) |
+| Driver maturity matrix | [docs/driver-maturity.md](docs/driver-maturity.md) |
 | State management with Relm4 | [docs/state-management.md](docs/state-management.md) |
 | Persistence | [docs/storage.md](docs/storage.md) |
 | Error handling | [docs/error-handling.md](docs/error-handling.md) |

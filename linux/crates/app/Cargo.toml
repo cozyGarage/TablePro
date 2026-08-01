@@ -13,6 +13,8 @@ path = "src/main.rs"
 default = []
 # Bundled DuckDB compiles a large C++ tree; enable explicitly when needed.
 duckdb = ["dep:tablepro-driver-duckdb"]
+# Oracle Instant Client / ODPI-C on the build host.
+odpi = ["tablepro-driver-oracle/odpi"]
 
 [dependencies]
 tablepro-core = { path = "../core" }

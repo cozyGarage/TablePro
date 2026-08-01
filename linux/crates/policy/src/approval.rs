@@ -21,7 +21,6 @@ pub struct ApprovalRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalOutcome {
     AllowOnce,
-    AllowSession,
     Deny,
 }
 

@@ -133,7 +133,7 @@ impl PolicyGuard {
                     })
                     .await;
                 match outcome {
-                    ApprovalOutcome::AllowOnce | ApprovalOutcome::AllowSession => Ok(Decision::Allow {
+                    ApprovalOutcome::AllowOnce => Ok(Decision::Allow {
                         rule: format!("{rule}:approved"),
                     }),
                     ApprovalOutcome::Deny => {

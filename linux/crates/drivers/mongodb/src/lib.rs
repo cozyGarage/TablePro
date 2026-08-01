@@ -8,8 +8,8 @@ use mongodb::{Client, Database};
 use secrecy::ExposeSecret;
 
 use tablepro_core::{
-    ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, MAX_QUERY_ROWS, QueryResult,
-    TableInfo, Value,
+    ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, DriverMaturity, ExecResult, MAX_QUERY_ROWS,
+    QueryResult, TableInfo, Value,
 };
 
 const SAMPLE_DOCS: i64 = 50;
@@ -24,6 +24,10 @@ impl DatabaseDriver for MongodbDriver {
 
     fn display_name(&self) -> &'static str {
         "MongoDB"
+    }
+
+    fn maturity(&self) -> DriverMaturity {
+        DriverMaturity::Experimental
     }
 
     fn default_port(&self) -> u16 {

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use tablepro_core::{ConnectOptions, Connection, DatabaseDriver, DriverError};
+use tablepro_core::{ConnectOptions, Connection, DatabaseDriver, DriverError, DriverMaturity};
 
 #[cfg(feature = "odpi")]
 mod odpi;
@@ -15,6 +15,10 @@ impl DatabaseDriver for OracleDriver {
 
     fn display_name(&self) -> &'static str {
         "Oracle"
+    }
+
+    fn maturity(&self) -> DriverMaturity {
+        DriverMaturity::Experimental
     }
 
     fn default_port(&self) -> u16 {
@@ -47,6 +51,7 @@ mod tests {
         assert_eq!(d.id(), "oracle");
         assert_eq!(d.display_name(), "Oracle");
         assert_eq!(d.default_port(), 1521);
+        assert_eq!(d.maturity(), DriverMaturity::Experimental);
         assert!(!d.is_file_based());
     }
 

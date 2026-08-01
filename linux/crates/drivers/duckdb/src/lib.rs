@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use duckdb::{Connection as DuckConnection, params_from_iter, types::ValueRef};
 
 use tablepro_core::{
-    ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, MAX_QUERY_ROWS, QueryResult,
-    TableInfo, Value,
+    ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, DriverMaturity, ExecResult, MAX_QUERY_ROWS,
+    QueryResult, TableInfo, Value,
 };
 
 pub struct DuckdbDriver;
@@ -18,6 +18,10 @@ impl DatabaseDriver for DuckdbDriver {
 
     fn display_name(&self) -> &'static str {
         "DuckDB"
+    }
+
+    fn maturity(&self) -> DriverMaturity {
+        DriverMaturity::Experimental
     }
 
     fn default_port(&self) -> u16 {

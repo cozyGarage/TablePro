@@ -24,6 +24,8 @@
 - Multi-window via New Window
 - Flathub submission notes and screenshot capture guide
 - Rust file-size guardrail in preflight: soft 1200 / hard 1800 lines, with ratchet ceilings in `file-size-baselines.txt`
+- Driver maturity labels in the Connect dialog (Experimental subtitle for Redis, MongoDB, DuckDB, and Oracle)
+- Driver maturity matrix in `docs/driver-maturity.md`
 
 ### Changed
 
@@ -34,6 +36,7 @@
 - Arbitrary SQL query soft row cap raised to 1,000,000 (truncated flag still set); browse pagination remains uncapped by that constant
 - Agentd approval strategies: deny (default), auto, or tty
 - DuckDB driver is an optional `duckdb` Cargo feature (bundled build is large)
+- Oracle appears in the driver list only when built with `--features odpi`
 - Linux CI runs a non-GTK preflight job before the full GTK checks; local `./scripts/preflight.sh` mirrors that gate
 - Policy evaluation takes the resolved connection EnvPolicy once; connection overrides no longer re-run evaluate
 - Connect dialog TLS control is a mode picker (Disabled / Prefer / Require / Verify CA / Verify Full), defaulting to Verify Full for network drivers
@@ -44,7 +47,10 @@
 - Flatpak CI bootstraps Rust 1.93 via rustup so the GNOME 47 SDK's older rust-stable extension is not required
 - MCP write preview and other `begin()` paths now run statements through PolicyGuard instead of a raw driver transaction
 - Agents are denied (and humans must approve) when a blast-radius estimate cannot be computed for UPDATE/DELETE
-- Approval dialog no longer offers "Approve for session" until session grants exist
+
+### Removed
+
+- Unused `Approve for session` approval outcome (no session-grant store existed)
 
 ### Security
 

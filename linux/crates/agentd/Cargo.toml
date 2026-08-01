@@ -12,6 +12,7 @@ path = "src/main.rs"
 [features]
 default = []
 duckdb = ["dep:tablepro-driver-duckdb"]
+odpi = ["tablepro-driver-oracle/odpi"]
 
 [dependencies]
 tablepro-core = { path = "../core" }

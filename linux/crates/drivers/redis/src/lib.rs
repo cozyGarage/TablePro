@@ -5,8 +5,8 @@ use secrecy::ExposeSecret;
 use tokio::sync::Mutex;
 
 use tablepro_core::{
-    ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, MAX_QUERY_ROWS, QueryResult,
-    TableInfo, Value,
+    ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, DriverMaturity, ExecResult, MAX_QUERY_ROWS,
+    QueryResult, TableInfo, Value,
 };
 
 pub struct RedisDriver;
@@ -19,6 +19,10 @@ impl DatabaseDriver for RedisDriver {
 
     fn display_name(&self) -> &'static str {
         "Redis"
+    }
+
+    fn maturity(&self) -> DriverMaturity {
+        DriverMaturity::Experimental
     }
 
     fn default_port(&self) -> u16 {

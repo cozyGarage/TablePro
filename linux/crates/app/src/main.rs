@@ -78,6 +78,7 @@ fn build_registry() -> DriverRegistry {
     r.register(Arc::new(drivers_mongodb::MongodbDriver));
     r.register(Arc::new(drivers_mssql::MssqlDriver));
     r.register(Arc::new(drivers_mysql::MysqlDriver));
+    #[cfg(feature = "odpi")]
     r.register(Arc::new(drivers_oracle::OracleDriver));
     r.register(Arc::new(drivers_postgres::PgDriver));
     r.register(Arc::new(drivers_redis::RedisDriver));
