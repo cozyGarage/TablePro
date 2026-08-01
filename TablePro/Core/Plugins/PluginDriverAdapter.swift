@@ -171,8 +171,7 @@ final class PluginDriverAdapter: DatabaseDriver, SchemaSwitchable {
     // MARK: - Schema Operations
 
     func fetchTables() async throws -> [TableInfo] {
-        let pluginTables = try await pluginDriver.fetchTables(schema: pluginDriver.currentSchema)
-        return pluginTables.map { mapPluginTable($0, schemaFallback: nil) }
+        try await fetchTables(schema: nil)
     }
 
     func fetchTables(schema: String?) async throws -> [TableInfo] {
@@ -311,6 +310,18 @@ final class PluginDriverAdapter: DatabaseDriver, SchemaSwitchable {
             .map(\.asPluginFilterTuple)
         return try await pluginDriver.fetchFilteredRowCount(
             table: table,
+            filters: tuples,
+            logicMode: logicMode == .and ? "and" : "or"
+        )
+    }
+
+    func fetchExactRowCount(table: String, filters: [TableFilter], logicMode: FilterLogicMode) async throws -> Int? {
+        let tuples = filters
+            .filter { $0.isEnabled && !$0.columnName.isEmpty }
+            .map(\.asPluginFilterTuple)
+        return try await pluginDriver.fetchExactRowCount(
+            table: table,
+            schema: pluginDriver.currentSchema,
             filters: tuples,
             logicMode: logicMode == .and ? "and" : "or"
         )

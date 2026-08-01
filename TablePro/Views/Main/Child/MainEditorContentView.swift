@@ -457,6 +457,8 @@ struct MainEditorContentView: View {
                 // selectedTabIndex would overwrite the new tab's query.
                 guard tabManager.mutate(tabId: tabId, { $0.content.query = newValue }) else { return }
 
+                coordinator.scheduleDraftSave()
+
                 // Typing into a scratch tab dirties it too: the text lives nowhere but this tab.
                 // The dot belongs to this tab's own window, not whichever window happens to be
                 // key, because a background window tab's editor stays mounted and can fire here.
@@ -799,7 +801,8 @@ struct MainEditorContentView: View {
                 onLast: onLastPage,
                 onPageSizeChange: onPageSizeChange,
                 onShowAll: onShowAll,
-                onGoToPage: onGoToPage
+                onGoToPage: onGoToPage,
+                onRequestExactCount: { coordinator.paginationCoordinator.requestExactRowCount() }
             ),
             columnState: StatusBarColumnState(
                 hidden: tab.columnLayout.hiddenColumns,

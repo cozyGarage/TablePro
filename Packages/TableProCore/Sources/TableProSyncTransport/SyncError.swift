@@ -1,15 +1,7 @@
-//
-//  SyncError.swift
-//  TablePro
-//
-//  Sync-specific error types
-//
-
 import CloudKit
 import Foundation
 
-/// Errors that can occur during sync operations
-enum SyncError: LocalizedError, Equatable {
+public enum SyncError: Error, LocalizedError, Equatable, Sendable {
     case networkUnavailable
     case accountUnavailable
     case quotaExceeded
@@ -17,9 +9,11 @@ enum SyncError: LocalizedError, Equatable {
     case serverError(String)
     case conflictDetected
     case encodingFailed(String)
+    case pushRejected(count: Int, detail: String)
+    case tokenExpired
     case unknown(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .networkUnavailable:
             return String(localized: "Network is unavailable. Changes will sync when connectivity is restored.")
@@ -35,13 +29,20 @@ enum SyncError: LocalizedError, Equatable {
             return String(localized: "A sync conflict was detected and needs to be resolved.")
         case .encodingFailed(let detail):
             return String(format: String(localized: "Failed to encode sync data: %@"), detail)
+        case .pushRejected(let count, let detail):
+            return String(
+                format: String(localized: "iCloud rejected %d change(s). They stay on this device and will retry: %@"),
+                count,
+                detail
+            )
+        case .tokenExpired:
+            return String(localized: "Sync token expired. A full sync will be performed.")
         case .unknown(let message):
             return String(format: String(localized: "An unknown sync error occurred: %@"), message)
         }
     }
 
-    /// Convert a generic Error into a SyncError
-    static func from(_ error: Error) -> SyncError {
+    public static func from(_ error: Error) -> SyncError {
         if let syncError = error as? SyncError {
             return syncError
         }
@@ -56,30 +57,13 @@ enum SyncError: LocalizedError, Equatable {
                 return .quotaExceeded
             case .zoneNotFound:
                 return .zoneNotFound
+            case .changeTokenExpired:
+                return .tokenExpired
             default:
                 return .serverError(ckError.localizedDescription)
             }
         }
 
         return .unknown(error.localizedDescription)
-    }
-
-    static func == (lhs: SyncError, rhs: SyncError) -> Bool {
-        switch (lhs, rhs) {
-        case (.networkUnavailable, .networkUnavailable),
-             (.accountUnavailable, .accountUnavailable),
-             (.quotaExceeded, .quotaExceeded),
-             (.zoneNotFound, .zoneNotFound),
-             (.conflictDetected, .conflictDetected):
-            return true
-        case (.serverError(let a), .serverError(let b)):
-            return a == b
-        case (.encodingFailed(let a), .encodingFailed(let b)):
-            return a == b
-        case (.unknown(let a), .unknown(let b)):
-            return a == b
-        default:
-            return false
-        }
     }
 }

@@ -6,6 +6,7 @@
 @testable import TablePro
 import TableProPluginKit
 import XCTest
+import TableProSyncTransport
 
 @MainActor
 final class WelcomeViewModelTests: XCTestCase {
@@ -89,7 +90,6 @@ final class WelcomeViewModelTests: XCTestCase {
             tagStorage: live.tagStorage,
             sshProfileStorage: live.sshProfileStorage,
             licenseManager: live.licenseManager,
-            conflictResolver: live.conflictResolver,
             syncMetadataStorage: live.syncMetadataStorage,
             favoritesExpansionState: live.favoritesExpansionState,
             linkedFolderWatcher: live.linkedFolderWatcher,
