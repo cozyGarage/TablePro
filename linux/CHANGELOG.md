@@ -31,8 +31,10 @@
 - Roadmap and production audit rewritten to match the governed data-plane plan
 - Arbitrary SQL query soft row cap raised to 1,000,000 (truncated flag still set); browse pagination remains uncapped by that constant
 - Agentd approval strategies: deny (default), auto, or tty
+- DuckDB driver is an optional `duckdb` Cargo feature (bundled build is large)
 
 ### Security
 
 - TLS certificate verification modes (VerifyCa / VerifyFull) replace encrypt-only Require
 - Agent results masked for sensitive column name patterns by default
+- MCP tokens with an empty connection allowlist can no longer touch any connection

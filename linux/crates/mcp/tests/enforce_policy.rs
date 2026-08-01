@@ -20,15 +20,20 @@ use tablepro_mcp::{
 async fn tool_path_requires_provider_and_token() {
     let dir = tempfile::TempDir::new().unwrap();
     let store = Arc::new(TokenStore::open(dir.path().join("tokens.json")).unwrap());
+    let conn_id = Uuid::nil();
     let (_meta, plain) = store
-        .issue("test".into(), TokenPermissions::ReadWrite, vec![], None)
+        .issue(
+            "test".into(),
+            TokenPermissions::ReadWrite,
+            vec![conn_id],
+            None,
+        )
         .unwrap();
 
     let provider = Arc::new(RecordingProvider::default());
     let bridge = McpBridge::new(provider.clone(), store);
     let token = bridge.authenticate(&plain).unwrap();
 
-    let conn_id = Uuid::nil();
     let result = bridge.execute_query(&token, conn_id, "SELECT 1").await;
     assert!(
         provider.connection_calls.load(std::sync::atomic::Ordering::SeqCst) >= 1,
@@ -44,17 +49,47 @@ async fn tool_path_requires_provider_and_token() {
 async fn write_without_tools_write_scope_denied() {
     let dir = tempfile::TempDir::new().unwrap();
     let store = Arc::new(TokenStore::open(dir.path().join("tokens.json")).unwrap());
+    let conn_id = Uuid::nil();
     let (_meta, plain) = store
-        .issue("ro".into(), TokenPermissions::ReadOnly, vec![], None)
+        .issue(
+            "ro".into(),
+            TokenPermissions::ReadOnly,
+            vec![conn_id],
+            None,
+        )
         .unwrap();
     let provider = Arc::new(RecordingProvider::default());
     let bridge = McpBridge::new(provider, store);
     let token = bridge.authenticate(&plain).unwrap();
     let err = bridge
-        .execute_write(&token, Uuid::nil(), "DELETE FROM t", false)
+        .execute_write(&token, conn_id, "DELETE FROM t", false)
         .await
         .unwrap_err();
     assert!(err.contains("scope") || err.contains("tools"), "{err}");
+}
+
+#[tokio::test]
+async fn empty_allowlist_denies_connection_access() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(TokenStore::open(dir.path().join("tokens.json")).unwrap());
+    let (_meta, plain) = store
+        .issue("open".into(), TokenPermissions::ReadWrite, vec![], None)
+        .unwrap();
+    let provider = Arc::new(RecordingProvider::default());
+    let bridge = McpBridge::new(provider.clone(), store);
+    let token = bridge.authenticate(&plain).unwrap();
+    let err = bridge
+        .execute_query(&token, Uuid::nil(), "SELECT 1")
+        .await
+        .unwrap_err();
+    assert!(
+        err.contains("allowlist"),
+        "empty allowlist must fail closed: {err}"
+    );
+    assert_eq!(
+        provider.connection_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
 }
 
 #[tokio::test]
@@ -69,8 +104,14 @@ async fn guarded_tool_path_journals_policy_decision() {
     let journal_path = dir.path().join("audit.jsonl");
     let journal = Arc::new(AuditJournal::open(journal_path.clone()));
     let store = Arc::new(TokenStore::open(dir.path().join("tokens.json")).unwrap());
+    let conn_id = Uuid::new_v4();
     let (_meta, plain) = store
-        .issue("test".into(), TokenPermissions::ReadWrite, vec![], None)
+        .issue(
+            "test".into(),
+            TokenPermissions::ReadWrite,
+            vec![conn_id],
+            None,
+        )
         .unwrap();
 
     struct GuardedProvider {
@@ -112,7 +153,7 @@ async fn guarded_tool_path_journals_policy_decision() {
     let bridge = McpBridge::new(provider.clone(), store);
     let token = bridge.authenticate(&plain).unwrap();
     let _ = bridge
-        .execute_query(&token, Uuid::nil(), "SELECT 1")
+        .execute_query(&token, conn_id, "SELECT 1")
         .await
         .expect("select through guard");
     assert!(provider.calls.load(std::sync::atomic::Ordering::SeqCst) >= 1);

@@ -56,7 +56,7 @@ impl McpBridge {
 
     pub fn ensure_connection_allowed(&self, token: &McpToken, connection_id: Uuid) -> Result<(), String> {
         if token.connection_allowlist.is_empty() {
-            return Ok(());
+            return Err("token has an empty connection allowlist".into());
         }
         if token.connection_allowlist.contains(&connection_id) {
             Ok(())
@@ -68,10 +68,11 @@ impl McpBridge {
     pub async fn list_connections(&self, token: &McpToken) -> Result<Vec<SavedConnection>, String> {
         authorize_scopes(token.permissions, McpScope::ToolsRead)?;
         self.check_rate(token)?;
-        let mut list = self.provider.list_saved_connections().await?;
-        if !token.connection_allowlist.is_empty() {
-            list.retain(|c| token.connection_allowlist.contains(&c.id));
+        if token.connection_allowlist.is_empty() {
+            return Ok(Vec::new());
         }
+        let mut list = self.provider.list_saved_connections().await?;
+        list.retain(|c| token.connection_allowlist.contains(&c.id));
         Ok(list)
     }
 

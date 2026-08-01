@@ -9,12 +9,17 @@ publish = false
 name = "tablepro-app"
 path = "src/main.rs"
 
+[features]
+default = []
+# Bundled DuckDB compiles a large C++ tree; enable explicitly when needed.
+duckdb = ["dep:tablepro-driver-duckdb"]
+
 [dependencies]
 tablepro-core = { path = "../core" }
 tablepro-policy = { path = "../policy" }
 tablepro-mcp = { path = "../mcp" }
 tablepro-driver-clickhouse = { path = "../drivers/clickhouse" }
-tablepro-driver-duckdb = { path = "../drivers/duckdb" }
+tablepro-driver-duckdb = { path = "../drivers/duckdb", optional = true }
 tablepro-driver-mongodb = { path = "../drivers/mongodb" }
 tablepro-driver-mssql = { path = "../drivers/mssql" }
 tablepro-driver-mysql = { path = "../drivers/mysql" }

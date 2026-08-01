@@ -78,7 +78,33 @@ pub fn build_page() -> adw::PreferencesPage {
         let tokens_group = tokens_for_issue.clone();
         let parent = page_for_dialog.clone();
         glib::spawn_future_local(async move {
-            match mcp_service::issue_token(name, permissions, vec![]).await {
+            let allowlist = match tablepro_storage::load_connections().await {
+                Ok(list) => list.into_iter().map(|c| c.id).collect::<Vec<_>>(),
+                Err(e) => {
+                    let msg = format!("could not load connections: {e}");
+                    let alert = adw::AlertDialog::new(
+                        Some(&tr!("Could not issue token")),
+                        Some(&msg),
+                    );
+                    alert.add_response("ok", &tr!("OK"));
+                    alert.set_default_response(Some("ok"));
+                    alert.present(Some(&parent));
+                    return;
+                }
+            };
+            if allowlist.is_empty() {
+                let alert = adw::AlertDialog::new(
+                    Some(&tr!("Could not issue token")),
+                    Some(&tr!(
+                        "Save at least one connection before issuing an MCP token. Tokens are scoped to the connections that exist at issue time."
+                    )),
+                );
+                alert.add_response("ok", &tr!("OK"));
+                alert.set_default_response(Some("ok"));
+                alert.present(Some(&parent));
+                return;
+            }
+            match mcp_service::issue_token(name, permissions, allowlist).await {
                 Ok((_id, plaintext)) => {
                     show_issued_token(&parent, &plaintext);
                     clear_and_refresh(&tokens_group);
