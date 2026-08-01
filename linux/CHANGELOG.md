@@ -29,6 +29,8 @@
 
 ### Changed
 
+- MSSQL (tiberius) uses native-tls instead of the pinned rustls 0.21 stack
+- Workspace crates declare AGPL-3.0-or-later; cargo-deny allows that license and documents the rsa Marvin advisory ignore
 - Linux UI and DDL modules split by domain: browse tab, grid, editor, app workspace helpers, and `sql_ddl` are directories of focused files instead of multi-thousand-line units
 - Read-only is enforced by policy classification (data-modifying CTEs blocked)
 - DatabaseService exposes only policy-gated connection handles

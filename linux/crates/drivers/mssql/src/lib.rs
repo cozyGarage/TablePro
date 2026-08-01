@@ -63,7 +63,7 @@ impl DatabaseDriver for MssqlDriver {
             }
             TlsMode::VerifyCa | TlsMode::VerifyFull => {
                 config.encryption(EncryptionLevel::Required);
-                // Do not call trust_cert(); rustls verifies the chain.
+                // Do not call trust_cert(); native-tls verifies the chain.
             }
         }
 

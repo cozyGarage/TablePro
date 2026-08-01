@@ -98,10 +98,8 @@ jobs:
           cargo install cargo-audit --locked
       - name: cargo-deny
         run: cargo deny check
-        continue-on-error: true
       - name: cargo-audit
         run: cargo audit
-        continue-on-error: true
 
   integration:
     name: Driver integration tests (docker)
