@@ -20,15 +20,20 @@ git clone https://github.com/flatpak/flatpak-builder-tools
 Then wire `flatpak/generated-sources.json` into the module sources and set `CARGO_NET_OFFLINE=true` (see the script's output).
 ## Debian / Ubuntu (`.deb`)
 
+You do **not** need a `.deb` for day-to-day development. Use `cargo run -p tablepro-app` and `./scripts/preflight.sh` while iterating. Rebuild the package only when you want to install/update the system binary, desktop entry, or `tablepro-agentd` unit.
+
 Debian source packaging lives in [`debian/`](debian/). For a quick local binary package without a full source upload:
 
 ```bash
+./scripts/preflight.sh         # cheap gate first
 ./scripts/build-deb.sh
 # → packaging/out/tablepro_0.1.0-1_amd64.deb
 sudo apt install ./packaging/out/tablepro_0.1.0-1_amd64.deb
 ```
 
 Build-Depends (source package): `cargo`, `rustc (>= 1.93)`, `libgtk-4-dev`, `libadwaita-1-dev`, `libgtksourceview-5-dev`, `libssl-dev`, `libsecret-1-dev`, `gettext`.
+
+Default app builds omit the optional `duckdb` Cargo feature (bundled DuckDB is large). Pass `--features duckdb` to `cargo build` if you need that driver in a custom package.
 
 ## Arch (AUR)
 

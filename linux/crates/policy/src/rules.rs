@@ -235,14 +235,7 @@ mod tests {
     fn read_only_connection_blocks_write() {
         let policy = PolicyConfig::default();
         let facts = classify("DELETE FROM t WHERE id = 1", "postgres");
-        let d = evaluate(
-            &Principal::human_gui(),
-            Environment::Local,
-            &facts,
-            true,
-            &policy,
-            None,
-        );
+        let d = evaluate(&Principal::human_gui(), Environment::Local, &facts, true, &policy, None);
         assert!(matches!(d, Decision::Deny { rule, .. } if rule == "connection_read_only"));
     }
 

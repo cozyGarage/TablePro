@@ -23,11 +23,7 @@ impl ConnectionProvider for AppConnectionProvider {
         load_connections().await.map_err(|e| e.to_string())
     }
 
-    async fn connection(
-        &self,
-        connection_id: Uuid,
-        principal: Principal,
-    ) -> Result<Arc<dyn Connection>, String> {
+    async fn connection(&self, connection_id: Uuid, principal: Principal) -> Result<Arc<dyn Connection>, String> {
         database_service::instance()
             .handle(connection_id, principal)
             .ok_or_else(|| format!("connection {connection_id} is not open in the app"))
@@ -56,11 +52,8 @@ pub fn start_background() -> Option<Arc<McpBridge>> {
                 .build()
                 .expect("mcp runtime");
             rt.block_on(async move {
-                if let Err(e) = tablepro_mcp::serve_streamable_http(
-                    bridge_http,
-                    tablepro_mcp::McpServerConfig::default(),
-                )
-                .await
+                if let Err(e) =
+                    tablepro_mcp::serve_streamable_http(bridge_http, tablepro_mcp::McpServerConfig::default()).await
                 {
                     tracing::warn!(error = %e, "MCP HTTP server stopped");
                 }
@@ -103,7 +96,5 @@ pub fn revoke_token(id: Uuid) -> Result<(), String> {
 }
 
 pub fn list_tokens() -> Vec<tablepro_mcp::McpToken> {
-    bridge()
-        .map(|b| b.tokens().list())
-        .unwrap_or_default()
+    bridge().map(|b| b.tokens().list()).unwrap_or_default()
 }

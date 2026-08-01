@@ -65,10 +65,12 @@ cd linux
 cargo run -p tablepro-app
 ```
 
-Local CI mirror (fmt + clippy + build + unit tests):
+Local CI mirrors (prefer the cheap gate while iterating):
 
 ```bash
-./scripts/ci-local.sh
+./scripts/preflight.sh              # no GTK app; policy/mcp/drivers/unit tests
+./scripts/ci-local.sh               # full workspace unit tests (includes GTK)
+./scripts/ci-local.sh integration   # docker driver suites
 ```
 
 Driver smoke against a Postgres you already run, no Docker needed:

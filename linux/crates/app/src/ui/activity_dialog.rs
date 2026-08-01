@@ -38,10 +38,7 @@ pub fn present(parent: &gtk::Window) {
         .margin_bottom(8)
         .build();
 
-    let scrolled = gtk::ScrolledWindow::builder()
-        .vexpand(true)
-        .hexpand(true)
-        .build();
+    let scrolled = gtk::ScrolledWindow::builder().vexpand(true).hexpand(true).build();
     let text = gtk::TextView::builder()
         .editable(false)
         .monospace(true)

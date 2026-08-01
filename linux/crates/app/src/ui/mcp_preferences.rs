@@ -47,18 +47,14 @@ pub fn build_page() -> adw::PreferencesPage {
         .valign(gtk::Align::Center)
         .build();
     issue_button.add_css_class("suggested-action");
-    let issue_row = adw::ActionRow::builder()
-        .title(tr!("Create pairing token"))
-        .build();
+    let issue_row = adw::ActionRow::builder().title(tr!("Create pairing token")).build();
     issue_row.add_suffix(&issue_button);
 
     issue_group.add(&name_row);
     issue_group.add(&scope_combo);
     issue_group.add(&issue_row);
 
-    let tokens_group = adw::PreferencesGroup::builder()
-        .title(tr!("Active tokens"))
-        .build();
+    let tokens_group = adw::PreferencesGroup::builder().title(tr!("Active tokens")).build();
     refresh_token_list(&tokens_group);
 
     let name_for_issue = name_row.clone();

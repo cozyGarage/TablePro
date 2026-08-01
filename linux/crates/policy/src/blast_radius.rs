@@ -19,11 +19,7 @@ pub fn count_sql_for_mutation(sql: &str, driver_id: &str) -> Option<BlastRadiusR
         return None;
     }
     match &statements[0] {
-        Statement::Update {
-            table,
-            selection,
-            ..
-        } => {
+        Statement::Update { table, selection, .. } => {
             let tables = table_names_from_factor(&table.relation);
             let from = vec![TableWithJoins {
                 relation: table.relation.clone(),
@@ -31,18 +27,11 @@ pub fn count_sql_for_mutation(sql: &str, driver_id: &str) -> Option<BlastRadiusR
             }];
             Some(build_count_sql(&from, selection.as_ref(), tables, driver_id))
         }
-        Statement::Delete(Delete {
-            from,
-            selection,
-            ..
-        }) => {
+        Statement::Delete(Delete { from, selection, .. }) => {
             let list = match from {
                 FromTable::WithFromKeyword(t) | FromTable::WithoutKeyword(t) => t,
             };
-            let tables: Vec<String> = list
-                .iter()
-                .flat_map(|t| table_names_from_factor(&t.relation))
-                .collect();
+            let tables: Vec<String> = list.iter().flat_map(|t| table_names_from_factor(&t.relation)).collect();
             Some(build_count_sql(list, selection.as_ref(), tables, driver_id))
         }
         _ => None,
@@ -73,9 +62,7 @@ fn build_count_sql(
             .join(", ")
     };
 
-    let where_sql = selection
-        .map(|s| format!(" WHERE {s}"))
-        .unwrap_or_default();
+    let where_sql = selection.map(|s| format!(" WHERE {s}")).unwrap_or_default();
 
     let count_fn = if driver_id == "mssql" {
         "COUNT_BIG(*)"

@@ -117,11 +117,7 @@ pub fn export_parquet_unsupported(_path: &str) -> Result<(), DriverError> {
 /// Qualified table name for logging / filenames.
 pub fn qualified_table_name(driver_id: &str, schema: Option<&str>, table: &str) -> String {
     match schema {
-        Some(s) => format!(
-            "{}.{}",
-            quote_ident(driver_id, s),
-            quote_ident(driver_id, table)
-        ),
+        Some(s) => format!("{}.{}", quote_ident(driver_id, s), quote_ident(driver_id, table)),
         None => quote_ident(driver_id, table),
     }
 }

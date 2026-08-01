@@ -21,11 +21,7 @@ impl TokenPermissions {
     pub fn scopes(self) -> Vec<McpScope> {
         match self {
             Self::ReadOnly => vec![McpScope::ToolsRead, McpScope::ResourcesRead],
-            Self::ReadWrite => vec![
-                McpScope::ToolsRead,
-                McpScope::ToolsWrite,
-                McpScope::ResourcesRead,
-            ],
+            Self::ReadWrite => vec![McpScope::ToolsRead, McpScope::ToolsWrite, McpScope::ResourcesRead],
             Self::FullAccess => vec![
                 McpScope::ToolsRead,
                 McpScope::ToolsWrite,
@@ -44,11 +40,7 @@ pub fn authorize_scopes(perms: TokenPermissions, required: McpScope) -> Result<(
     if perms.allows(required) {
         Ok(())
     } else {
-        Err(format!(
-            "token lacks scope {:?}; has {:?}",
-            required,
-            perms.scopes()
-        ))
+        Err(format!("token lacks scope {:?}; has {:?}", required, perms.scopes()))
     }
 }
 

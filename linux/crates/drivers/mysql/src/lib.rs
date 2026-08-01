@@ -363,7 +363,10 @@ struct MysqlTransaction {
 #[async_trait]
 impl tablepro_core::Transaction for MysqlTransaction {
     async fn query(&mut self, sql: &str) -> Result<QueryResult, DriverError> {
-        let tx = self.tx.as_mut().ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        let tx = self
+            .tx
+            .as_mut()
+            .ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
         let rows = sqlx::query(sql).fetch_all(&mut **tx).await.map_err(map_sqlx_error)?;
         if rows.is_empty() {
             return Ok(QueryResult {
@@ -397,7 +400,10 @@ impl tablepro_core::Transaction for MysqlTransaction {
     }
 
     async fn execute(&mut self, sql: &str) -> Result<ExecResult, DriverError> {
-        let tx = self.tx.as_mut().ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        let tx = self
+            .tx
+            .as_mut()
+            .ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
         let res = sqlx::query(sql).execute(&mut **tx).await.map_err(map_sqlx_error)?;
         Ok(ExecResult {
             rows_affected: res.rows_affected(),

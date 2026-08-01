@@ -25,9 +25,7 @@ fn default_session() -> String {
 
 impl Principal {
     pub fn human_gui() -> Self {
-        Self::Human {
-            session: "gui".into(),
-        }
+        Self::Human { session: "gui".into() }
     }
 
     pub fn is_agent(&self) -> bool {

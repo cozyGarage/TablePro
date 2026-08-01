@@ -60,9 +60,7 @@ pub fn activity_sql(driver_id: &str, kind: ActivityQuery, session_id: Option<&st
             let pid = session_id?;
             Some(format!("SELECT pg_terminate_backend({pid})"))
         }
-        ("mysql", ActivityQuery::Sessions) => {
-            Some("SHOW FULL PROCESSLIST".into())
-        }
+        ("mysql", ActivityQuery::Sessions) => Some("SHOW FULL PROCESSLIST".into()),
         ("mysql", ActivityQuery::LongRunning) => Some(
             "SELECT id, user, host, db, command, time, state, left(info, 200) AS query \
              FROM information_schema.processlist \
@@ -101,6 +99,10 @@ mod tests {
     #[test]
     fn kill_requires_id() {
         assert!(activity_sql("postgres", ActivityQuery::KillSession, None).is_none());
-        assert!(activity_sql("postgres", ActivityQuery::KillSession, Some("42")).unwrap().contains("42"));
+        assert!(
+            activity_sql("postgres", ActivityQuery::KillSession, Some("42"))
+                .unwrap()
+                .contains("42")
+        );
     }
 }

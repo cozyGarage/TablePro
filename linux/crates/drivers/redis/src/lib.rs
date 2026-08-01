@@ -5,8 +5,8 @@ use secrecy::ExposeSecret;
 use tokio::sync::Mutex;
 
 use tablepro_core::{
-    ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, MAX_QUERY_ROWS,
-    QueryResult, TableInfo, Value,
+    ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, MAX_QUERY_ROWS, QueryResult,
+    TableInfo, Value,
 };
 
 pub struct RedisDriver;
@@ -41,9 +41,7 @@ impl DatabaseDriver for RedisDriver {
         let db_index = opts.database.parse::<u8>().unwrap_or(0);
         let url = format!("{scheme}://{auth}{}:{}/{}", opts.host, opts.port, db_index);
         let client = Client::open(url).map_err(map_redis_error)?;
-        let manager = ConnectionManager::new(client)
-            .await
-            .map_err(map_redis_error)?;
+        let manager = ConnectionManager::new(client).await.map_err(map_redis_error)?;
         Ok(Box::new(RedisConnection {
             conn: Mutex::new(manager),
             db_count: 16,

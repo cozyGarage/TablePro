@@ -31,9 +31,7 @@ pub fn driver_message(error: &DriverError) -> String {
         DriverError::ReadOnly => {
             crate::tr!("This connection is read-only. Reopen it without read-only mode to make changes.")
         }
-        DriverError::PolicyDenied(detail) => {
-            crate::tr!("Blocked by policy: {detail}").replace("{detail}", detail)
-        }
+        DriverError::PolicyDenied(detail) => crate::tr!("Blocked by policy: {detail}").replace("{detail}", detail),
         DriverError::Unsupported(detail) => {
             crate::tr!("This driver does not support: {detail}").replace("{detail}", detail)
         }

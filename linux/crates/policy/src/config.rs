@@ -114,9 +114,7 @@ impl Default for PolicyConfig {
             connection_overrides: HashMap::new(),
             mask_patterns: crate::mask::DEFAULT_SENSITIVE_PATTERNS
                 .iter()
-                .map(|p| MaskRule {
-                    pattern: (*p).into(),
-                })
+                .map(|p| MaskRule { pattern: (*p).into() })
                 .collect(),
         }
     }
@@ -185,9 +183,6 @@ mod tests {
         let p = PolicyConfig::default();
         let text = toml::to_string_pretty(&p).unwrap();
         let back: PolicyConfig = toml::from_str(&text).unwrap();
-        assert_eq!(
-            back.for_environment(Environment::Prod).agent_writes,
-            WritePolicy::Deny
-        );
+        assert_eq!(back.for_environment(Environment::Prod).agent_writes, WritePolicy::Deny);
     }
 }

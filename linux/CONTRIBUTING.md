@@ -2,17 +2,36 @@
 
 This file governs the Linux subproject only. The repository-level [CLAUDE.md](../CLAUDE.md) covers cross-cutting rules (no comments in source, security first, root-cause fixes, etc.) — those apply here too.
 
+## Branch model (fork)
+
+On community forks that track Linux work, keep only two long-lived branches:
+
+| Branch | Role |
+|---|---|
+| `main` | Mirror of `TableProApp/TablePro` `main` (macOS + shared docs). Rarely edited here. |
+| `linux` | Day-to-day Linux development. Occasional PRs go upstream from this branch. |
+
+Do not leave `feat/*` branches on the fork remote after their work lands on `linux`. Sync upstream often:
+
+```bash
+git fetch origin
+git checkout main && git reset --hard origin/main && git push fork main
+git checkout linux && git merge origin/main
+```
+
 ## Dev environment
 
 System packages — see [README.md](README.md) for distro-specific commands. After they are installed, work happens entirely from the `linux/` directory.
 
+Prefer the cheap gates before a full GTK link or `.deb` package:
+
 ```bash
 cd linux
-cargo build                    # debug build
-cargo run -p tablepro-app      # run the app
-cargo test                     # all unit and integration tests
-cargo clippy --all -- -D warnings   # lint, treat warnings as errors
-cargo fmt --all                # format
+./scripts/preflight.sh         # fmt + clippy + lib tests, no GTK app
+./scripts/ci-local.sh          # full workspace unit tests (includes GTK)
+./scripts/ci-local.sh integration  # docker driver suites
+cargo run -p tablepro-app      # run from the tree while iterating
+./scripts/build-deb.sh         # only when you need an installable package
 ```
 
 ## Code style
@@ -49,10 +68,10 @@ docs(adding-drivers): clarify TLS configuration step
 
 ## Pull requests
 
-1. Branch from `main`. Branch name format: `feat/short-slug`, `fix/short-slug`, `refactor/short-slug`.
+1. For Linux work on a fork: commit on `linux` (or a short-lived local branch that you merge into `linux` before opening the upstream PR). Upstream PRs target `TableProApp/TablePro`'s `linux` branch when that is the integration branch.
 2. PR title is the conventional commit message you intend to land.
 3. PR description has two sections: **Summary** (what and why, 2–4 bullets) and **Test plan** (checkbox list).
-4. Run `cargo test`, `cargo clippy --all -- -D warnings`, `cargo fmt --all -- --check` locally before pushing. CI runs the same.
+4. Run `./scripts/preflight.sh` before every push. Run `./scripts/ci-local.sh` before packaging or opening an upstream PR. CI runs preflight, then GTK checks, then driver integration.
 5. UI changes must include before / after screenshots in the PR description, taken at HiDPI on both light and dark themes.
 
 ## What does not belong here

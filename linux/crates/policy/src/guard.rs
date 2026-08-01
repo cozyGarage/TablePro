@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tablepro_core::{
-    ColumnInfo, Connection, DriverError, Environment, ExecResult, ForeignKeyInfo, IndexInfo, QueryResult,
-    TableInfo, Transaction, Value,
+    ColumnInfo, Connection, DriverError, Environment, ExecResult, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo,
+    Transaction, Value,
 };
 use uuid::Uuid;
 
@@ -144,11 +144,7 @@ impl PolicyGuard {
                 self.journal(sql, &decision, None, 0, Some(message.clone())).await;
                 Err(DriverError::PolicyDenied(message.clone()))
             }
-            Decision::RequireApproval {
-                rule,
-                reason,
-                preview,
-            } => {
+            Decision::RequireApproval { rule, reason, preview } => {
                 let outcome = self
                     .ctx
                     .approval
@@ -274,13 +270,25 @@ impl Connection for PolicyGuard {
         match self.inner.query(sql).await {
             Ok(result) => {
                 let result = self.mask_result(result);
-                self.journal(sql, &decision, Some(result.rows.len() as u64), start.elapsed().as_millis() as u64, None)
-                    .await;
+                self.journal(
+                    sql,
+                    &decision,
+                    Some(result.rows.len() as u64),
+                    start.elapsed().as_millis() as u64,
+                    None,
+                )
+                .await;
                 Ok(result)
             }
             Err(e) => {
-                self.journal(sql, &decision, None, start.elapsed().as_millis() as u64, Some(e.to_string()))
-                    .await;
+                self.journal(
+                    sql,
+                    &decision,
+                    None,
+                    start.elapsed().as_millis() as u64,
+                    Some(e.to_string()),
+                )
+                .await;
                 Err(e)
             }
         }
@@ -292,13 +300,25 @@ impl Connection for PolicyGuard {
         match self.inner.query_params(sql, params).await {
             Ok(result) => {
                 let result = self.mask_result(result);
-                self.journal(sql, &decision, Some(result.rows.len() as u64), start.elapsed().as_millis() as u64, None)
-                    .await;
+                self.journal(
+                    sql,
+                    &decision,
+                    Some(result.rows.len() as u64),
+                    start.elapsed().as_millis() as u64,
+                    None,
+                )
+                .await;
                 Ok(result)
             }
             Err(e) => {
-                self.journal(sql, &decision, None, start.elapsed().as_millis() as u64, Some(e.to_string()))
-                    .await;
+                self.journal(
+                    sql,
+                    &decision,
+                    None,
+                    start.elapsed().as_millis() as u64,
+                    Some(e.to_string()),
+                )
+                .await;
                 Err(e)
             }
         }
@@ -320,8 +340,14 @@ impl Connection for PolicyGuard {
                 Ok(result)
             }
             Err(e) => {
-                self.journal(sql, &decision, None, start.elapsed().as_millis() as u64, Some(e.to_string()))
-                    .await;
+                self.journal(
+                    sql,
+                    &decision,
+                    None,
+                    start.elapsed().as_millis() as u64,
+                    Some(e.to_string()),
+                )
+                .await;
                 Err(e)
             }
         }
@@ -343,8 +369,14 @@ impl Connection for PolicyGuard {
                 Ok(result)
             }
             Err(e) => {
-                self.journal(sql, &decision, None, start.elapsed().as_millis() as u64, Some(e.to_string()))
-                    .await;
+                self.journal(
+                    sql,
+                    &decision,
+                    None,
+                    start.elapsed().as_millis() as u64,
+                    Some(e.to_string()),
+                )
+                .await;
                 Err(e)
             }
         }
@@ -394,11 +426,7 @@ impl Connection for PolicyGuard {
         self.inner.fetch_indexes(schema, table).await
     }
 
-    async fn fetch_foreign_keys(
-        &self,
-        schema: Option<&str>,
-        table: &str,
-    ) -> Result<Vec<ForeignKeyInfo>, DriverError> {
+    async fn fetch_foreign_keys(&self, schema: Option<&str>, table: &str) -> Result<Vec<ForeignKeyInfo>, DriverError> {
         self.inner.fetch_foreign_keys(schema, table).await
     }
 

@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
+use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tablepro_policy::{AuditEvent, AuditSink, Principal};
-use async_trait::async_trait;
 
 use crate::error::StorageError;
 
@@ -22,9 +22,7 @@ pub struct AuditJournal {
 
 impl AuditJournal {
     pub fn open_default() -> Result<Self, StorageError> {
-        Ok(Self {
-            path: journal_path()?,
-        })
+        Ok(Self { path: journal_path()? })
     }
 
     pub fn open(path: PathBuf) -> Self {
@@ -194,10 +192,7 @@ mod tests {
     async fn append_and_verify() {
         let dir = TempDir::new().unwrap();
         let journal = AuditJournal::open(dir.path().join("audit.jsonl"));
-        journal
-            .append(sample_event(Principal::human_gui()))
-            .await
-            .unwrap();
+        journal.append(sample_event(Principal::human_gui())).await.unwrap();
         journal
             .append(sample_event(Principal::Agent {
                 token: "abc".into(),
@@ -215,10 +210,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("audit.jsonl");
         let journal = AuditJournal::open(path.clone());
-        journal
-            .append(sample_event(Principal::human_gui()))
-            .await
-            .unwrap();
+        journal.append(sample_event(Principal::human_gui())).await.unwrap();
         let mut text = tokio::fs::read_to_string(&path).await.unwrap();
         text = text.replace("SELECT 1", "SELECT 2");
         tokio::fs::write(&path, text).await.unwrap();

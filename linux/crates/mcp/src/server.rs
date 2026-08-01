@@ -43,20 +43,20 @@ pub async fn serve_stdio(bridge: Arc<McpBridge>) -> Result<(), String> {
         let request: JsonValue = match serde_json::from_str(trimmed) {
             Ok(v) => v,
             Err(e) => {
-                write_response(&mut stdout, json!({
-                    "jsonrpc": "2.0",
-                    "id": null,
-                    "error": {"code": -32700, "message": format!("parse error: {e}")}
-                }))
+                write_response(
+                    &mut stdout,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": null,
+                        "error": {"code": -32700, "message": format!("parse error: {e}")}
+                    }),
+                )
                 .await?;
                 continue;
             }
         };
         let id = request.get("id").cloned().unwrap_or(JsonValue::Null);
-        let method = request
-            .get("method")
-            .and_then(|m| m.as_str())
-            .unwrap_or("");
+        let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let params = request.get("params").cloned().unwrap_or(json!({}));
 
         let response = match method {
@@ -81,26 +81,24 @@ pub async fn serve_stdio(bridge: Arc<McpBridge>) -> Result<(), String> {
                     })).collect::<Vec<_>>()
                 }
             }),
-            "tools/call" => {
-                match handle_tool_call(&bridge, params).await {
-                    Ok(content) => json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": {
-                            "content": [{"type": "text", "text": content.to_string()}],
-                            "isError": false
-                        }
-                    }),
-                    Err(e) => json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": {
-                            "content": [{"type": "text", "text": e}],
-                            "isError": true
-                        }
-                    }),
-                }
-            }
+            "tools/call" => match handle_tool_call(&bridge, params).await {
+                Ok(content) => json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{"type": "text", "text": content.to_string()}],
+                        "isError": false
+                    }
+                }),
+                Err(e) => json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{"type": "text", "text": e}],
+                        "isError": true
+                    }
+                }),
+            },
             "ping" => json!({"jsonrpc": "2.0", "id": id, "result": {}}),
             other => json!({
                 "jsonrpc": "2.0",
@@ -114,19 +112,12 @@ pub async fn serve_stdio(bridge: Arc<McpBridge>) -> Result<(), String> {
 }
 
 async fn handle_tool_call(bridge: &McpBridge, params: JsonValue) -> Result<JsonValue, String> {
-    let name = params
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or("missing tool name")?;
+    let name = params.get("name").and_then(|v| v.as_str()).ok_or("missing tool name")?;
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
     let token_str = params
         .get("token")
         .and_then(|v| v.as_str())
-        .or_else(|| {
-            params
-                .pointer("/_meta/authorization")
-                .and_then(|v| v.as_str())
-        })
+        .or_else(|| params.pointer("/_meta/authorization").and_then(|v| v.as_str()))
         .or_else(|| args.get("token").and_then(|v| v.as_str()))
         .ok_or("missing token (pass params.token or arguments.token)")?;
     let token = bridge.authenticate(token_str)?;
@@ -136,10 +127,7 @@ async fn handle_tool_call(bridge: &McpBridge, params: JsonValue) -> Result<JsonV
 async fn write_response(stdout: &mut tokio::io::Stdout, value: JsonValue) -> Result<(), String> {
     let mut line = serde_json::to_string(&value).map_err(|e| e.to_string())?;
     line.push('\n');
-    stdout
-        .write_all(line.as_bytes())
-        .await
-        .map_err(|e| e.to_string())?;
+    stdout.write_all(line.as_bytes()).await.map_err(|e| e.to_string())?;
     stdout.flush().await.map_err(|e| e.to_string())
 }
 
@@ -195,11 +183,10 @@ fn tool_schema(name: &str) -> JsonValue {
 /// Bind a loopback streamable-HTTP endpoint that forwards tool calls to
 /// the same bridge. Loopback only by default.
 pub async fn serve_streamable_http(bridge: Arc<McpBridge>, config: McpServerConfig) -> Result<(), String> {
-    use axum::{Router, routing::post, Json};
+    use axum::{Json, Router, routing::post};
     use std::net::SocketAddr;
 
-    if config.bind_host != "127.0.0.1" && config.bind_host != "localhost" && config.bind_host != "::1"
-    {
+    if config.bind_host != "127.0.0.1" && config.bind_host != "localhost" && config.bind_host != "::1" {
         return Err("refusing to bind MCP HTTP outside loopback".into());
     }
 
@@ -240,9 +227,7 @@ pub async fn serve_streamable_http(bridge: Arc<McpBridge>, config: McpServerConf
     let addr: SocketAddr = format!("{}:{}", config.bind_host, config.bind_port)
         .parse()
         .map_err(|e| format!("bad bind address: {e}"))?;
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| e.to_string())?;
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| e.to_string())?;
     tracing::info!(%addr, "MCP HTTP listening (loopback)");
     axum::serve(listener, app).await.map_err(|e| e.to_string())
 }

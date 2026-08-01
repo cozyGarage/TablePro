@@ -84,7 +84,9 @@ pub trait Connection: Send + Sync {
     /// Open an interactive transaction for preview-then-commit flows.
     /// Default returns `Unsupported` so drivers adopt incrementally.
     async fn begin(&self) -> Result<Box<dyn Transaction>, DriverError> {
-        Err(DriverError::Unsupported("begin is not implemented for this driver".into()))
+        Err(DriverError::Unsupported(
+            "begin is not implemented for this driver".into(),
+        ))
     }
     /// Best-effort server version string (e.g. `PostgreSQL 16.3`). Default
     /// returns `None` when the driver has not implemented detection.

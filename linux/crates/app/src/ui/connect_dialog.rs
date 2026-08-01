@@ -398,14 +398,13 @@ impl Component for ConnectDialog {
                 sender.command(move |out, shutdown| {
                     shutdown
                         .register(async move {
-                            let result =
-                                match connection_service::establish(driver.as_ref(), opts, ssh_inputs).await {
-                                    Ok((conn, _tunnel)) => match conn.list_tables().await {
-                                        Ok(tables) => Ok(tables.len()),
-                                        Err(e) => Err(format!("list_tables: {e}")),
-                                    },
-                                    Err(e) => Err(e),
-                                };
+                            let result = match connection_service::establish(driver.as_ref(), opts, ssh_inputs).await {
+                                Ok((conn, _tunnel)) => match conn.list_tables().await {
+                                    Ok(tables) => Ok(tables.len()),
+                                    Err(e) => Err(format!("list_tables: {e}")),
+                                },
+                                Err(e) => Err(e),
+                            };
                             out.send(ConnectDialogCmd::TestResult(result)).ok();
                         })
                         .drop_on_shutdown()
@@ -561,7 +560,8 @@ async fn run_connect(
     let ssh_for_establish = ssh.as_ref().map(|s| vec![s.cfg.clone()]);
     let opts_clone = opts.clone();
 
-    let (conn, tunnel) = connection_service::establish(driver.as_ref(), opts.clone(), ssh_for_establish.clone()).await?;
+    let (conn, tunnel) =
+        connection_service::establish(driver.as_ref(), opts.clone(), ssh_for_establish.clone()).await?;
     let server_version = conn.server_version().await.ok().flatten();
     let tables = conn.list_tables().await.map_err(|e| format!("list_tables: {e}"))?;
 

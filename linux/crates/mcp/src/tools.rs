@@ -17,33 +17,31 @@ use uuid::Uuid;
 use crate::bridge::{McpBridge, WriteOutcome};
 use crate::tokens::McpToken;
 
-pub async fn dispatch(
-    bridge: &McpBridge,
-    token: &McpToken,
-    name: &str,
-    args: JsonValue,
-) -> Result<JsonValue, String> {
+pub async fn dispatch(bridge: &McpBridge, token: &McpToken, name: &str, args: JsonValue) -> Result<JsonValue, String> {
     match name {
         "list_connections" => {
             let list = bridge.list_connections(token).await?;
-            Ok(json!(list
-                .into_iter()
-                .map(|c| json!({
-                    "id": c.id,
-                    "name": c.name,
-                    "driver_id": c.driver_id,
-                    "environment": c.environment,
-                    "read_only": c.read_only,
-                }))
-                .collect::<Vec<_>>()))
+            Ok(json!(
+                list.into_iter()
+                    .map(|c| json!({
+                        "id": c.id,
+                        "name": c.name,
+                        "driver_id": c.driver_id,
+                        "environment": c.environment,
+                        "read_only": c.read_only,
+                    }))
+                    .collect::<Vec<_>>()
+            ))
         }
         "list_tables" => {
             let id = parse_uuid(&args, "connection_id")?;
             let tables = bridge.list_tables(token, id).await?;
-            Ok(json!(tables
-                .into_iter()
-                .map(|t| json!({"schema": t.schema, "name": t.name}))
-                .collect::<Vec<_>>()))
+            Ok(json!(
+                tables
+                    .into_iter()
+                    .map(|t| json!({"schema": t.schema, "name": t.name}))
+                    .collect::<Vec<_>>()
+            ))
         }
         "describe_table" => {
             let id = parse_uuid(&args, "connection_id")?;
@@ -60,15 +58,16 @@ pub async fn dispatch(
                             .fetch_columns(schema.as_deref(), &table)
                             .await
                             .map_err(|e| e.to_string())?;
-                        Ok(json!(cols
-                            .into_iter()
-                            .map(|c| json!({
-                                "name": c.name,
-                                "data_type": c.data_type,
-                                "nullable": c.nullable,
-                                "primary_key": c.primary_key,
-                            }))
-                            .collect::<Vec<_>>()))
+                        Ok(json!(
+                            cols.into_iter()
+                                .map(|c| json!({
+                                    "name": c.name,
+                                    "data_type": c.data_type,
+                                    "nullable": c.nullable,
+                                    "primary_key": c.primary_key,
+                                }))
+                                .collect::<Vec<_>>()
+                        ))
                     })
                 })
                 .await
@@ -96,10 +95,7 @@ pub async fn dispatch(
                 .and_then(|v| v.as_str())
                 .ok_or("missing sql")?
                 .to_string();
-            let preview = args
-                .get("preview")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
+            let preview = args.get("preview").and_then(|v| v.as_bool()).unwrap_or(true);
             let outcome = bridge.execute_write(token, id, &sql, preview).await?;
             Ok(match outcome {
                 WriteOutcome::Preview {
@@ -134,11 +130,7 @@ pub async fn dispatch(
             }))
         }
         "search_query_history" => {
-            let q = args
-                .get("query")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let q = args.get("query").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let filter = tablepro_storage::query_history::SearchFilter {
                 needle: if q.is_empty() { None } else { Some(q) },
                 limit: 50,
@@ -147,15 +139,16 @@ pub async fn dispatch(
             let hits = tablepro_storage::query_history::search(filter)
                 .await
                 .map_err(|e| e.to_string())?;
-            Ok(json!(hits
-                .into_iter()
-                .map(|h| json!({
-                    "query": h.query,
-                    "connection_id": h.connection_id,
-                    "executed_at": chrono::DateTime::<chrono::Utc>::from(h.executed_at).to_rfc3339(),
-                    "was_successful": h.success,
-                }))
-                .collect::<Vec<_>>()))
+            Ok(json!(
+                hits.into_iter()
+                    .map(|h| json!({
+                        "query": h.query,
+                        "connection_id": h.connection_id,
+                        "executed_at": chrono::DateTime::<chrono::Utc>::from(h.executed_at).to_rfc3339(),
+                        "was_successful": h.success,
+                    }))
+                    .collect::<Vec<_>>()
+            ))
         }
         "export_data" => {
             let id = parse_uuid(&args, "connection_id")?;
@@ -164,10 +157,7 @@ pub async fn dispatch(
                 .and_then(|v| v.as_str())
                 .ok_or("missing sql")?
                 .to_string();
-            let format = args
-                .get("format")
-                .and_then(|v| v.as_str())
-                .unwrap_or("json");
+            let format = args.get("format").and_then(|v| v.as_str()).unwrap_or("json");
             let result = bridge.execute_query(token, id, &sql).await?;
             match format {
                 "csv" => {

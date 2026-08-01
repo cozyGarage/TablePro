@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
-use tablepro_core::{ConnectOptions, Connection, DriverRegistry, TlsConfig};
 use drivers_clickhouse::ClickhouseDriver;
+#[cfg(feature = "duckdb")]
 use drivers_duckdb::DuckdbDriver;
 use drivers_mongodb::MongodbDriver;
 use drivers_mssql::MssqlDriver;
@@ -16,13 +16,13 @@ use drivers_oracle::OracleDriver;
 use drivers_postgres::PgDriver;
 use drivers_redis::RedisDriver;
 use drivers_sqlite::SqliteDriver;
+use tablepro_core::{ConnectOptions, Connection, DriverRegistry, TlsConfig};
 use tablepro_mcp::{
-    ConnectionProvider, McpBridge, McpServerConfig, TokenPermissions, TokenStore, serve_stdio,
-    serve_streamable_http,
+    ConnectionProvider, McpBridge, McpServerConfig, TokenPermissions, TokenStore, serve_stdio, serve_streamable_http,
 };
 use tablepro_policy::{
-    ApprovalOutcome, ApprovalRequest, ApprovalSink, AutoApproveSink, DenyApprovalSink, GuardContext,
-    NullAuditSink, PolicyConfig, PolicyGuard, Principal, load_from_path,
+    ApprovalOutcome, ApprovalRequest, ApprovalSink, AutoApproveSink, DenyApprovalSink, GuardContext, NullAuditSink,
+    PolicyConfig, PolicyGuard, Principal, load_from_path,
 };
 use tablepro_storage::{AuditJournal, SavedConnection, load_connections, load_password};
 use uuid::Uuid;
@@ -100,11 +100,7 @@ impl ConnectionProvider for DaemonProvider {
         load_connections().await.map_err(|e| e.to_string())
     }
 
-    async fn connection(
-        &self,
-        connection_id: Uuid,
-        principal: Principal,
-    ) -> Result<Arc<dyn Connection>, String> {
+    async fn connection(&self, connection_id: Uuid, principal: Principal) -> Result<Arc<dyn Connection>, String> {
         let saved = load_connections()
             .await
             .map_err(|e| e.to_string())?
@@ -152,6 +148,7 @@ impl ConnectionProvider for DaemonProvider {
 fn build_registry() -> DriverRegistry {
     let mut r = DriverRegistry::new();
     r.register(Arc::new(ClickhouseDriver));
+    #[cfg(feature = "duckdb")]
     r.register(Arc::new(DuckdbDriver));
     r.register(Arc::new(MongodbDriver));
     r.register(Arc::new(MssqlDriver));

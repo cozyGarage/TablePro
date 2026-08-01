@@ -8,8 +8,8 @@ use mongodb::{Client, Database};
 use secrecy::ExposeSecret;
 
 use tablepro_core::{
-    ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, MAX_QUERY_ROWS,
-    QueryResult, TableInfo, Value,
+    ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, MAX_QUERY_ROWS, QueryResult,
+    TableInfo, Value,
 };
 
 const SAMPLE_DOCS: i64 = 50;
@@ -37,11 +37,7 @@ impl DatabaseDriver for MongodbDriver {
         };
         let password = opts.password.expose_secret();
         let auth = if !opts.username.is_empty() {
-            format!(
-                "{}:{}@",
-                encode_uri(&opts.username),
-                encode_uri(password)
-            )
+            format!("{}:{}@", encode_uri(&opts.username), encode_uri(password))
         } else {
             String::new()
         };
@@ -64,10 +60,7 @@ impl DatabaseDriver for MongodbDriver {
             .run_command(doc! { "ping": 1 })
             .await
             .map_err(map_mongo_error)?;
-        Ok(Box::new(MongodbConnection {
-            client,
-            database_name,
-        }))
+        Ok(Box::new(MongodbConnection { client, database_name }))
     }
 }
 
@@ -99,11 +92,7 @@ impl Connection for MongodbConnection {
 
     async fn fetch_columns(&self, _schema: Option<&str>, table: &str) -> Result<Vec<ColumnInfo>, DriverError> {
         let coll = self.db().collection::<Document>(table);
-        let mut cursor = coll
-            .find(doc! {})
-            .limit(SAMPLE_DOCS)
-            .await
-            .map_err(map_mongo_error)?;
+        let mut cursor = coll.find(doc! {}).limit(SAMPLE_DOCS).await.map_err(map_mongo_error)?;
         let mut union: BTreeMap<String, String> = BTreeMap::new();
         while let Some(doc) = cursor.try_next().await.map_err(map_mongo_error)? {
             for (key, value) in doc {
@@ -271,10 +260,7 @@ impl Connection for MongodbConnection {
             .run_command(doc! { "buildInfo": 1 })
             .await
             .map_err(map_mongo_error)?;
-        let version = reply
-            .get_str("version")
-            .ok()
-            .map(|v| format!("MongoDB {v}"));
+        let version = reply.get_str("version").ok().map(|v| format!("MongoDB {v}"));
         Ok(version)
     }
 
@@ -399,9 +385,7 @@ fn bson_to_value(b: &Bson) -> Value {
         Bson::Binary(bin) => Value::Bytes(bin.bytes.clone()),
         Bson::Decimal128(d) => Value::Text(d.to_string()),
         Bson::Document(d) => Value::Json(document_to_json(d)),
-        Bson::Array(a) => Value::Json(serde_json::Value::Array(
-            a.iter().map(bson_to_json).collect(),
-        )),
+        Bson::Array(a) => Value::Json(serde_json::Value::Array(a.iter().map(bson_to_json).collect())),
         other => Value::Text(other.to_string()),
     }
 }
@@ -545,7 +529,7 @@ fn split_collection_call<'a>(input: &'a str, method: &str) -> Option<(String, &'
     Some((collection, after))
 }
 
-fn extract_balanced<'a>(input: &'a str, open: char, close: char) -> Option<(&'a str, &'a str)> {
+fn extract_balanced(input: &str, open: char, close: char) -> Option<(&str, &str)> {
     let input = input.trim_start();
     if !input.starts_with(open) {
         return None;
@@ -580,14 +564,11 @@ fn extract_balanced<'a>(input: &'a str, open: char, close: char) -> Option<(&'a 
 }
 
 fn is_simple_ident(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
 }
 
 fn serde_json_to_document(src: &str) -> Result<Document, String> {
-    let value: serde_json::Value =
-        serde_json::from_str(src).map_err(|e| format!("JSON parse error: {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(src).map_err(|e| format!("JSON parse error: {e}"))?;
     mongodb::bson::to_document(&value).map_err(|e| format!("BSON convert error: {e}"))
 }
 

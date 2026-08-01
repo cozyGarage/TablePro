@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use duckdb::{Connection as DuckConnection, params_from_iter, types::ValueRef};
 
 use tablepro_core::{
-    ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, MAX_QUERY_ROWS,
-    QueryResult, TableInfo, Value,
+    ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, MAX_QUERY_ROWS, QueryResult,
+    TableInfo, Value,
 };
 
 pub struct DuckdbDriver;
@@ -59,7 +59,9 @@ impl Connection for DuckdbConnection {
     async fn list_tables(&self) -> Result<Vec<TableInfo>, DriverError> {
         let conn = Arc::clone(&self.conn);
         blocking(move || {
-            let guard = conn.lock().map_err(|_| DriverError::Internal("duckdb lock poisoned".into()))?;
+            let guard = conn
+                .lock()
+                .map_err(|_| DriverError::Internal("duckdb lock poisoned".into()))?;
             let mut stmt = guard
                 .prepare(
                     "SELECT table_schema, table_name FROM information_schema.tables \
@@ -90,7 +92,9 @@ impl Connection for DuckdbConnection {
         let schema = schema.map(str::to_string);
         let table = table.to_string();
         blocking(move || {
-            let guard = conn.lock().map_err(|_| DriverError::Internal("duckdb lock poisoned".into()))?;
+            let guard = conn
+                .lock()
+                .map_err(|_| DriverError::Internal("duckdb lock poisoned".into()))?;
             let sql = if let Some(schema) = schema.as_deref() {
                 format!(
                     "SELECT column_name, data_type, is_nullable, column_default \
@@ -157,7 +161,9 @@ impl Connection for DuckdbConnection {
         let conn = Arc::clone(&self.conn);
         let sql = sql.to_string();
         blocking(move || {
-            let guard = conn.lock().map_err(|_| DriverError::Internal("duckdb lock poisoned".into()))?;
+            let guard = conn
+                .lock()
+                .map_err(|_| DriverError::Internal("duckdb lock poisoned".into()))?;
             let rows_affected = guard.execute(&sql, []).map_err(map_duck_error)? as u64;
             Ok(ExecResult { rows_affected })
         })
@@ -172,7 +178,9 @@ impl Connection for DuckdbConnection {
         let sql = sql.to_string();
         let params = params.to_vec();
         blocking(move || {
-            let guard = conn.lock().map_err(|_| DriverError::Internal("duckdb lock poisoned".into()))?;
+            let guard = conn
+                .lock()
+                .map_err(|_| DriverError::Internal("duckdb lock poisoned".into()))?;
             let bind = values_to_duck_params(&params);
             let rows_affected = guard
                 .execute(&sql, params_from_iter(bind.iter()))
@@ -186,7 +194,9 @@ impl Connection for DuckdbConnection {
         let conn = Arc::clone(&self.conn);
         let statements = statements.to_vec();
         blocking(move || {
-            let guard = conn.lock().map_err(|_| DriverError::Internal("duckdb lock poisoned".into()))?;
+            let guard = conn
+                .lock()
+                .map_err(|_| DriverError::Internal("duckdb lock poisoned".into()))?;
             guard.execute_batch("BEGIN").map_err(map_duck_error)?;
             let mut affected = Vec::with_capacity(statements.len());
             for (idx, (sql, params)) in statements.iter().enumerate() {
@@ -219,14 +229,10 @@ impl Connection for DuckdbConnection {
 
     async fn server_version(&self) -> Result<Option<String>, DriverError> {
         let result = self.query("SELECT version()").await?;
-        let version = result
-            .rows
-            .first()
-            .and_then(|r| r.first())
-            .and_then(|v| match v {
-                Value::Text(s) => Some(s.clone()),
-                _ => None,
-            });
+        let version = result.rows.first().and_then(|r| r.first()).and_then(|v| match v {
+            Value::Text(s) => Some(s.clone()),
+            _ => None,
+        });
         Ok(version.map(|v| format!("DuckDB {v}")))
     }
 
@@ -241,7 +247,9 @@ fn run_query(
     params: &[Value],
     limit: usize,
 ) -> Result<QueryResult, DriverError> {
-    let guard = conn.lock().map_err(|_| DriverError::Internal("duckdb lock poisoned".into()))?;
+    let guard = conn
+        .lock()
+        .map_err(|_| DriverError::Internal("duckdb lock poisoned".into()))?;
     let mut stmt = guard.prepare(sql).map_err(map_duck_error)?;
     let bind = values_to_duck_params(params);
     let mut rows = if params.is_empty() {
@@ -264,7 +272,11 @@ fn run_query(
             truncated = true;
             break;
         }
-        raw_rows.push((0..column_count).map(|i| duck_value_ref_to_value(row.get_ref_unwrap(i))).collect());
+        raw_rows.push(
+            (0..column_count)
+                .map(|i| duck_value_ref_to_value(row.get_ref_unwrap(i)))
+                .collect(),
+        );
     }
     if column_count == 0 {
         if let Some(stmt_ref) = rows.as_ref() {
@@ -335,9 +347,7 @@ fn duck_value_ref_to_value(v: ValueRef<'_>) -> Value {
         ValueRef::Date32(d) => Value::Text(format!("date32:{d}")),
         ValueRef::Time64(unit, t) => Value::Text(format!("time64:{unit:?}:{t}")),
         ValueRef::Timestamp(unit, t) => Value::Text(format!("timestamp:{unit:?}:{t}")),
-        ValueRef::Interval { months, days, nanos } => {
-            Value::Text(format!("interval:{months}m {days}d {nanos}ns"))
-        }
+        ValueRef::Interval { months, days, nanos } => Value::Text(format!("interval:{months}m {days}d {nanos}ns")),
         other => Value::Text(format!("{other:?}")),
     }
 }
@@ -428,9 +438,7 @@ mod tests {
         conn.execute("CREATE TABLE foo (id INTEGER, name VARCHAR)")
             .await
             .unwrap();
-        conn.execute("INSERT INTO foo VALUES (1, 'a'), (2, 'b')")
-            .await
-            .unwrap();
+        conn.execute("INSERT INTO foo VALUES (1, 'a'), (2, 'b')").await.unwrap();
         let tables = conn.list_tables().await.unwrap();
         assert!(tables.iter().any(|t| t.name == "foo"));
         let cols = conn.fetch_columns(None, "foo").await.unwrap();

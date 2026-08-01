@@ -44,10 +44,7 @@ impl ApprovalSink for GtkApprovalSink {
             use relm4::adw::prelude::*;
             use relm4::{adw, gtk};
 
-            let dialog = adw::AlertDialog::builder()
-                .heading(&heading_c)
-                .body(&body_c)
-                .build();
+            let dialog = adw::AlertDialog::builder().heading(&heading_c).body(&body_c).build();
             dialog.add_response("deny", "Deny");
             dialog.add_response("once", "Approve once");
             dialog.add_response("session", "Approve for session");

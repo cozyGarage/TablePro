@@ -127,7 +127,7 @@ impl TokenStore {
 
 pub fn generate_token() -> String {
     let raw = Uuid::new_v4().to_string() + &Uuid::new_v4().to_string();
-    format!("tp_{}", hex::encode(Sha256::digest(raw.as_bytes()))[..40].to_string())
+    format!("tp_{}", &hex::encode(Sha256::digest(raw.as_bytes()))[..40])
 }
 
 fn hash_token(plaintext: &str) -> String {

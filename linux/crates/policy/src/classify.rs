@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{
-    Cte, Delete, Expr, FromTable, Insert, ObjectName, Query, SelectItem, SetExpr, Statement,
-    TableFactor, TableObject,
+    Cte, Delete, Expr, FromTable, Insert, ObjectName, Query, SelectItem, SetExpr, Statement, TableFactor, TableObject,
 };
 use sqlparser::dialect::{Dialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
@@ -118,11 +117,7 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
     match stmt {
         Statement::Query(q) => classify_query(q),
         Statement::Insert(insert) => classify_insert(insert),
-        Statement::Update {
-            table,
-            selection,
-            ..
-        } => StatementFacts {
+        Statement::Update { table, selection, .. } => StatementFacts {
             class: StatementClass::Update,
             writes: true,
             tables: table_factor_names(&table.relation),
@@ -182,16 +177,14 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
             is_multi_statement: false,
             parse_error: None,
         },
-        Statement::StartTransaction { .. } | Statement::Commit { .. } | Statement::Rollback { .. } => {
-            StatementFacts {
-                class: StatementClass::Transaction,
-                writes: false,
-                tables: Vec::new(),
-                has_where: true,
-                is_multi_statement: false,
-                parse_error: None,
-            }
-        }
+        Statement::StartTransaction { .. } | Statement::Commit { .. } | Statement::Rollback { .. } => StatementFacts {
+            class: StatementClass::Transaction,
+            writes: false,
+            tables: Vec::new(),
+            has_where: true,
+            is_multi_statement: false,
+            parse_error: None,
+        },
         _ => StatementFacts {
             class: StatementClass::Other,
             writes: true,
@@ -238,9 +231,7 @@ fn from_table_names(from: &FromTable) -> Vec<String> {
     let list = match from {
         FromTable::WithFromKeyword(t) | FromTable::WithoutKeyword(t) => t,
     };
-    list.iter()
-        .flat_map(|t| table_factor_names(&t.relation))
-        .collect()
+    list.iter().flat_map(|t| table_factor_names(&t.relation)).collect()
 }
 
 fn classify_query(query: &Query) -> StatementFacts {
@@ -303,9 +294,7 @@ fn set_expr_tables(body: &SetExpr) -> Vec<String> {
             t.extend(set_expr_tables(right));
             t
         }
-        SetExpr::Insert(stmt) | SetExpr::Update(stmt) | SetExpr::Delete(stmt) => {
-            classify_statement(stmt).tables
-        }
+        SetExpr::Insert(stmt) | SetExpr::Update(stmt) | SetExpr::Delete(stmt) => classify_statement(stmt).tables,
         _ => Vec::new(),
     }
 }

@@ -404,11 +404,7 @@ impl SimpleComponent for SqlEditor {
                     let (start, end) = buffer.bounds();
                     buffer.text(&start, &end, true).to_string()
                 };
-                if let Some(window) = self
-                    .source_view
-                    .root()
-                    .and_then(|r| r.downcast::<gtk::Window>().ok())
-                {
+                if let Some(window) = self.source_view.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
                     crate::ui::explain_dialog::present(&window, &text);
                 }
             }

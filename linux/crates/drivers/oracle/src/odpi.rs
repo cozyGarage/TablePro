@@ -4,8 +4,7 @@ use async_trait::async_trait;
 use secrecy::ExposeSecret;
 
 use tablepro_core::{
-    ColumnInfo, ConnectOptions, Connection, DriverError, ExecResult, MAX_QUERY_ROWS, QueryResult,
-    TableInfo, Value,
+    ColumnInfo, ConnectOptions, Connection, DriverError, ExecResult, MAX_QUERY_ROWS, QueryResult, TableInfo, Value,
 };
 
 pub async fn connect(opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
@@ -64,7 +63,9 @@ impl Connection for OracleConnection {
         let table = table.to_uppercase();
         let conn = Arc::clone(&self.conn);
         blocking(move || {
-            let guard = conn.lock().map_err(|_| DriverError::Internal("oracle lock poisoned".into()))?;
+            let guard = conn
+                .lock()
+                .map_err(|_| DriverError::Internal("oracle lock poisoned".into()))?;
             let rows = if owner == "USER" {
                 guard.query_as::<(String, String, String, Option<String>)>(
                     "SELECT column_name, data_type, nullable, data_default \
@@ -116,7 +117,9 @@ impl Connection for OracleConnection {
         let conn = Arc::clone(&self.conn);
         let sql = sql.to_string();
         blocking(move || {
-            let guard = conn.lock().map_err(|_| DriverError::Internal("oracle lock poisoned".into()))?;
+            let guard = conn
+                .lock()
+                .map_err(|_| DriverError::Internal("oracle lock poisoned".into()))?;
             run_query(&guard, &sql)
         })
         .await
@@ -126,7 +129,9 @@ impl Connection for OracleConnection {
         let conn = Arc::clone(&self.conn);
         let sql = sql.to_string();
         blocking(move || {
-            let guard = conn.lock().map_err(|_| DriverError::Internal("oracle lock poisoned".into()))?;
+            let guard = conn
+                .lock()
+                .map_err(|_| DriverError::Internal("oracle lock poisoned".into()))?;
             let rows_affected = guard.execute(&sql, &[]).map_err(map_oracle_error)?.row_count() as u64;
             guard.commit().map_err(map_oracle_error)?;
             Ok(ExecResult { rows_affected })
@@ -147,7 +152,9 @@ impl Connection for OracleConnection {
         let conn = Arc::clone(&self.conn);
         let statements = statements.to_vec();
         blocking(move || {
-            let guard = conn.lock().map_err(|_| DriverError::Internal("oracle lock poisoned".into()))?;
+            let guard = conn
+                .lock()
+                .map_err(|_| DriverError::Internal("oracle lock poisoned".into()))?;
             let mut affected = Vec::with_capacity(statements.len());
             for (idx, (sql, params)) in statements.iter().enumerate() {
                 if !params.is_empty() {

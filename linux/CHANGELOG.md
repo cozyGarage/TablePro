@@ -32,6 +32,7 @@
 - Arbitrary SQL query soft row cap raised to 1,000,000 (truncated flag still set); browse pagination remains uncapped by that constant
 - Agentd approval strategies: deny (default), auto, or tty
 - DuckDB driver is an optional `duckdb` Cargo feature (bundled build is large)
+- Linux CI runs a non-GTK preflight job before the full GTK checks; local `./scripts/preflight.sh` mirrors that gate
 
 ### Security
 

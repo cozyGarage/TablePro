@@ -2,9 +2,7 @@ use relm4::adw::prelude::*;
 use relm4::gtk::gio;
 use relm4::{ComponentController, ComponentSender, adw, gtk};
 
-use tablepro_core::{
-    ColumnInfo, KEYSET_OFFSET_THRESHOLD, QueryResult, keyset_order_by, keyset_where_clause,
-};
+use tablepro_core::{ColumnInfo, KEYSET_OFFSET_THRESHOLD, QueryResult, keyset_order_by, keyset_where_clause};
 use uuid::Uuid;
 
 use crate::services::database_service;
@@ -81,9 +79,7 @@ impl App {
         let use_keyset = offset >= KEYSET_OFFSET_THRESHOLD
             && order_by.is_none()
             && !pk_names.is_empty()
-            && keyset_cursor
-                .as_ref()
-                .is_some_and(|c| c.len() == pk_names.len());
+            && keyset_cursor.as_ref().is_some_and(|c| c.len() == pk_names.len());
 
         let sender_clone = sender.clone();
         sender.command(move |_, shutdown| {

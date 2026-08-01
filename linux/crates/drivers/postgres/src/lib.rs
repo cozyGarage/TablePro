@@ -385,12 +385,18 @@ struct PgTransaction {
 #[async_trait]
 impl tablepro_core::Transaction for PgTransaction {
     async fn query(&mut self, sql: &str) -> Result<QueryResult, DriverError> {
-        let tx = self.tx.as_mut().ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        let tx = self
+            .tx
+            .as_mut()
+            .ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
         stream_into_result_tx(tx, sql, MAX_QUERY_ROWS).await
     }
 
     async fn execute(&mut self, sql: &str) -> Result<ExecResult, DriverError> {
-        let tx = self.tx.as_mut().ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
+        let tx = self
+            .tx
+            .as_mut()
+            .ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
         let res = sqlx::query(sql).execute(&mut **tx).await.map_err(map_sqlx_error)?;
         Ok(ExecResult {
             rows_affected: res.rows_affected(),

@@ -74,12 +74,7 @@ fn next_delay(prev: Duration) -> Duration {
 }
 
 async fn try_reconnect(params: &ReconnectParams) -> Result<(Box<dyn Connection>, Option<SshTunnel>), String> {
-    connection_service::establish(
-        params.driver.as_ref(),
-        params.opts.clone(),
-        params.ssh.clone(),
-    )
-    .await
+    connection_service::establish(params.driver.as_ref(), params.opts.clone(), params.ssh.clone()).await
 }
 
 fn swap_connection(inner: &Arc<Mutex<EntryInner>>, conn: Box<dyn Connection>, tunnel: Option<SshTunnel>) {

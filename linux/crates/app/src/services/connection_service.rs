@@ -3,11 +3,16 @@ use std::sync::Arc;
 use secrecy::SecretString;
 use tablepro_core::{ConnectOptions, Connection, DriverRegistry, TlsConfig, TlsMode};
 use tablepro_ssh::{SshConfig, SshTunnel};
-use tablepro_storage::{SavedConnection, SavedSshAuth, SavedSshConfig, load_password, load_ssh_passphrase, load_ssh_password};
+use tablepro_storage::{
+    SavedConnection, SavedSshAuth, SavedSshConfig, load_password, load_ssh_passphrase, load_ssh_password,
+};
 
 use super::database_service::{self, ConnectionMetadata, ReconnectParams};
 
-pub async fn open_saved(registry: Arc<DriverRegistry>, saved: SavedConnection) -> Result<Vec<tablepro_core::TableInfo>, String> {
+pub async fn open_saved(
+    registry: Arc<DriverRegistry>,
+    saved: SavedConnection,
+) -> Result<Vec<tablepro_core::TableInfo>, String> {
     let driver = registry
         .get(&saved.driver_id)
         .ok_or_else(|| format!("driver {} not registered", saved.driver_id))?;
@@ -93,11 +98,7 @@ async fn resolve_saved_ssh_chain(id: uuid::Uuid, saved: &SavedSshConfig) -> Resu
     Ok(out)
 }
 
-async fn resolve_saved_ssh_hop(
-    id: uuid::Uuid,
-    saved: &SavedSshConfig,
-    hop_index: usize,
-) -> Result<SshConfig, String> {
+async fn resolve_saved_ssh_hop(id: uuid::Uuid, saved: &SavedSshConfig, hop_index: usize) -> Result<SshConfig, String> {
     let auth = match &saved.auth {
         SavedSshAuth::Password => {
             // Hop 0 uses the legacy keyring slot; deeper hops share the

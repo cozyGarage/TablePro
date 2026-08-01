@@ -1,8 +1,6 @@
 use async_trait::async_trait;
 
-use tablepro_core::{
-    ConnectOptions, Connection, DatabaseDriver, DriverError,
-};
+use tablepro_core::{ConnectOptions, Connection, DatabaseDriver, DriverError};
 
 #[cfg(feature = "odpi")]
 mod odpi;
@@ -32,8 +30,7 @@ impl DatabaseDriver for OracleDriver {
         {
             let _ = opts;
             Err(DriverError::Unsupported(
-                "Oracle driver requires the `odpi` feature and Oracle Instant Client on the build/host system"
-                    .into(),
+                "Oracle driver requires the `odpi` feature and Oracle Instant Client on the build/host system".into(),
             ))
         }
     }

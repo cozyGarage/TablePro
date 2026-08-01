@@ -51,10 +51,7 @@ pub fn keyset_where_clause(
             if matches!(last_values[eq_i], Value::Null) {
                 and_parts.push(format!("{ident} IS NULL"));
             } else {
-                and_parts.push(format!(
-                    "{ident} = {}",
-                    placeholder_for(driver_id, placeholder_idx)
-                ));
+                and_parts.push(format!("{ident} = {}", placeholder_for(driver_id, placeholder_idx)));
                 placeholder_idx += 1;
                 params.push(last_values[eq_i].clone());
             }
@@ -65,10 +62,7 @@ pub fn keyset_where_clause(
             // NULL is not ordered; skip a strict-greater arm for this depth.
             continue;
         }
-        and_parts.push(format!(
-            "{ident} > {}",
-            placeholder_for(driver_id, placeholder_idx)
-        ));
+        and_parts.push(format!("{ident} > {}", placeholder_for(driver_id, placeholder_idx)));
         placeholder_idx += 1;
         params.push(last_values[depth].clone());
 
@@ -120,26 +114,17 @@ mod tests {
 
     #[test]
     fn single_pk_postgres() {
-        let (sql, params) =
-            keyset_where_clause("postgres", &["id"], &[Value::Int(42)], 0).unwrap();
+        let (sql, params) = keyset_where_clause("postgres", &["id"], &[Value::Int(42)], 0).unwrap();
         assert_eq!(sql, "\"id\" > $1");
         assert_eq!(params, vec![Value::Int(42)]);
     }
 
     #[test]
     fn composite_pk_mysql() {
-        let (sql, params) = keyset_where_clause(
-            "mysql",
-            &["a", "b"],
-            &[Value::Int(1), Value::Text("x".into())],
-            0,
-        )
-        .unwrap();
+        let (sql, params) =
+            keyset_where_clause("mysql", &["a", "b"], &[Value::Int(1), Value::Text("x".into())], 0).unwrap();
         assert_eq!(sql, "(`a` > ? OR (`a` = ? AND `b` > ?))");
-        assert_eq!(
-            params,
-            vec![Value::Int(1), Value::Int(1), Value::Text("x".into())]
-        );
+        assert_eq!(params, vec![Value::Int(1), Value::Int(1), Value::Text("x".into())]);
     }
 
     #[test]
@@ -163,9 +148,6 @@ mod tests {
     #[test]
     fn order_by_dialect() {
         assert_eq!(keyset_order_by("postgres", &["id"]), " ORDER BY \"id\" ASC");
-        assert_eq!(
-            keyset_order_by("mysql", &["a", "b"]),
-            " ORDER BY `a` ASC, `b` ASC"
-        );
+        assert_eq!(keyset_order_by("mysql", &["a", "b"]), " ORDER BY `a` ASC, `b` ASC");
     }
 }

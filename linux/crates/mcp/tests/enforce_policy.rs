@@ -2,16 +2,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tablepro_core::{
-    ColumnInfo, Connection, DriverError, ExecResult, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo,
-    Value,
+    ColumnInfo, Connection, DriverError, ExecResult, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo, Value,
 };
 use tablepro_policy::Principal;
 use tablepro_storage::SavedConnection;
 use uuid::Uuid;
 
-use tablepro_mcp::{
-    ConnectionProvider, McpBridge, TokenPermissions, TokenStore,
-};
+use tablepro_mcp::{ConnectionProvider, McpBridge, TokenPermissions, TokenStore};
 
 /// Integration-style test: every tool path that touches a connection must
 /// go through the provider (which in production wraps PolicyGuard) and
@@ -22,12 +19,7 @@ async fn tool_path_requires_provider_and_token() {
     let store = Arc::new(TokenStore::open(dir.path().join("tokens.json")).unwrap());
     let conn_id = Uuid::nil();
     let (_meta, plain) = store
-        .issue(
-            "test".into(),
-            TokenPermissions::ReadWrite,
-            vec![conn_id],
-            None,
-        )
+        .issue("test".into(), TokenPermissions::ReadWrite, vec![conn_id], None)
         .unwrap();
 
     let provider = Arc::new(RecordingProvider::default());
@@ -51,12 +43,7 @@ async fn write_without_tools_write_scope_denied() {
     let store = Arc::new(TokenStore::open(dir.path().join("tokens.json")).unwrap());
     let conn_id = Uuid::nil();
     let (_meta, plain) = store
-        .issue(
-            "ro".into(),
-            TokenPermissions::ReadOnly,
-            vec![conn_id],
-            None,
-        )
+        .issue("ro".into(), TokenPermissions::ReadOnly, vec![conn_id], None)
         .unwrap();
     let provider = Arc::new(RecordingProvider::default());
     let bridge = McpBridge::new(provider, store);
@@ -78,26 +65,15 @@ async fn empty_allowlist_denies_connection_access() {
     let provider = Arc::new(RecordingProvider::default());
     let bridge = McpBridge::new(provider.clone(), store);
     let token = bridge.authenticate(&plain).unwrap();
-    let err = bridge
-        .execute_query(&token, Uuid::nil(), "SELECT 1")
-        .await
-        .unwrap_err();
-    assert!(
-        err.contains("allowlist"),
-        "empty allowlist must fail closed: {err}"
-    );
-    assert_eq!(
-        provider.connection_calls.load(std::sync::atomic::Ordering::SeqCst),
-        0
-    );
+    let err = bridge.execute_query(&token, Uuid::nil(), "SELECT 1").await.unwrap_err();
+    assert!(err.contains("allowlist"), "empty allowlist must fail closed: {err}");
+    assert_eq!(provider.connection_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
 async fn guarded_tool_path_journals_policy_decision() {
     use tablepro_core::Environment;
-    use tablepro_policy::{
-        AuditSink, AutoApproveSink, GuardContext, PolicyConfig, PolicyGuard, Principal,
-    };
+    use tablepro_policy::{AuditSink, AutoApproveSink, GuardContext, PolicyConfig, PolicyGuard, Principal};
     use tablepro_storage::AuditJournal;
 
     let dir = tempfile::TempDir::new().unwrap();
@@ -106,12 +82,7 @@ async fn guarded_tool_path_journals_policy_decision() {
     let store = Arc::new(TokenStore::open(dir.path().join("tokens.json")).unwrap());
     let conn_id = Uuid::new_v4();
     let (_meta, plain) = store
-        .issue(
-            "test".into(),
-            TokenPermissions::ReadWrite,
-            vec![conn_id],
-            None,
-        )
+        .issue("test".into(), TokenPermissions::ReadWrite, vec![conn_id], None)
         .unwrap();
 
     struct GuardedProvider {
@@ -124,11 +95,7 @@ async fn guarded_tool_path_journals_policy_decision() {
         async fn list_saved_connections(&self) -> Result<Vec<SavedConnection>, String> {
             Ok(vec![])
         }
-        async fn connection(
-            &self,
-            connection_id: Uuid,
-            principal: Principal,
-        ) -> Result<Arc<dyn Connection>, String> {
+        async fn connection(&self, connection_id: Uuid, principal: Principal) -> Result<Arc<dyn Connection>, String> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let raw: Arc<dyn Connection> = Arc::new(StubConn);
             let ctx = GuardContext {
@@ -179,13 +146,7 @@ impl Connection for StubConn {
     async fn fetch_columns(&self, _: Option<&str>, _: &str) -> Result<Vec<ColumnInfo>, DriverError> {
         Ok(vec![])
     }
-    async fn fetch_rows(
-        &self,
-        _: Option<&str>,
-        _: &str,
-        _: u64,
-        _: u64,
-    ) -> Result<QueryResult, DriverError> {
+    async fn fetch_rows(&self, _: Option<&str>, _: &str, _: u64, _: u64) -> Result<QueryResult, DriverError> {
         Ok(QueryResult {
             columns: vec![],
             rows: vec![],
@@ -211,11 +172,7 @@ impl Connection for StubConn {
     async fn fetch_indexes(&self, _: Option<&str>, _: &str) -> Result<Vec<IndexInfo>, DriverError> {
         Ok(vec![])
     }
-    async fn fetch_foreign_keys(
-        &self,
-        _: Option<&str>,
-        _: &str,
-    ) -> Result<Vec<ForeignKeyInfo>, DriverError> {
+    async fn fetch_foreign_keys(&self, _: Option<&str>, _: &str) -> Result<Vec<ForeignKeyInfo>, DriverError> {
         Ok(vec![])
     }
     async fn ping(&self) -> Result<(), DriverError> {
@@ -231,13 +188,8 @@ impl ConnectionProvider for RecordingProvider {
     async fn list_saved_connections(&self) -> Result<Vec<SavedConnection>, String> {
         Ok(vec![])
     }
-    async fn connection(
-        &self,
-        _connection_id: Uuid,
-        _principal: Principal,
-    ) -> Result<Arc<dyn Connection>, String> {
-        self.connection_calls
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    async fn connection(&self, _connection_id: Uuid, _principal: Principal) -> Result<Arc<dyn Connection>, String> {
+        self.connection_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(Arc::new(StubConn))
     }
 }

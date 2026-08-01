@@ -229,13 +229,7 @@ async fn open_single(
     );
 
     let cancel = CancellationToken::new();
-    let task = tokio::spawn(forwarder_loop(
-        listener,
-        session,
-        fwd_host,
-        fwd_port,
-        cancel.clone(),
-    ));
+    let task = tokio::spawn(forwarder_loop(listener, session, fwd_host, fwd_port, cancel.clone()));
 
     Ok(SshTunnel {
         local_port,
