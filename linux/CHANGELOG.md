@@ -57,3 +57,4 @@
 - TLS certificate verification modes (VerifyCa / VerifyFull) replace encrypt-only Require
 - Agent results masked for sensitive column name patterns by default
 - MCP tokens with an empty connection allowlist can no longer touch any connection
+- SSH stack upgraded to russh 0.60.3 (fixes unbounded allocation advisories and drops vulnerable libcrux 0.0.4)
