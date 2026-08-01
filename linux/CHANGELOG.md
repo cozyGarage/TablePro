@@ -34,6 +34,11 @@
 - DuckDB driver is an optional `duckdb` Cargo feature (bundled build is large)
 - Linux CI runs a non-GTK preflight job before the full GTK checks; local `./scripts/preflight.sh` mirrors that gate
 
+### Fixed
+
+- ClickHouse integration tests connect over plain HTTP instead of default VerifyFull HTTPS
+- Flatpak CI bootstraps Rust 1.93 via rustup so the GNOME 47 SDK's older rust-stable extension is not required
+
 ### Security
 
 - TLS certificate verification modes (VerifyCa / VerifyFull) replace encrypt-only Require

@@ -605,8 +605,6 @@ async fn run_connect(
         driver: driver.clone(),
         opts: opts_clone,
         ssh: ssh_for_establish,
-        read_only,
-        environment,
     };
     let metadata = crate::services::database_service::ConnectionMetadata {
         id: saved.id,

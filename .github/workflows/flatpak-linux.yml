@@ -2,11 +2,12 @@ name: Flatpak Linux
 
 on:
   push:
-    branches: [linux, "linux/**", "feat/linux-**"]
+    branches: [main, linux]
     paths:
       - "linux/**"
       - ".github/workflows/flatpak-linux.yml"
   pull_request:
+    branches: [main, linux]
     paths:
       - "linux/**"
       - ".github/workflows/flatpak-linux.yml"

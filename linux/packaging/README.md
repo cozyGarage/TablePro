@@ -27,8 +27,22 @@ Debian source packaging lives in [`debian/`](debian/). For a quick local binary 
 ```bash
 ./scripts/preflight.sh         # cheap gate first
 ./scripts/build-deb.sh
-# → packaging/out/tablepro_0.1.0-1_amd64.deb
-sudo apt install ./packaging/out/tablepro_0.1.0-1_amd64.deb
+# → packaging/out/tablepro_<version>_amd64.deb
+sudo apt install ./packaging/out/tablepro_*.deb
+```
+
+Bump `DEB_VERSION` (default in `scripts/build-deb.sh`) when the binary changes,
+or apt will say the installed package is already the newest version. To force
+replace the same version without a bump:
+
+```bash
+sudo apt install --reinstall ./packaging/out/tablepro_0.1.0-1_amd64.deb
+```
+
+To repackage already-built release binaries without waiting on cargo:
+
+```bash
+DEB_SKIP_BUILD=1 ./scripts/build-deb.sh
 ```
 
 Build-Depends (source package): `cargo`, `rustc (>= 1.93)`, `libgtk-4-dev`, `libadwaita-1-dev`, `libgtksourceview-5-dev`, `libssl-dev`, `libsecret-1-dev`, `gettext`.

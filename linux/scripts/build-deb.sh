@@ -5,6 +5,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${DEB_OUT:-$ROOT/packaging/out}"
+VERSION="${DEB_VERSION:-0.1.0-2}"
+ARCH="${DEB_ARCH:-amd64}"
+PKG_NAME="tablepro_${VERSION}_${ARCH}"
 mkdir -p "$OUT"
 
 # Force on-disk target dir: agent environments may point CARGO_TARGET_DIR
@@ -17,10 +20,21 @@ if [[ -f "$ROOT/scripts/dev-env.sh" ]]; then
   source "$ROOT/scripts/dev-env.sh"
 fi
 
-echo "==> cargo build --release -p tablepro-app -p tablepro-agentd"
-cargo build --release -p tablepro-app -p tablepro-agentd --locked
+if [[ "${DEB_SKIP_BUILD:-0}" != "1" ]]; then
+  echo "==> cargo build --release -p tablepro-app -p tablepro-agentd"
+  cargo build --release -p tablepro-app -p tablepro-agentd --locked
+else
+  echo "==> DEB_SKIP_BUILD=1; packaging existing release binaries"
+fi
 
-STAGE="$OUT/tablepro_0.1.0-1_amd64"
+for bin in tablepro-app tablepro-agentd; do
+  if [[ ! -x "$CARGO_TARGET_DIR/release/$bin" ]]; then
+    echo "missing $CARGO_TARGET_DIR/release/$bin; run without DEB_SKIP_BUILD" >&2
+    exit 1
+  fi
+done
+
+STAGE="$OUT/$PKG_NAME"
 rm -rf "$STAGE"
 install -Dm755 "$CARGO_TARGET_DIR/release/tablepro-app" "$STAGE/usr/bin/tablepro-app"
 install -Dm755 "$CARGO_TARGET_DIR/release/tablepro-agentd" "$STAGE/usr/bin/tablepro-agentd"
@@ -35,10 +49,10 @@ install -Dm644 packaging/policy.example.toml "$STAGE/usr/share/doc/tablepro/poli
 mkdir -p "$STAGE/DEBIAN"
 cat >"$STAGE/DEBIAN/control" <<EOF
 Package: tablepro
-Version: 0.1.0-1
+Version: ${VERSION}
 Section: database
 Priority: optional
-Architecture: amd64
+Architecture: ${ARCH}
 Maintainer: TablePro Contributors <noreply@tablepro.app>
 Depends: libgtk-4-1, libadwaita-1-0, libgtksourceview-5-0, libsecret-1-0
 Description: Native Linux database client
@@ -46,6 +60,6 @@ Description: Native Linux database client
  policy-gated agent access (MCP) and a headless agentd binary.
 EOF
 
-dpkg-deb --root-owner-group --build "$STAGE" "$OUT/tablepro_0.1.0-1_amd64.deb"
-echo "Wrote $OUT/tablepro_0.1.0-1_amd64.deb"
-dpkg-deb -I "$OUT/tablepro_0.1.0-1_amd64.deb"
+dpkg-deb --root-owner-group --build "$STAGE" "$OUT/${PKG_NAME}.deb"
+echo "Wrote $OUT/${PKG_NAME}.deb"
+dpkg-deb -I "$OUT/${PKG_NAME}.deb"

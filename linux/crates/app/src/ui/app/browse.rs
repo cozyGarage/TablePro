@@ -380,7 +380,7 @@ impl App {
             let Ok(file) = outcome else { return };
             let Some(path) = file.path() else { return };
             glib::spawn_future_local(async move {
-                let result = (|| async {
+                let result = async {
                     let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
                     let n = tablepro_core::export::stream_table_to_csv(
                         conn.as_ref(),
@@ -392,7 +392,7 @@ impl App {
                     .await
                     .map_err(|e| e.to_string())?;
                     Ok::<_, String>(n)
-                })()
+                }
                 .await;
                 match result {
                     Ok(n) => {

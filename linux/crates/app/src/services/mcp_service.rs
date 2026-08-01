@@ -24,9 +24,12 @@ impl ConnectionProvider for AppConnectionProvider {
     }
 
     async fn connection(&self, connection_id: Uuid, principal: Principal) -> Result<Arc<dyn Connection>, String> {
-        database_service::instance()
-            .handle(connection_id, principal)
-            .ok_or_else(|| format!("connection {connection_id} is not open in the app"))
+        let svc = database_service::instance();
+        let conn = match &principal {
+            Principal::Human { .. } => svc.get(connection_id),
+            _ => svc.handle(connection_id, principal),
+        };
+        conn.ok_or_else(|| format!("connection {connection_id} is not open in the app"))
     }
 }
 

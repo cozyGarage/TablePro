@@ -76,7 +76,7 @@ fn format_explain_result(result: &tablepro_core::QueryResult) -> String {
     }
     let mut lines = Vec::with_capacity(result.rows.len());
     for row in &result.rows {
-        let cells: Vec<String> = row.iter().map(|v| crate::ui::grid::value_to_display_text(v)).collect();
+        let cells: Vec<String> = row.iter().map(crate::ui::grid::value_to_display_text).collect();
         if cells.len() == 1 {
             lines.push(cells.into_iter().next().unwrap_or_default());
         } else {

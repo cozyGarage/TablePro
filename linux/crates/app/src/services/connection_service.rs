@@ -58,8 +58,6 @@ pub async fn open_saved(
         driver,
         opts,
         ssh: ssh_hops,
-        read_only,
-        environment,
     };
     database_service::instance().add(id, metadata, conn, tunnel, read_only, params);
     Ok(tables)

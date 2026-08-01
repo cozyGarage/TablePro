@@ -164,7 +164,7 @@ fn value_to_string(v: &Value) -> String {
         Value::Bool(b) => b.to_string(),
         Value::Int(i) => i.to_string(),
         Value::Float(f) => f.to_string(),
-        Value::Text(s) => s.replace('\t', " ").replace('\n', " "),
+        Value::Text(s) => s.replace(['\t', '\n'], " "),
         Value::Bytes(b) => format!("\\x{} bytes", b.len()),
         Value::Date(d) => d.to_string(),
         Value::Time(t) => t.to_string(),

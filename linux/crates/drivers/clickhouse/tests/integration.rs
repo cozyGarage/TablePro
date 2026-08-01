@@ -1,6 +1,6 @@
 use drivers_clickhouse::ClickhouseDriver;
 use tablepro_core::sql_dialect::{build_full_row_update, build_single_cell_update};
-use tablepro_core::{ColumnInfo, ConnectOptions, DatabaseDriver, Value};
+use tablepro_core::{ColumnInfo, ConnectOptions, DatabaseDriver, TlsConfig, Value};
 use testcontainers::core::wait::HttpWaitStrategy;
 use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
@@ -29,7 +29,7 @@ async fn start_clickhouse() -> (ContainerAsync<GenericImage>, ConnectOptions) {
         database: "default".into(),
         username: "default".into(),
         password: secrecy::SecretString::new("tablepro".to_string().into()),
-        tls: Default::default(),
+        tls: TlsConfig::disabled(),
     };
     (container, opts)
 }

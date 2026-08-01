@@ -47,10 +47,16 @@
             "build-options": {
                 "build-args": [
                     "--share=network"
-                ]
+                ],
+                "env": {
+                    "RUSTUP_HOME": "/run/build/tablepro-app/rustup",
+                    "CARGO_HOME": "/run/build/tablepro-app/cargo"
+                }
             },
             "build-commands": [
-                "cargo build --release -p tablepro-app --locked",
+                "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.0 --profile minimal",
+                "export PATH=\"${CARGO_HOME}/bin:${PATH}\"; rustc --version; cargo --version",
+                "export PATH=\"${CARGO_HOME}/bin:${PATH}\"; cargo build --release -p tablepro-app --locked",
                 "install -Dm755 target/release/tablepro-app /app/bin/tablepro-app",
                 "install -Dm644 flatpak/com.tablepro.linux.desktop /app/share/applications/com.tablepro.linux.desktop",
                 "install -Dm644 flatpak/com.tablepro.linux.metainfo.xml /app/share/metainfo/com.tablepro.linux.metainfo.xml",

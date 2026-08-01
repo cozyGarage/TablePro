@@ -45,8 +45,6 @@ pub struct ReconnectParams {
     pub driver: Arc<dyn DatabaseDriver>,
     pub opts: ConnectOptions,
     pub ssh: Option<Vec<SshConfig>>,
-    pub read_only: bool,
-    pub environment: Environment,
 }
 
 struct Entry {
@@ -89,7 +87,9 @@ impl DatabaseService {
     }
 
     pub fn reload_policy(&self) {
-        *self.policy.lock().expect("database_service lock") = Arc::new(load_policy());
+        let next = Arc::new(load_policy());
+        *self.policy.lock().expect("database_service lock") = next;
+        tracing::info!("policy reloaded");
     }
 
     pub fn add(
@@ -165,14 +165,14 @@ impl DatabaseService {
         self.handle(id, principal)
     }
 
-    /// Human GUI convenience: active connection under the GUI principal.
-    pub fn active(&self) -> Option<Arc<dyn Connection>> {
-        self.active_handle(Principal::human_gui())
-    }
-
     /// Alias for [`handle`] with the human GUI principal.
     pub fn get(&self, id: Uuid) -> Option<Arc<dyn Connection>> {
         self.handle(id, Principal::human_gui())
+    }
+
+    /// Human GUI convenience: active connection under the GUI principal.
+    pub fn active(&self) -> Option<Arc<dyn Connection>> {
+        self.active_handle(Principal::human_gui())
     }
 
     pub fn active_id(&self) -> Option<Uuid> {
@@ -188,25 +188,7 @@ impl DatabaseService {
     }
 
     pub fn is_active_read_only(&self) -> bool {
-        let id = match self.active_id() {
-            Some(id) => id,
-            None => return false,
-        };
-        self.connections
-            .lock()
-            .expect("database_service lock")
-            .get(&id)
-            .map(|e| e.read_only)
-            .unwrap_or(false)
-    }
-
-    pub fn active_environment(&self) -> Option<Environment> {
-        let id = self.active_id()?;
-        self.connections
-            .lock()
-            .expect("database_service lock")
-            .get(&id)
-            .map(|e| e.environment)
+        self.active_metadata().map(|m| m.read_only).unwrap_or(false)
     }
 
     pub fn remove(&self, id: Uuid) {

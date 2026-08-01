@@ -319,10 +319,17 @@ fn format_connection_subtitle(
     driver: &str,
     metadata: Option<&crate::services::database_service::ConnectionMetadata>,
 ) -> String {
-    match metadata.and_then(|m| m.server_version.as_deref()) {
-        Some(version) if !version.is_empty() => format!("{name} · {driver} · {version}"),
-        _ => format!("{name} · {driver}"),
+    let mut parts = vec![name.to_string(), driver.to_string()];
+    if let Some(meta) = metadata {
+        parts.push(meta.environment.display_name().to_string());
+        if let Some(version) = meta.server_version.as_deref().filter(|v| !v.is_empty()) {
+            parts.push(version.to_string());
+        }
+        if meta.read_only {
+            parts.push("read-only".into());
+        }
     }
+    parts.join(" · ")
 }
 
 /// Performs the actual disk + keyring teardown for a saved connection.

@@ -9,6 +9,8 @@ use crate::services::mcp_service;
 use crate::tr;
 
 pub fn build_page() -> adw::PreferencesPage {
+    crate::services::database_service::instance().reload_policy();
+
     let page = adw::PreferencesPage::builder()
         .title(tr!("MCP"))
         .icon_name("network-server-symbolic")
@@ -148,7 +150,7 @@ fn refresh_token_list(group: &adw::PreferencesGroup) {
         }
         let row = adw::ActionRow::builder()
             .title(&token.name)
-            .subtitle(&format!(
+            .subtitle(format!(
                 "{} · {}",
                 permissions_label(token.permissions),
                 token.created_at.format("%Y-%m-%d")
