@@ -47,7 +47,6 @@ impl ApprovalSink for GtkApprovalSink {
             let dialog = adw::AlertDialog::builder().heading(&heading_c).body(&body_c).build();
             dialog.add_response("deny", "Deny");
             dialog.add_response("once", "Approve once");
-            dialog.add_response("session", "Approve for session");
             dialog.set_response_appearance("deny", adw::ResponseAppearance::Destructive);
             dialog.set_response_appearance("once", adw::ResponseAppearance::Suggested);
             dialog.set_default_response(Some("deny"));
@@ -56,7 +55,6 @@ impl ApprovalSink for GtkApprovalSink {
             dialog.connect_response(None, move |_dlg, response| {
                 let outcome = match response {
                     "once" => ApprovalOutcome::AllowOnce,
-                    "session" => ApprovalOutcome::AllowSession,
                     _ => ApprovalOutcome::Deny,
                 };
                 if let Ok(mut guard) = tx_c.lock()

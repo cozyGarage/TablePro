@@ -38,6 +38,9 @@
 
 - ClickHouse integration tests connect over plain HTTP instead of default VerifyFull HTTPS
 - Flatpak CI bootstraps Rust 1.93 via rustup so the GNOME 47 SDK's older rust-stable extension is not required
+- MCP write preview and other `begin()` paths now run statements through PolicyGuard instead of a raw driver transaction
+- Agents are denied (and humans must approve) when a blast-radius estimate cannot be computed for UPDATE/DELETE
+- Approval dialog no longer offers "Approve for session" until session grants exist
 
 ### Security
 

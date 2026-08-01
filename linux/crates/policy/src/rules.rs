@@ -123,13 +123,24 @@ fn evaluate_agent_write(
     }
 
     if let Some(limit) = env_policy.blast_radius_max_rows
-        && let Some(rows) = estimated_rows
-        && rows > limit
+        && matches!(facts.class, StatementClass::Update | StatementClass::Delete)
     {
-        return Decision::Deny {
-            rule: "blast_radius_exceeded".into(),
-            message: format!("would affect {rows} rows; limit is {limit}"),
-        };
+        match estimated_rows {
+            Some(rows) if rows > limit => {
+                return Decision::Deny {
+                    rule: "blast_radius_exceeded".into(),
+                    message: format!("would affect {rows} rows; limit is {limit}"),
+                };
+            }
+            Some(_) => {}
+            None => {
+                return Decision::Deny {
+                    rule: "blast_radius_unknown".into(),
+                    message: "could not estimate affected rows; agents are denied when a blast-radius limit is set"
+                        .into(),
+                };
+            }
+        }
     }
 
     match env_policy.agent_writes {
@@ -168,14 +179,25 @@ fn evaluate_human_write(
     }
 
     if let Some(limit) = env_policy.blast_radius_max_rows
-        && let Some(rows) = estimated_rows
-        && rows > limit
+        && matches!(facts.class, StatementClass::Update | StatementClass::Delete)
     {
-        return Decision::RequireApproval {
-            rule: "blast_radius_approve".into(),
-            reason: format!("would affect {rows} rows (limit {limit})"),
-            preview: None,
-        };
+        match estimated_rows {
+            Some(rows) if rows > limit => {
+                return Decision::RequireApproval {
+                    rule: "blast_radius_approve".into(),
+                    reason: format!("would affect {rows} rows (limit {limit})"),
+                    preview: None,
+                };
+            }
+            Some(_) => {}
+            None => {
+                return Decision::RequireApproval {
+                    rule: "blast_radius_unknown".into(),
+                    reason: "could not estimate affected rows; confirm before running".into(),
+                    preview: None,
+                };
+            }
+        }
     }
 
     if env_policy.human_approve_writes {
@@ -256,5 +278,45 @@ mod tests {
             None,
         );
         assert!(matches!(d, Decision::Deny { .. }));
+    }
+
+    #[test]
+    fn agent_denied_when_blast_radius_unknown() {
+        let policy = PolicyConfig::default();
+        let facts = classify("DELETE FROM t WHERE id = 1", "postgres");
+        let d = evaluate(
+            &Principal::Agent {
+                token: "tok".into(),
+                client: None,
+                model: None,
+            },
+            Environment::Dev,
+            &facts,
+            false,
+            &policy,
+            None,
+        );
+        assert!(
+            matches!(d, Decision::Deny { ref rule, .. } if rule == "blast_radius_unknown"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn human_requires_approval_when_blast_radius_unknown() {
+        let policy = PolicyConfig::default();
+        let facts = classify("DELETE FROM t WHERE id = 1", "postgres");
+        let d = evaluate(
+            &Principal::human_gui(),
+            Environment::Staging,
+            &facts,
+            false,
+            &policy,
+            None,
+        );
+        assert!(
+            matches!(d, Decision::RequireApproval { ref rule, .. } if rule == "blast_radius_unknown"),
+            "{d:?}"
+        );
     }
 }
