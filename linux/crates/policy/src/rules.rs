@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use tablepro_core::Environment;
 
 use crate::classify::{StatementClass, StatementFacts};
-use crate::config::{EnvPolicy, PolicyConfig};
+use crate::config::EnvPolicy;
 use crate::principal::Principal;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,13 +39,11 @@ pub fn evaluate(
     environment: Environment,
     facts: &StatementFacts,
     connection_read_only: bool,
-    policy: &PolicyConfig,
+    env_policy: &EnvPolicy,
     estimated_rows: Option<u64>,
 ) -> Decision {
-    let env_policy = policy.for_environment(environment);
-
     if facts.class == StatementClass::Unparseable {
-        return decide_unparseable(principal, &env_policy);
+        return decide_unparseable(principal, env_policy);
     }
 
     if connection_read_only && facts.writes {
@@ -68,12 +66,11 @@ pub fn evaluate(
         };
     }
 
-    // Writes from here.
     if principal.is_agent() {
-        return evaluate_agent_write(environment, facts, &env_policy, estimated_rows);
+        return evaluate_agent_write(environment, facts, env_policy, estimated_rows);
     }
 
-    evaluate_human_write(environment, facts, &env_policy, estimated_rows)
+    evaluate_human_write(environment, facts, env_policy, estimated_rows)
 }
 
 fn decide_unparseable(principal: &Principal, env_policy: &EnvPolicy) -> Decision {
@@ -217,11 +214,14 @@ fn evaluate_human_write(
 mod tests {
     use super::*;
     use crate::classify::classify;
-    use crate::config::PolicyConfig;
+    use crate::config::{PolicyConfig, WritePolicy};
+
+    fn env_policy(environment: Environment) -> EnvPolicy {
+        PolicyConfig::default().for_environment(environment)
+    }
 
     #[test]
     fn agent_denied_on_prod_write() {
-        let policy = PolicyConfig::default();
         let facts = classify("DELETE FROM t WHERE id = 1", "postgres");
         let d = evaluate(
             &Principal::Agent {
@@ -232,7 +232,7 @@ mod tests {
             Environment::Prod,
             &facts,
             false,
-            &policy,
+            &env_policy(Environment::Prod),
             Some(1),
         );
         assert!(matches!(d, Decision::Deny { .. }), "{d:?}");
@@ -240,14 +240,13 @@ mod tests {
 
     #[test]
     fn human_allowed_local_write() {
-        let policy = PolicyConfig::default();
         let facts = classify("UPDATE t SET a = 1 WHERE id = 1", "postgres");
         let d = evaluate(
             &Principal::human_gui(),
             Environment::Local,
             &facts,
             false,
-            &policy,
+            &env_policy(Environment::Local),
             Some(1),
         );
         assert!(d.is_allow(), "{d:?}");
@@ -255,15 +254,20 @@ mod tests {
 
     #[test]
     fn read_only_connection_blocks_write() {
-        let policy = PolicyConfig::default();
         let facts = classify("DELETE FROM t WHERE id = 1", "postgres");
-        let d = evaluate(&Principal::human_gui(), Environment::Local, &facts, true, &policy, None);
-        assert!(matches!(d, Decision::Deny { rule, .. } if rule == "connection_read_only"));
+        let d = evaluate(
+            &Principal::human_gui(),
+            Environment::Local,
+            &facts,
+            true,
+            &env_policy(Environment::Local),
+            None,
+        );
+        assert!(matches!(d, Decision::Deny { ref rule, .. } if rule == "connection_read_only"));
     }
 
     #[test]
     fn agent_unparseable_denied() {
-        let policy = PolicyConfig::default();
         let facts = classify("NOT SQL AT ALL !!!", "postgres");
         let d = evaluate(
             &Principal::Agent {
@@ -274,7 +278,7 @@ mod tests {
             Environment::Dev,
             &facts,
             false,
-            &policy,
+            &env_policy(Environment::Dev),
             None,
         );
         assert!(matches!(d, Decision::Deny { .. }));
@@ -282,7 +286,6 @@ mod tests {
 
     #[test]
     fn agent_denied_when_blast_radius_unknown() {
-        let policy = PolicyConfig::default();
         let facts = classify("DELETE FROM t WHERE id = 1", "postgres");
         let d = evaluate(
             &Principal::Agent {
@@ -293,7 +296,7 @@ mod tests {
             Environment::Dev,
             &facts,
             false,
-            &policy,
+            &env_policy(Environment::Dev),
             None,
         );
         assert!(
@@ -304,19 +307,38 @@ mod tests {
 
     #[test]
     fn human_requires_approval_when_blast_radius_unknown() {
-        let policy = PolicyConfig::default();
         let facts = classify("DELETE FROM t WHERE id = 1", "postgres");
         let d = evaluate(
             &Principal::human_gui(),
             Environment::Staging,
             &facts,
             false,
-            &policy,
+            &env_policy(Environment::Staging),
             None,
         );
         assert!(
             matches!(d, Decision::RequireApproval { ref rule, .. } if rule == "blast_radius_unknown"),
             "{d:?}"
         );
+    }
+
+    #[test]
+    fn connection_override_policy_is_used_directly() {
+        let facts = classify("DELETE FROM t WHERE id = 1", "postgres");
+        let mut override_policy = EnvPolicy::prod_defaults();
+        override_policy.agent_writes = WritePolicy::Allow;
+        let d = evaluate(
+            &Principal::Agent {
+                token: "tok".into(),
+                client: None,
+                model: None,
+            },
+            Environment::Prod,
+            &facts,
+            false,
+            &override_policy,
+            Some(1),
+        );
+        assert!(d.is_allow(), "{d:?}");
     }
 }

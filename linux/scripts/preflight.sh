@@ -40,6 +40,9 @@ for c in "${CRATES[@]}"; do
   PKG_ARGS+=(-p "$c")
 done
 
+echo "==> file size guardrail"
+"$ROOT/scripts/check-file-size.sh"
+
 echo "==> cargo fmt --check (workspace)"
 cargo fmt --all -- --check
 

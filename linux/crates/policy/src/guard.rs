@@ -104,41 +104,9 @@ impl PolicyGuard {
             self.ctx.environment,
             &facts,
             self.ctx.read_only,
-            &self.ctx.policy,
+            &env_policy,
             estimated_rows,
         );
-
-        // Connection-level override for EnvPolicy fields used above:
-        // re-evaluate with connection override by temporarily swapping —
-        // evaluate already uses PolicyConfig::for_environment; apply
-        // connection override by building a one-shot config when present.
-        let decision = if self
-            .ctx
-            .policy
-            .connection_overrides
-            .contains_key(&self.ctx.connection_id.to_string())
-        {
-            let mut cfg = (*self.ctx.policy).clone();
-            if let Some(over) = self
-                .ctx
-                .policy
-                .connection_overrides
-                .get(&self.ctx.connection_id.to_string())
-            {
-                cfg.environments
-                    .insert(self.ctx.environment.as_str().into(), over.clone());
-            }
-            evaluate(
-                &self.ctx.principal,
-                self.ctx.environment,
-                &facts,
-                self.ctx.read_only,
-                &cfg,
-                estimated_rows,
-            )
-        } else {
-            decision
-        };
 
         let _ = is_params_exec;
 

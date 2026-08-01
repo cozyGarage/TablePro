@@ -20,12 +20,38 @@ pub enum TlsMode {
 }
 
 impl TlsMode {
+    pub const ALL: [Self; 5] = [
+        Self::Disabled,
+        Self::Prefer,
+        Self::Require,
+        Self::VerifyCa,
+        Self::VerifyFull,
+    ];
+
     pub fn encrypts(self) -> bool {
         !matches!(self, Self::Disabled)
     }
 
     pub fn verifies_cert(self) -> bool {
         matches!(self, Self::VerifyCa | Self::VerifyFull)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Disabled => "Disabled",
+            Self::Prefer => "Prefer",
+            Self::Require => "Require",
+            Self::VerifyCa => "Verify CA",
+            Self::VerifyFull => "Verify Full",
+        }
+    }
+
+    pub fn from_index(index: u32) -> Self {
+        Self::ALL.get(index as usize).copied().unwrap_or(Self::VerifyFull)
+    }
+
+    pub fn index(self) -> u32 {
+        Self::ALL.iter().position(|m| *m == self).unwrap_or(4) as u32
     }
 }
 
@@ -94,5 +120,18 @@ impl Environment {
             Self::Staging => "Staging",
             Self::Prod => "Prod",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tls_mode_index_round_trips() {
+        for mode in TlsMode::ALL {
+            assert_eq!(TlsMode::from_index(mode.index()), mode);
+        }
+        assert_eq!(TlsMode::from_index(99), TlsMode::VerifyFull);
     }
 }

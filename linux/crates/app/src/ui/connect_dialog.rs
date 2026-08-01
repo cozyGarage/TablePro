@@ -6,7 +6,7 @@ use relm4::{adw, gtk};
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
-use tablepro_core::{ConnectOptions, DriverRegistry, Environment, TableInfo};
+use tablepro_core::{ConnectOptions, DriverRegistry, Environment, TableInfo, TlsMode};
 use tablepro_storage::{
     SavedConnection, SavedSshConfig, save_connections, store_password, store_ssh_passphrase, store_ssh_password,
 };
@@ -24,7 +24,7 @@ pub struct ConnectDialog {
     database: adw::EntryRow,
     username: adw::EntryRow,
     password: adw::PasswordEntryRow,
-    use_tls: adw::SwitchRow,
+    tls_mode: adw::ComboRow,
     read_only: adw::SwitchRow,
     environment: adw::ComboRow,
     auth_group: adw::PreferencesGroup,
@@ -151,11 +151,14 @@ impl Component for ConnectDialog {
             .text("postgres")
             .build();
         let password = adw::PasswordEntryRow::builder().title(crate::tr!("Password")).build();
-        let use_tls = adw::SwitchRow::builder()
-            .title(crate::tr!("Use TLS"))
-            .subtitle(crate::tr!("VerifyFull: encrypt and authenticate the server"))
-            .active(false)
+        let tls_mode = adw::ComboRow::builder()
+            .title(crate::tr!("TLS"))
+            .subtitle(crate::tr!("How the client encrypts and verifies the server"))
             .build();
+        let tls_labels: Vec<&str> = TlsMode::ALL.iter().map(|m| m.label()).collect();
+        let tls_model = gtk::StringList::new(&tls_labels);
+        tls_mode.set_model(Some(&tls_model));
+        tls_mode.set_selected(TlsMode::VerifyFull.index());
         let read_only = adw::SwitchRow::builder()
             .title(crate::tr!("Read-only mode"))
             .subtitle(crate::tr!("Block writes at the policy layer"))
@@ -202,7 +205,7 @@ impl Component for ConnectDialog {
         auth_group.add(&password);
 
         let options_group = adw::PreferencesGroup::builder().title(crate::tr!("Options")).build();
-        options_group.add(&use_tls);
+        options_group.add(&tls_mode);
         options_group.add(&read_only);
         options_group.add(&environment);
 
@@ -236,7 +239,7 @@ impl Component for ConnectDialog {
             database,
             username,
             password,
-            use_tls,
+            tls_mode,
             read_only,
             environment,
             auth_group,
@@ -316,7 +319,7 @@ impl Component for ConnectDialog {
                     database: self.database.text().to_string(),
                     username: self.username.text().to_string(),
                     password: SecretString::new(self.password.text().to_string().into()),
-                    tls: crate::services::connection_service::tls_from_toggle(self.use_tls.is_active()),
+                    tls: self.tls_config_for(driver.as_ref()),
                 };
 
                 let label = if entry.id == "sqlite" {
@@ -380,7 +383,7 @@ impl Component for ConnectDialog {
                     database: self.database.text().to_string(),
                     username: self.username.text().to_string(),
                     password: SecretString::new(self.password.text().to_string().into()),
-                    tls: crate::services::connection_service::tls_from_toggle(self.use_tls.is_active()),
+                    tls: self.tls_config_for(driver.as_ref()),
                 };
                 let ssh_inputs = if self.ssh.is_enabled() {
                     match self.ssh.collect() {
@@ -489,13 +492,26 @@ impl ConnectDialog {
         }
     }
 
+    fn selected_tls_mode(&self) -> TlsMode {
+        TlsMode::from_index(self.tls_mode.selected())
+    }
+
+    fn tls_config_for(&self, driver: &dyn tablepro_core::DatabaseDriver) -> tablepro_core::TlsConfig {
+        let mode = if driver.is_file_based() {
+            TlsMode::Disabled
+        } else {
+            self.selected_tls_mode()
+        };
+        crate::services::connection_service::tls_config(mode)
+    }
+
     fn apply_driver_form_visibility(&self, driver: &dyn tablepro_core::DatabaseDriver) {
         let file_based = driver.is_file_based();
         self.host.set_visible(!file_based);
         self.port.set_visible(!file_based);
         self.username.set_visible(!file_based);
         self.password.set_visible(!file_based);
-        self.use_tls.set_visible(!file_based);
+        self.tls_mode.set_visible(!file_based);
         // For file-based drivers (SQLite), only Connection + Options
         // groups make sense; hide Authentication and SSH entirely.
         self.auth_group.set_visible(!file_based);

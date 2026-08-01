@@ -23,6 +23,7 @@
 - Preferences → MCP token pairing (libsecret + loopback endpoint)
 - Multi-window via New Window
 - Flathub submission notes and screenshot capture guide
+- Rust file-size guardrail in preflight: soft 1200 / hard 1800 lines, with ratchet ceilings in `file-size-baselines.txt`
 
 ### Changed
 
@@ -33,6 +34,8 @@
 - Agentd approval strategies: deny (default), auto, or tty
 - DuckDB driver is an optional `duckdb` Cargo feature (bundled build is large)
 - Linux CI runs a non-GTK preflight job before the full GTK checks; local `./scripts/preflight.sh` mirrors that gate
+- Policy evaluation takes the resolved connection EnvPolicy once; connection overrides no longer re-run evaluate
+- Connect dialog TLS control is a mode picker (Disabled / Prefer / Require / Verify CA / Verify Full), defaulting to Verify Full for network drivers
 
 ### Fixed
 

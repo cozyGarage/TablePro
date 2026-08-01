@@ -142,13 +142,9 @@ async fn resolve_saved_ssh_hop(id: uuid::Uuid, saved: &SavedSshConfig, hop_index
     })
 }
 
-pub fn tls_from_toggle(enabled: bool) -> TlsConfig {
+pub fn tls_config(mode: TlsMode) -> TlsConfig {
     TlsConfig {
-        mode: if enabled {
-            TlsMode::VerifyFull
-        } else {
-            TlsMode::Disabled
-        },
+        mode,
         ..Default::default()
     }
 }

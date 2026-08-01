@@ -24,6 +24,9 @@ case "$CARGO_TARGET_DIR" in
 esac
 
 run_full() {
+  echo "==> file size guardrail"
+  "$ROOT/scripts/check-file-size.sh"
+
   echo "==> cargo fmt --check"
   cargo fmt --all -- --check
 

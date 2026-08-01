@@ -134,12 +134,25 @@ There is no app-level end-to-end test yet. Driving the GTK app under `xvfb-run` 
 
 What exists today is the driver-level smoke described above: `scripts/smoke-postgres.sh` against a Postgres you already run.
 
+## File size guardrail
+
+Rust sources under `crates/` are capped like SwiftLint file length:
+
+| Limit | Lines | Rule |
+|---|---|---|
+| Soft | 1200 | New files over this must be split, or listed in `file-size-baselines.txt` |
+| Hard | 1800 | Unlisted files over this always fail |
+| Ratchet | listed max | Listed oversized files may not grow past their ceiling |
+
+`scripts/check-file-size.sh` runs from `preflight.sh` and `ci-local.sh`. After you shrink a listed file, lower its baseline max in the same change.
+
 ## CI
 
 GitHub Actions (`.github/workflows/build-linux.yml`), Ubuntu runner, two jobs:
 
-1. **Fast checks**: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo build --workspace`, `cargo test --workspace --lib`. Runs in an `ubuntu:25.10` container, which ships the glib version libadwaita 1.6 needs. `scripts/ci-local.sh` runs the same steps, but with `--lib --bins` so the app crate's tests actually run. The workflow should pick up `--bins` too.
-2. **Driver integration tests**: runs after fast checks pass. Boots Docker on the host runner and runs the Postgres, MySQL, and ClickHouse suites with `--include-ignored`. The MSSQL suite exists but is not wired in yet.
+1. **Preflight**: `scripts/preflight.sh` (file-size guardrail, fmt, clippy, non-GTK unit tests).
+2. **Fast checks**: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace --lib --bins` (via `ci-local.sh`). Runs in an `ubuntu:25.10` container, which ships the glib version libadwaita 1.6 needs.
+3. **Driver integration tests**: runs after preflight. Boots Docker on the host runner and runs the Postgres, MySQL, MSSQL, and ClickHouse suites with `--include-ignored`.
 
 PRs only merge when both jobs are green.
 
