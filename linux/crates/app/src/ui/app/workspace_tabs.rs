@@ -8,14 +8,12 @@ use relm4::{Component, ComponentController, ComponentSender, adw, gtk};
 use uuid::Uuid;
 
 use crate::services::database_service;
-use crate::services::workspace_state::{self, ConnectionWorkspaceState, WorkspaceTabRecord};
+use crate::services::workspace_state::{self, WorkspaceTabRecord};
 use crate::ui::browse_tab::{BrowseTab, BrowseTabInit, BrowseTabInput, BrowseTabOutput};
 use crate::ui::editor::{SqlEditor, SqlEditorInit, SqlEditorInput, SqlEditorOutput, derive_tab_label};
 
-use super::{
-    App, AppMsg, CLOSED_TABS_CAPACITY, ClosedTabDescriptor, EditorTabSlot, OpenMode, WorkspaceTab,
-    read_workspace_tab_id, write_workspace_tab_id,
-};
+use super::types::{CLOSED_TABS_CAPACITY, read_workspace_tab_id, write_workspace_tab_id};
+use super::{App, AppMsg, ClosedTabDescriptor, EditorTabSlot, OpenMode, WorkspaceTab};
 
 impl App {
     /// Builds the unified AdwTabOverview tree once per connection.
@@ -706,78 +704,6 @@ impl App {
         self.refresh_window_title();
     }
 
-    pub(super) fn close_active_workspace_tab(&mut self, sender: ComponentSender<Self>) {
-        let Some(tab_view) = self.workspace_tab_view.as_ref() else {
-            // No tabs at all (disconnected) → close window.
-            self.window.close();
-            return;
-        };
-        let Some(page) = tab_view.selected_page() else {
-            self.window.close();
-            return;
-        };
-        tab_view.close_page(&page);
-        let _ = sender;
-    }
-
-    /// Close every workspace tab except `keep_id`. Each close goes
-    /// through the per-tab close path so dirty browse tabs still
-    /// trigger the unsaved-changes alert; the user can cancel the
-    /// dialog and the tab stays open while the others continue
-    /// closing in the background.
-    pub(super) fn close_other_workspace_tabs(&mut self, keep_id: Uuid, _sender: ComponentSender<Self>) {
-        let Some(tab_view) = self.workspace_tab_view.clone() else {
-            return;
-        };
-        let pages = tab_view.pages();
-        let mut targets: Vec<adw::TabPage> = Vec::with_capacity(pages.n_items() as usize);
-        for i in 0..pages.n_items() {
-            let Some(page) = pages.item(i).and_downcast::<adw::TabPage>() else {
-                continue;
-            };
-            if read_workspace_tab_id(&page) == Some(keep_id) {
-                continue;
-            }
-            targets.push(page);
-        }
-        for page in targets {
-            tab_view.close_page(&page);
-        }
-    }
-
-    /// Close every workspace tab whose display position is greater
-    /// than the targeted one. Useful for rapidly trimming a long
-    /// session of throwaway tabs the user accumulated.
-    pub(super) fn close_workspace_tabs_to_right(&mut self, anchor_id: Uuid, _sender: ComponentSender<Self>) {
-        let Some(tab_view) = self.workspace_tab_view.clone() else {
-            return;
-        };
-        let pages = tab_view.pages();
-        let mut anchor_idx: Option<u32> = None;
-        for i in 0..pages.n_items() {
-            let Some(page) = pages.item(i).and_downcast::<adw::TabPage>() else {
-                continue;
-            };
-            if read_workspace_tab_id(&page) == Some(anchor_id) {
-                anchor_idx = Some(i);
-                break;
-            }
-        }
-        let Some(anchor_idx) = anchor_idx else {
-            return;
-        };
-        let mut targets: Vec<adw::TabPage> = Vec::new();
-        for i in (anchor_idx + 1)..pages.n_items() {
-            let Some(page) = pages.item(i).and_downcast::<adw::TabPage>() else {
-                continue;
-            };
-            targets.push(page);
-        }
-        for page in targets {
-            tab_view.close_page(&page);
-        }
-    }
-
     /// Sidebar-click dispatcher. Two behaviours:
     ///
     /// - `SwitchOrAppend` (plain click): if a Browse tab for
@@ -831,116 +757,15 @@ impl App {
         // sidebar right-click "Edit Structure" action.
         self.append_table_tab(schema, name, 0, self.default_page_size, None, sender);
     }
-
-    /// Persist workspace tabs for the active connection. Walks
-    /// `tab_view.pages()` for canonical display order (HashMap is
-    /// unordered; user can drag-reorder).
-    /// Debounced entry point. Coalesces rapid call sites
-    /// (selection-change, drag-reorder, page-size change, state-
-    /// changed) into a single write 500ms after the last call.
-    pub(super) fn persist_workspace_state(&self) {
-        if self.persist_pending.get() {
-            return;
-        }
-        self.persist_pending.set(true);
-        let pending = self.persist_pending.clone();
-        let workspace_tabs = self.workspace_tabs.clone();
-        let tab_view = self.workspace_tab_view.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
-            pending.set(false);
-            do_persist_workspace_state(&workspace_tabs, tab_view.as_ref());
-        });
-    }
-
-    /// Actual write. Reads the latest tab state, builds the on-disk
-    /// record, hands it to `workspace_state::save_connection`. Called
-    /// only via `persist_workspace_state`'s debounced timer or
-    /// directly from teardown paths that need a synchronous flush.
-    pub(super) fn do_persist_workspace_state_now(&self) {
-        do_persist_workspace_state(&self.workspace_tabs, self.workspace_tab_view.as_ref());
-    }
-}
-
-fn do_persist_workspace_state(
-    workspace_tabs: &std::rc::Rc<std::cell::RefCell<std::collections::HashMap<Uuid, WorkspaceTab>>>,
-    tab_view: Option<&adw::TabView>,
-) {
-    let Some(connection_id) = database_service::instance().active_id() else {
-        return;
-    };
-    let tabs = workspace_tabs.borrow();
-    let Some(tab_view) = tab_view else {
-        return;
-    };
-    let pages = tab_view.pages();
-    let n = pages.n_items();
-    let active_page = tab_view.selected_page();
-    let mut tab_records: Vec<WorkspaceTabRecord> = Vec::with_capacity(n as usize);
-    let mut active_idx: u32 = 0;
-    for i in 0..n {
-        let Some(page) = pages.item(i).and_downcast::<adw::TabPage>() else {
-            continue;
-        };
-        if active_page.as_ref() == Some(&page) {
-            active_idx = i;
-        }
-        let Some(id) = read_workspace_tab_id(&page) else {
-            continue;
-        };
-        let Some(slot) = tabs.get(&id) else { continue };
-        tab_records.push(match slot {
-            WorkspaceTab::Editor(s) => WorkspaceTabRecord::Editor { query: s.query.clone() },
-            // Structure tabs only exist for the New-Table draft flow
-            // post-M-1 cleanup; never persist (the table the user is
-            // drafting doesn't exist yet, so a restore would be a
-            // meaningless empty form).
-            WorkspaceTab::Structure(_) => continue,
-            WorkspaceTab::Table(s) => {
-                // New-mode draft Tables (no committed table name yet)
-                // don't survive a disconnect.
-                if s.table.is_empty() {
-                    continue;
-                }
-                let model = s.browse.model();
-                let sort = model.current_sort();
-                WorkspaceTabRecord::Table {
-                    schema: s.schema.clone(),
-                    table: s.table.clone(),
-                    // `mode` is a legacy field — Table records always
-                    // describe a Data-side Browse tab now. Structure
-                    // tabs persist as separate `Structure` records.
-                    mode: crate::services::workspace_state::PersistedTableMode::Data,
-                    offset: model.current_offset(),
-                    page_size: model.page_size(),
-                    sort_col: sort.map(|(c, _)| c),
-                    sort_asc: sort.map(|(_, a)| a),
-                }
-            }
-        });
-    }
-    let conn_state = ConnectionWorkspaceState {
-        tabs: tab_records,
-        active_idx,
-    };
-    workspace_state::save_connection(connection_id, conn_state);
 }
 
 impl App {
-    /// Single handler for `WorkspaceTabsChanged`. Persists tab state,
-    /// refreshes the window title (so tab switches update the subtitle),
-    /// and syncs the sidebar selection to the active Browse tab's table.
-    pub(super) fn on_workspace_tabs_changed(&self) {
-        self.persist_workspace_state();
-        self.refresh_window_title();
-        self.sync_sidebar_selection();
-    }
-
     /// Highlight the sidebar row matching the active Browse tab's
     /// `(schema, table)`. When the active tab is an Editor (or there
     /// are no tabs), clear the sidebar selection — leaving a stale
     /// row highlighted while the user is in the editor would imply
     /// the editor is showing that table's data, which it isn't.
-    fn sync_sidebar_selection(&self) {
+    pub(crate) fn sync_sidebar_selection(&self) {
         let listbox = self.sidebar_factory.widget();
         let Some((schema, table)) = self.selected_browse_slot_table() else {
             listbox.unselect_all();

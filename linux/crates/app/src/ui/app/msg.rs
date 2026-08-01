@@ -1,0 +1,136 @@
+use tablepro_core::{ColumnInfo, QueryResult, TableInfo, Value};
+use tablepro_storage::SavedConnection;
+use uuid::Uuid;
+
+use super::OpenMode;
+
+#[derive(Debug)]
+pub enum AppMsg {
+    OpenConnect,
+    Connected {
+        tables: Vec<TableInfo>,
+        driver_id: String,
+    },
+    DialogClosed,
+    SelectTable {
+        schema: Option<String>,
+        name: String,
+        open_mode: OpenMode,
+    },
+    ColumnsLoaded(Uuid, Vec<ColumnInfo>),
+    RowsLoaded(Uuid, u64, QueryResult),
+    LoadFailed(Option<Uuid>, String),
+    RowOpStarted,
+    ReloadConnections,
+    ConnectionsLoaded(Vec<SavedConnection>),
+    OpenSaved(SavedConnection),
+    DeleteConnection(Uuid),
+    NewEditorTab,
+    CloseActiveWorkspaceTab,
+    EditorTabRunStateChanged(Uuid, bool),
+    EditorTabQueryChanged(Uuid, String),
+    ShowHistory,
+    OpenHistoryQuery(String),
+    ReplaceActiveTabQuery(String),
+    Disconnect,
+    ForceDisconnect,
+    PollHealth,
+    RefreshPage,
+    ShowShortcuts,
+    ShowAbout,
+    ShowActivity,
+    ExplainActiveQuery,
+    ShowPreferences,
+    NewWindow,
+    RowCountLoaded(Uuid, u64),
+    ExportCsv,
+    ExportJson,
+    CopyToClipboard(String),
+    CopyRowAsInsert {
+        tab_id: Uuid,
+        row_position: u32,
+    },
+    FetchBrowsePage(Uuid),
+    FetchBrowseColumns(Uuid),
+    FetchBrowseRowCount(Uuid),
+    WorkspaceSchemaWordsChanged,
+    WorkspaceTabClosed(Uuid),
+    CloseOtherWorkspaceTabs(Uuid),
+    CloseWorkspaceTabsToRight(Uuid),
+    WorkspaceTabsChanged,
+    ExecuteBrowseTransaction {
+        tab_id: Uuid,
+        statements: Vec<(String, Vec<Value>)>,
+        sources: Vec<crate::services::change_tracker::StatementSource>,
+    },
+    SaveCompletedForTab(Uuid, Option<String>),
+    SaveFailedForTab(Uuid, String),
+    FlashErrorRowForTab(Uuid, crate::services::change_tracker::StatementSource),
+    SaveActiveBrowseTab,
+    SaveActiveBrowseTabById(Uuid),
+    UndoActiveBrowseTab,
+    RedoActiveBrowseTab,
+    ShowAlert {
+        title: String,
+        body: String,
+    },
+    ShowToast(String),
+    BrowseTabDirtyChanged(Uuid, bool),
+    NewTableTab {
+        schema: Option<String>,
+    },
+    EditStructureTab {
+        schema: Option<String>,
+        table: String,
+    },
+    ShowCreateTableForExisting {
+        schema: Option<String>,
+        table: String,
+    },
+    ShowCreateTableLoaded {
+        sql: String,
+    },
+    DropTablePrompt {
+        schema: Option<String>,
+        table: String,
+    },
+    DropTableConfirmed {
+        schema: Option<String>,
+        table: String,
+    },
+    DropTableSucceeded {
+        schema: Option<String>,
+        table: String,
+    },
+    ExecuteStructureTransaction {
+        tab_id: Uuid,
+        statements: Vec<String>,
+    },
+    SaveActiveStructureTabById(Uuid),
+    StructureSaveCompleted {
+        tab_id: Uuid,
+        new_table_name: Option<String>,
+    },
+    StructureSaveFailed(Uuid, String),
+    FetchStructureData {
+        tab_id: Uuid,
+    },
+    StructureDataLoaded {
+        tab_id: Uuid,
+        columns: Vec<ColumnInfo>,
+        indexes: Vec<tablepro_core::IndexInfo>,
+        fks: Vec<tablepro_core::ForeignKeyInfo>,
+    },
+    StructureLoadFailed {
+        tab_id: Uuid,
+        message: String,
+    },
+    StructureTabDirtyChanged(Uuid, bool),
+    SchemaChanged {
+        schema: Option<String>,
+        table: Option<String>,
+    },
+    TablesReloaded(Vec<TableInfo>),
+    ReopenClosedTab,
+    ShowFilterDialog,
+}

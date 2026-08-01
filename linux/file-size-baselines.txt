@@ -2,10 +2,4 @@
 # scripts/check-file-size.sh fails when a listed file grows past its max,
 # or when an unlisted file exceeds the hard limit (1800 lines).
 # Lower a max when you shrink a file. Do not raise a max; split the file instead.
-
-crates/app/src/ui/browse_tab.rs 3027
-crates/core/src/sql_ddl.rs 2086
-crates/app/src/ui/grid.rs 1915
-crates/app/src/ui/app/mod.rs 1726
-crates/app/src/ui/editor.rs 1325
-crates/app/src/ui/app/workspace_tabs.rs 1285
+# Empty means every crates/**/*.rs file is currently under the soft limit.

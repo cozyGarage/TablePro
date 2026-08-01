@@ -27,6 +27,7 @@
 
 ### Changed
 
+- Linux UI and DDL modules split by domain: browse tab, grid, editor, app workspace helpers, and `sql_ddl` are directories of focused files instead of multi-thousand-line units
 - Read-only is enforced by policy classification (data-modifying CTEs blocked)
 - DatabaseService exposes only policy-gated connection handles
 - Roadmap and production audit rewritten to match the governed data-plane plan

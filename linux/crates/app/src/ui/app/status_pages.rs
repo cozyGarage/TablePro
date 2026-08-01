@@ -3,7 +3,7 @@ use relm4::{Component, ComponentController, ComponentSender, adw, gtk};
 
 use crate::ui::history_dialog::{HistoryDialog, HistoryDialogInit, HistoryDialogOutput};
 
-use super::{App, AppMsg, build_shortcuts_window};
+use super::{App, AppMsg, shortcuts};
 
 impl App {
     pub(super) fn show_welcome_page(&self, _sender: ComponentSender<Self>) {
@@ -79,7 +79,7 @@ impl App {
     }
 
     pub(super) fn on_show_shortcuts(&self) {
-        build_shortcuts_window(&self.window).present();
+        shortcuts::build_shortcuts_window(&self.window).present();
     }
 
     pub(super) fn on_show_about(&self) {
