@@ -11,12 +11,12 @@ mod ui;
 const APP_ID: &str = "com.tablepro.linux";
 
 fn main() {
+    i18n::init();
+
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
         .with_target(false)
         .init();
-
-    i18n::init();
 
     // Single-instance gate: belt-and-suspenders flock on top of
     // gtk::Application's DBus-based uniqueness, since the latter

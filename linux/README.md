@@ -43,15 +43,15 @@ System dependencies:
 ```bash
 # Ubuntu / Debian
 sudo apt install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
-  libgtksourceview-5-dev libssl-dev libsecret-1-dev
+  libgtksourceview-5-dev libssl-dev libsecret-1-dev libkrb5-dev clang
 
 # Fedora
 sudo dnf install -y gcc pkg-config gtk4-devel libadwaita-devel \
-  gtksourceview5-devel openssl-devel libsecret-devel
+  gtksourceview5-devel openssl-devel libsecret-devel krb5-devel clang
 
 # Arch
 sudo pacman -S --needed base-devel pkg-config gtk4 libadwaita \
-  gtksourceview5 openssl libsecret
+  gtksourceview5 openssl libsecret krb5 clang
 ```
 
 ```bash
@@ -65,6 +65,12 @@ Build and run:
 cd linux
 cargo run -p tablepro-app
 ```
+
+### SQL Server Kerberos
+
+Run `kinit` before connecting, then confirm the ticket with `klist`. Select **Windows (Kerberos)** in the SQL Server connection form and enter the server's real DNS hostname. SQL Server requests the service principal `MSSQLSvc/<host>:<port>`, including when SSH forwards the socket through localhost.
+
+The Flatpak can read the host Kerberos configuration and KCM socket. A FILE credential cache also works when `KRB5CCNAME` points inside the shared home directory. Custom SPN overrides and cross-realm setup are not exposed in the connection form.
 
 Local CI mirrors (prefer the cheap gate while iterating):
 

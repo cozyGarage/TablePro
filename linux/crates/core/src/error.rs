@@ -29,6 +29,9 @@ pub enum DriverError {
     #[error("driver internal error: {0}")]
     Internal(String),
 
+    #[error("integrated authentication failed: {0}")]
+    IntegratedAuth(String),
+
     /// Returned by `Connection::execute_in_transaction` when one of the
     /// statements failed; the index identifies which statement (so the
     /// UI can highlight the offending row) and `source` carries the

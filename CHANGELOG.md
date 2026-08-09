@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Count exactly** next to an estimated row total, to replace the estimate with a real count when you want it.
 - Reorder filter rows by dragging the grip on the left of each row, or with **Move Up** and **Move Down** in the row's right-click menu.
 - An **On Update** column in the Structure tab for MySQL and MariaDB, so a timestamp column can be set to update itself without writing the SQL by hand. (#2005)
+- Windows integrated authentication for SQL Server in the Linux app, using the current Kerberos ticket cache.
 
 ### Fixed
 
@@ -26,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Running a MongoDB query with no limit no longer pulls the whole collection into memory before applying the row limit.
 - Exporting a MongoDB query that has a skip or limit now exports that range, not the whole collection.
 - A row count estimate of zero from a table that was never analyzed no longer displays as an empty table.
+
+### Security
+
+- The Linux app initializes translations before worker threads start, avoiding unsafe concurrent locale changes.
 
 ## [0.61.0] - 2026-07-30
 

@@ -17,7 +17,7 @@ use drivers_oracle::OracleDriver;
 use drivers_postgres::PgDriver;
 use drivers_redis::RedisDriver;
 use drivers_sqlite::SqliteDriver;
-use tablepro_core::{ConnectOptions, Connection, DriverRegistry, TlsConfig};
+use tablepro_core::{AuthMode, ConnectOptions, Connection, DriverRegistry, TlsConfig};
 use tablepro_mcp::{
     ConnectionProvider, McpBridge, McpServerConfig, TokenPermissions, TokenStore, serve_stdio, serve_streamable_http,
 };
@@ -113,11 +113,20 @@ impl ConnectionProvider for DaemonProvider {
             .registry
             .get(&saved.driver_id)
             .ok_or_else(|| format!("driver {} not registered", saved.driver_id))?;
-        let password = load_password(saved.id)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| secrecy::SecretString::new(String::new().into()));
+        let password = match saved.auth_mode {
+            AuthMode::Password => load_password(saved.id)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| secrecy::SecretString::new(String::new().into())),
+            AuthMode::Kerberos => secrecy::SecretString::new(String::new().into()),
+        };
+        if saved.auth_mode == AuthMode::Kerberos && !driver.supports_integrated_auth() {
+            return Err(format!(
+                "the {} driver does not support Windows (Kerberos) authentication",
+                driver.display_name()
+            ));
+        }
 
         let opts = ConnectOptions {
             host: saved.host.clone(),
@@ -129,6 +138,8 @@ impl ConnectionProvider for DaemonProvider {
                 mode: saved.effective_tls_mode(),
                 ..Default::default()
             },
+            auth_mode: saved.auth_mode,
+            service_endpoint: None,
         };
         let raw = driver.connect(opts).await.map_err(|e| e.to_string())?;
         let ctx = GuardContext {

@@ -77,6 +77,8 @@ pub trait DatabaseDriver: Send + Sync {
     fn id(&self) -> &'static str;
     fn display_name(&self) -> &'static str;
     fn default_port(&self) -> u16;
+    fn is_file_based(&self) -> bool { false }
+    fn supports_integrated_auth(&self) -> bool { false }
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError>;
 }
 
@@ -138,6 +140,9 @@ Notes:
 
 - The `id()` is the stable string used in saved connection files. Once shipped, never change it. Pick something obvious and short (`postgres`, `mysql`, `clickhouse`).
 - `default_port()` is what the connection dialog pre-fills.
+- `is_file_based()` hides network, TLS, authentication, and SSH fields for file-backed drivers.
+- `supports_integrated_auth()` must return `true` only when `connect()` maps Kerberos mode to the driver's ambient ticket-cache authentication path. Unsupported modes are rejected before the driver connects.
+- When an SSH tunnel changes the dial address, use `ConnectOptions::service_address()` for protocol identity such as a TLS server name or Kerberos SPN.
 - `DriverError` is a `thiserror` enum in `tablepro-core`. Map underlying crate errors into the variants. Add a new variant only after PR discussion.
 
 `DatabaseDriver` also has defaulted hooks for engines that break an assumption the app otherwise makes. Override one only when the default is wrong for your engine:

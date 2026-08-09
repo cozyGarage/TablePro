@@ -1,13 +1,8 @@
 # Roadmap
 
-## Where we are (2026-07-30)
+## Where we are (2026-08-10)
 
-The Linux app is a working GTK4 / libadwaita client, not a spike. Roughly
-28k lines of Rust across 65 source files in `crates/`. Four drivers
-(PostgreSQL, MySQL, SQLite, MSSQL), SSH tunnels, multi-tab workspace,
-inline grid editing, structure/DDL editor, SQL editor with cancel and
-timeout, FTS5 query history, filter strip, CSV/JSON export, gettext
-wiring, Flatpak manifest, and Linux CI with ~294 tests.
+The Linux app is a working GTK4 / libadwaita client, not a spike. PostgreSQL, MySQL, SQLite, MSSQL, and ClickHouse are stable, with additional experimental drivers. It includes SSH jump chains, multi-tab browsing, SQL and structure editors, inline editing, query history, policy-gated MCP and agent access, packaging scaffolding, and hundreds of tests.
 
 Phases 0–1 and most of Phase 2 / Phase 3 from the April 2026 roadmap are
 done. Remaining work pivots away from DBeaver-parity checklists toward a
@@ -15,8 +10,7 @@ done. Remaining work pivots away from DBeaver-parity checklists toward a
 server, headless daemon, chat) must pass through, then agent access on
 top.
 
-See [`docs/production-audit.md`](docs/production-audit.md) for the gap
-analysis that drove this rewrite.
+The execution order now lives in the repository-level [`PLAN.md`](../PLAN.md). The stages below preserve the earlier roadmap history. [`docs/production-audit.md`](docs/production-audit.md) still needs the truthfulness refresh scheduled for Bookie Phase 3.
 
 ## Stage legend
 
@@ -45,6 +39,10 @@ multiplies calendar time by ~3.
 - [x] Fix metainfo (MSSQL, release date)
 - [x] MSSQL integration tests in CI
 - [x] `cargo-deny` and `cargo-audit` in the fast job
+- [x] Reconcile upstream Linux Kerberos support without replacing policy, MCP, audit, TLS modes, or SSH jump chains
+- [x] Separate SQL Server service identity from the local SSH dial endpoint
+- [x] Add Windows Kerberos authentication to GTK, saved connections, reconnect, agentd, CI, and packages
+- [x] Upgrade translation startup to the corrected `gettext-rs` 0.8 safety contract
 
 **Exit criterion**: a new contributor reading the docs is not misled about
 maturity, drivers, or next priorities. **Met.**
@@ -56,13 +54,11 @@ maturity, drivers, or next priorities. **Met.**
 **Goal**: fix real safety holes; introduce one policy chokepoint. No AI yet.
 This alone makes the app safer for production work.
 
-### Known holes (must close)
+### Remaining hardening
 
-1. **Read-only is bypassable.** `ReadOnlyConnection` passes `query` /
-   `query_params` through. A data-modifying CTE writes through a
-   "read-only" connection on PostgreSQL.
-2. **TLS encrypts but does not authenticate.** `Require` / `Required` /
-   `trust_cert()` skip certificate and hostname verification.
+1. Approval routing, read-only precedence, administrative SQL classification, MCP history isolation, and partial policy inheritance remain in Bookie Phase 1.
+2. Production and agent operations still need fail-closed audit behavior from Bookie Phase 2.
+3. PostgreSQL `VerifyFull` through SSH still needs separate sqlx dial and service identities. Phase 0 added the core endpoint model without downgrading TLS.
 
 ### Deliverables
 
@@ -78,9 +74,7 @@ This alone makes the app safer for production work.
 - [x] Test matrix: classifier corpus, guard × principal × environment,
       blast radius, masking, journal integrity
 
-**Exit criterion**: a data-modifying CTE on a read-only / Prod connection
-is denied or requires approval; TLS VerifyFull works; every guarded
-statement leaves a journal entry.
+**Exit criterion**: the foundation is implemented. The production-hardening exit criterion remains open until Bookie Phases 1, 2, and 4 close the policy, audit, PostgreSQL TLS, cancellation, and release-test gaps.
 
 ---
 
@@ -159,6 +153,7 @@ Reprioritized around the persona, not DBeaver parity.
       (Oracle registered only with `--features odpi`; maturity matrix in
       `docs/driver-maturity.md`)
 - [x] SSH jump-host chains
+- [x] SQL Server Windows integrated authentication through the current Kerberos ticket cache
 
 ---
 
@@ -187,8 +182,7 @@ CSV streaming covers the common path.
 
 - Runtime plugin system (see [ADR 0001](docs/decisions/0001-no-plugin-system.md))
 - RBAC / IdP / SSO / org-managed policy distribution / SIEM shipping
-  (single-user scope; policy engine and principal-aware journal leave the
-  door open without a rewrite)
+  (single-user scope; policy engine and principal-aware journal leave the door open without a rewrite)
 - Cross-platform Linux binary for macOS / Windows
 
 ## Realistic timeline

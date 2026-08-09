@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::StorageError;
-use tablepro_core::{Environment, TlsMode};
+use tablepro_core::{AuthMode, Environment, TlsMode};
 
 const CURRENT_VERSION: u32 = 1;
 
@@ -26,6 +26,8 @@ pub struct SavedConnection {
     pub tls_mode: Option<TlsMode>,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub auth_mode: AuthMode,
     #[serde(default)]
     pub environment: Environment,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -188,6 +190,7 @@ mod tests {
             use_tls: false,
             tls_mode: Some(TlsMode::Disabled),
             read_only: false,
+            auth_mode: AuthMode::Password,
             environment: Environment::Local,
             ssh: None,
             last_opened_at: None,
@@ -314,6 +317,41 @@ mod tests {
         assert_eq!(hops.len(), 2);
         assert_eq!(hops[0].host, "edge.example.com");
         assert_eq!(hops[1].host, "bastion.example.com");
+    }
+
+    #[tokio::test]
+    async fn auth_mode_defaults_to_password_for_legacy_connections() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let id = Uuid::new_v4();
+        let legacy = format!(
+            r#"{{"version":1,"connections":[{{
+                "id":"{id}","name":"Old","driver_id":"mssql",
+                "host":"localhost","port":1433,"database":"master",
+                "username":"sa","use_tls":false}}]}}"#
+        );
+        tokio::fs::write(&path, legacy).await.unwrap();
+
+        let loaded = load_from(&path).await.unwrap();
+
+        assert_eq!(loaded[0].auth_mode, AuthMode::Password);
+    }
+
+    #[tokio::test]
+    async fn kerberos_auth_mode_round_trips() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let mut connection = sample_connection();
+        connection.driver_id = "mssql".into();
+        connection.auth_mode = AuthMode::Kerberos;
+
+        save_to(&path, &[connection.clone()]).await.unwrap();
+        let bytes = tokio::fs::read(&path).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let loaded = load_from(&path).await.unwrap();
+
+        assert_eq!(json["connections"][0]["auth_mode"], "kerberos");
+        assert_eq!(loaded, vec![connection]);
     }
 
     #[tokio::test]

@@ -1,21 +1,17 @@
 # Contributor License Agreement
 
-By submitting a contribution (pull request, patch, or other modification) to
-this project, you agree to the following terms:
+By submitting a contribution (pull request, patch, or other modification) to this project, you agree to the following terms:
 
 ## 1. Grant of Rights
 
 You grant Ngo Quoc Dat (the "Maintainer") a perpetual, worldwide,
 non-exclusive, royalty-free, irrevocable license to use, reproduce, modify,
 display, perform, sublicense, and distribute your contribution as part of
-TablePro under any license terms the Maintainer chooses, including proprietary
-licenses.
+TablePro under any license terms the Maintainer chooses, including proprietary licenses.
 
 ## 2. Why This Is Needed
 
-TablePro is licensed under AGPLv3 for the open-source community. However, the
-Maintainer offers premium features under a separate commercial license. This CLA
-allows the Maintainer to:
+TablePro is licensed under AGPLv3 for the open-source community. However, the Maintainer offers premium features under a separate commercial license. This CLA allows the Maintainer to:
 
 - Distribute TablePro with premium features under commercial terms
 - Relicense contributions if needed (e.g., linking with non-AGPL dependencies)
@@ -27,8 +23,7 @@ licensing change, making commercial licensing impractical.
 
 You represent that:
 
-- You are the original author of the contribution, or have the right to submit
-  it.
+- You are the original author of the contribution, or have the right to submitit.
 - Your contribution does not violate any third-party rights (patents,
   copyrights, trade secrets, etc.).
 - You are not aware of any claims or litigation regarding the contribution.

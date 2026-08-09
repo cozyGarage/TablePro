@@ -60,5 +60,9 @@ pub trait DatabaseDriver: Send + Sync {
         true
     }
 
+    fn supports_integrated_auth(&self) -> bool {
+        false
+    }
+
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError>;
 }

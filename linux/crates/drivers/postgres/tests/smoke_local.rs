@@ -32,6 +32,7 @@ fn opts_from_env() -> ConnectOptions {
                 .into(),
         ),
         tls: tablepro_core::TlsConfig::disabled(),
+        ..Default::default()
     }
 }
 

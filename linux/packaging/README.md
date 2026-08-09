@@ -45,7 +45,7 @@ To repackage already-built release binaries without waiting on cargo:
 DEB_SKIP_BUILD=1 ./scripts/build-deb.sh
 ```
 
-Build-Depends (source package): `cargo`, `rustc (>= 1.93)`, `libgtk-4-dev`, `libadwaita-1-dev`, `libgtksourceview-5-dev`, `libssl-dev`, `libsecret-1-dev`, `gettext`.
+Build-Depends (source package): `cargo`, `rustc (>= 1.93)`, `libgtk-4-dev`, `libadwaita-1-dev`, `libgtksourceview-5-dev`, `libssl-dev`, `libsecret-1-dev`, `libkrb5-dev`, `clang`, `gettext`.
 
 Default app builds omit the optional `duckdb` Cargo feature (bundled DuckDB is large). Pass `--features duckdb` to `cargo build` if you need that driver in a custom package.
 

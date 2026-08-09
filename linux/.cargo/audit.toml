@@ -5,4 +5,5 @@
 ignore = [
     # No fixed release. Pulled by russh (SSH) and sqlx-mysql (auth plugins).
     "RUSTSEC-2023-0071",
+    "RUSTSEC-2026-0235",
 ]

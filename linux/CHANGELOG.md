@@ -26,10 +26,11 @@
 - Rust file-size guardrail in preflight: soft 1200 / hard 1800 lines, with ratchet ceilings in `file-size-baselines.txt`
 - Driver maturity labels in the Connect dialog (Experimental subtitle for Redis, MongoDB, DuckDB, and Oracle)
 - Driver maturity matrix in `docs/driver-maturity.md`
+- Windows integrated authentication for SQL Server through the current Kerberos ticket cache
 
 ### Changed
 
-- MSSQL (tiberius) uses native-tls instead of the pinned rustls 0.21 stack
+- MSSQL uses native TLS and keeps its Kerberos service identity when SSH forwards the socket through localhost
 - Workspace crates declare AGPL-3.0-or-later; cargo-deny allows that license and documents the rsa Marvin advisory ignore
 - Linux UI and DDL modules split by domain: browse tab, grid, editor, app workspace helpers, and `sql_ddl` are directories of focused files instead of multi-thousand-line units
 - Read-only is enforced by policy classification (data-modifying CTEs blocked)
@@ -60,3 +61,4 @@
 - Agent results masked for sensitive column name patterns by default
 - MCP tokens with an empty connection allowlist can no longer touch any connection
 - SSH stack upgraded to russh 0.60.3 (fixes unbounded allocation advisories and drops vulnerable libcrux 0.0.4)
+- Translation locale initialization runs before worker threads and uses the corrected gettext safety contract

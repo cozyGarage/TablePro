@@ -15,13 +15,17 @@
         "--socket=wayland",
         "--device=dri",
         "--filesystem=home",
+        "--filesystem=host-etc:ro",
+        "--filesystem=/run/.heim_org.h5l.kcm-socket",
+        "--env=KRB5_CONFIG=/run/host/etc/krb5.conf",
         "--talk-name=org.freedesktop.secrets"
     ],
     "build-options": {
         "append-path": "/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm19/bin",
         "prepend-ld-library-path": "/usr/lib/sdk/llvm19/lib",
         "env": {
-            "CARGO_HOME": "/run/build/tablepro-app/cargo"
+            "CARGO_HOME": "/run/build/tablepro-app/cargo",
+            "LIBCLANG_PATH": "/usr/lib/sdk/llvm19/lib"
         }
     },
     "modules": [

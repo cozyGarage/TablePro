@@ -6,7 +6,7 @@ pkgdesc="Native Linux database client (GTK4 / libadwaita)"
 arch=('x86_64')
 url="https://github.com/TableProApp/TablePro"
 license=('AGPL-3.0-or-later')
-depends=('gtk4' 'libadwaita' 'gtksourceview5' 'libsecret' 'openssl')
+depends=('gtk4' 'libadwaita' 'gtksourceview5' 'libsecret' 'openssl' 'krb5')
 makedepends=('cargo' 'git' 'pkgconf' 'clang' 'mold')
 source=("$pkgname-$pkgver::git+https://github.com/TableProApp/TablePro.git#branch=linux")
 sha256sums=('SKIP')

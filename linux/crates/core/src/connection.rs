@@ -1,10 +1,19 @@
 use async_trait::async_trait;
 use secrecy::SecretString;
+use serde::{Deserialize, Serialize};
 
 use crate::error::DriverError;
 use crate::query::{ColumnInfo, ExecResult, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo, Value};
 use crate::tls::TlsConfig;
 use crate::transaction::Transaction;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthMode {
+    #[default]
+    Password,
+    Kerberos,
+}
 
 #[derive(Debug, Clone)]
 pub struct ConnectOptions {
@@ -14,6 +23,16 @@ pub struct ConnectOptions {
     pub username: String,
     pub password: SecretString,
     pub tls: TlsConfig,
+    pub auth_mode: AuthMode,
+    pub service_endpoint: Option<(String, u16)>,
+}
+
+impl ConnectOptions {
+    pub fn service_address(&self) -> (&str, u16) {
+        self.service_endpoint
+            .as_ref()
+            .map_or((self.host.as_str(), self.port), |(host, port)| (host.as_str(), *port))
+    }
 }
 
 impl Default for ConnectOptions {
@@ -25,6 +44,8 @@ impl Default for ConnectOptions {
             username: String::new(),
             password: SecretString::new(String::new().into()),
             tls: TlsConfig::disabled(),
+            auth_mode: AuthMode::Password,
+            service_endpoint: None,
         }
     }
 }
@@ -95,4 +116,32 @@ pub trait Connection: Send + Sync {
     }
     async fn ping(&self) -> Result<(), DriverError>;
     async fn close(self: Box<Self>) -> Result<(), DriverError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_address_uses_dial_endpoint_for_direct_connections() {
+        let options = ConnectOptions {
+            host: "sql.corp.example".into(),
+            port: 1433,
+            ..Default::default()
+        };
+
+        assert_eq!(options.service_address(), ("sql.corp.example", 1433));
+    }
+
+    #[test]
+    fn service_address_preserves_service_identity_through_tunnels() {
+        let options = ConnectOptions {
+            host: "127.0.0.1".into(),
+            port: 54321,
+            service_endpoint: Some(("sql.corp.example".into(), 1433)),
+            ..Default::default()
+        };
+
+        assert_eq!(options.service_address(), ("sql.corp.example", 1433));
+    }
 }

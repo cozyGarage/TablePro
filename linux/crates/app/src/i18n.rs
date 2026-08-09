@@ -3,7 +3,9 @@ use gettextrs::{LocaleCategory, bind_textdomain_codeset, bindtextdomain, setloca
 pub const DOMAIN: &str = "tablepro";
 
 pub fn init() {
-    setlocale(LocaleCategory::LcAll, "");
+    unsafe {
+        setlocale(LocaleCategory::LcAll, "");
+    }
     let dir = locale_dir();
     if let Err(e) = bindtextdomain(DOMAIN, dir) {
         tracing::debug!(error = %e, "bindtextdomain failed; falling back to msgid");

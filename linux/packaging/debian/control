@@ -12,6 +12,8 @@ Build-Depends:
  libgtksourceview-5-dev,
  libssl-dev,
  libsecret-1-dev,
+ libkrb5-dev,
+ clang,
  gettext
 Standards-Version: 4.7.0
 Homepage: https://github.com/TableProApp/TablePro

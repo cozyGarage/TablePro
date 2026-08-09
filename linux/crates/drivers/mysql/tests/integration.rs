@@ -27,6 +27,7 @@ async fn start_mysql() -> (ContainerAsync<Mysql>, ConnectOptions) {
         username: "root".into(),
         password: secrecy::SecretString::new("tablepro_test".to_string().into()),
         tls: tablepro_core::TlsConfig::disabled(),
+        ..Default::default()
     };
     (container, opts)
 }

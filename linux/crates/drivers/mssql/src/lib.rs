@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use futures::TryStreamExt;
@@ -12,8 +14,8 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 use tablepro_core::sql_dialect::build_order_and_pagination;
 use tablepro_core::{
-    ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, ForeignKeyInfo, IndexInfo,
-    MAX_QUERY_ROWS, QueryResult, TableInfo, Value,
+    AuthMode, ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, ForeignKeyInfo,
+    IndexInfo, MAX_QUERY_ROWS, QueryResult, TableInfo, Value,
 };
 
 type MssqlClient = Client<Compat<TcpStream>>;
@@ -21,6 +23,24 @@ type MssqlClient = Client<Compat<TcpStream>>;
 /// Matches the `acquire_timeout` the sqlx-backed drivers give their
 /// pools, so a dead host fails at the same speed on every engine.
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+static KERBEROS_CONNECTING: AtomicBool = AtomicBool::new(false);
+
+struct KerberosAttempt;
+
+impl KerberosAttempt {
+    fn acquire() -> Result<Self, DriverError> {
+        KERBEROS_CONNECTING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| Self)
+            .map_err(|_| DriverError::IntegratedAuth("another Kerberos connection attempt is still running".into()))
+    }
+}
+
+impl Drop for KerberosAttempt {
+    fn drop(&mut self) {
+        KERBEROS_CONNECTING.store(false, Ordering::Release);
+    }
+}
 
 pub struct MssqlDriver;
 
@@ -42,51 +62,93 @@ impl DatabaseDriver for MssqlDriver {
         true
     }
 
-    async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
-        let mut config = Config::new();
-        config.host(&opts.host);
-        config.port(opts.port);
-        config.database(&opts.database);
-        config.authentication(AuthMethod::sql_server(&opts.username, opts.password.expose_secret()));
-        use tablepro_core::TlsMode;
-        match opts.tls.mode {
-            TlsMode::Disabled => {
-                config.encryption(EncryptionLevel::Off);
-                config.trust_cert();
-            }
-            TlsMode::Prefer | TlsMode::Require => {
-                // Encrypt without authenticating the server (legacy /
-                // TOFU transition). Prefer behaves like Require here
-                // because TDS always negotiates encryption at login.
-                config.encryption(EncryptionLevel::Required);
-                config.trust_cert();
-            }
-            TlsMode::VerifyCa | TlsMode::VerifyFull => {
-                config.encryption(EncryptionLevel::Required);
-                // Do not call trust_cert(); native-tls verifies the chain.
-            }
-        }
-
-        // Neither the TCP dial nor the TDS login has its own deadline,
-        // and an unreachable host would otherwise hang the connect
-        // dialog for the OS SYN timeout. The budget covers both so the
-        // failure arrives on the same scale as the sqlx drivers'
-        // acquire_timeout.
-        tokio::time::timeout(CONNECT_TIMEOUT, async {
-            let tcp = TcpStream::connect(config.get_addr()).await.map_err(map_io_error)?;
-            tcp.set_nodelay(true).map_err(map_io_error)?;
-            Client::connect(config, tcp.compat_write())
-                .await
-                .map_err(map_tiberius_error)
-        })
-        .await
-        .map_err(|_| DriverError::ConnectionRefused)?
-        .map(|client| {
-            Box::new(MssqlConnection {
-                client: Mutex::new(client),
-            }) as Box<dyn Connection>
-        })
+    fn supports_integrated_auth(&self) -> bool {
+        true
     }
+
+    async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
+        let target = build_target(&opts);
+        let client = match opts.auth_mode {
+            AuthMode::Password => tokio::time::timeout(CONNECT_TIMEOUT, open_client(target))
+                .await
+                .map_err(|_| DriverError::ConnectionRefused)??,
+            AuthMode::Kerberos => open_kerberos_client(target).await?,
+        };
+
+        Ok(Box::new(MssqlConnection {
+            client: Mutex::new(client),
+        }))
+    }
+}
+
+struct MssqlTarget {
+    config: Config,
+    dial_host: String,
+    dial_port: u16,
+}
+
+fn build_target(opts: &ConnectOptions) -> MssqlTarget {
+    let (service_host, service_port) = opts.service_address();
+    let mut config = Config::new();
+    config.host(service_host);
+    config.port(service_port);
+    config.database(&opts.database);
+    config.authentication(auth_method(opts));
+    use tablepro_core::TlsMode;
+    match opts.tls.mode {
+        TlsMode::Disabled => {
+            config.encryption(EncryptionLevel::Off);
+            config.trust_cert();
+        }
+        TlsMode::Prefer | TlsMode::Require => {
+            config.encryption(EncryptionLevel::Required);
+            config.trust_cert();
+        }
+        TlsMode::VerifyCa | TlsMode::VerifyFull => {
+            config.encryption(EncryptionLevel::Required);
+        }
+    }
+
+    MssqlTarget {
+        config,
+        dial_host: dial_host(&opts.host).to_string(),
+        dial_port: opts.port,
+    }
+}
+
+fn auth_method(opts: &ConnectOptions) -> AuthMethod {
+    match opts.auth_mode {
+        AuthMode::Password => AuthMethod::sql_server(&opts.username, opts.password.expose_secret()),
+        AuthMode::Kerberos => AuthMethod::Integrated,
+    }
+}
+
+fn dial_host(host: &str) -> &str {
+    if host == "." { "localhost" } else { host }
+}
+
+async fn open_kerberos_client(target: MssqlTarget) -> Result<MssqlClient, DriverError> {
+    let attempt = KerberosAttempt::acquire()?;
+    let handle = tokio::runtime::Handle::current();
+    let connecting = tokio::task::spawn_blocking(move || {
+        let _attempt = attempt;
+        handle.block_on(open_client(target))
+    });
+    match tokio::time::timeout(CONNECT_TIMEOUT, connecting).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => Err(DriverError::Internal(error.to_string())),
+        Err(_) => Err(DriverError::ConnectionRefused),
+    }
+}
+
+async fn open_client(target: MssqlTarget) -> Result<MssqlClient, DriverError> {
+    let tcp = TcpStream::connect((target.dial_host.as_str(), target.dial_port))
+        .await
+        .map_err(map_io_error)?;
+    tcp.set_nodelay(true).map_err(map_io_error)?;
+    Client::connect(target.config, tcp.compat_write())
+        .await
+        .map_err(map_tiberius_error)
 }
 
 struct MssqlConnection {
@@ -672,6 +734,7 @@ fn map_tiberius_error(err: tiberius::error::Error) -> DriverError {
                 }
             }
         }
+        E::Gssapi(detail) => DriverError::IntegratedAuth(detail),
         E::Routing { host, port } => DriverError::Internal(format!("server requested routing to {host}:{port}")),
         other => DriverError::Internal(other.to_string()),
     }
@@ -688,6 +751,80 @@ mod tests {
         assert_eq!(d.display_name(), "SQL Server");
         assert_eq!(d.default_port(), 1433);
         assert!(!d.is_file_based());
+        assert!(d.supports_integrated_auth());
+    }
+
+    fn direct_options() -> ConnectOptions {
+        ConnectOptions {
+            host: "sql.corp.example".into(),
+            port: 1433,
+            database: "sales".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn direct_connection_uses_service_identity_as_dial_endpoint() {
+        let target = build_target(&direct_options());
+
+        assert_eq!(target.config.get_addr(), "sql.corp.example:1433");
+        assert_eq!(
+            (target.dial_host.as_str(), target.dial_port),
+            ("sql.corp.example", 1433)
+        );
+    }
+
+    #[test]
+    fn tunnel_connection_uses_service_identity_for_tls_and_spn() {
+        let options = ConnectOptions {
+            host: "127.0.0.1".into(),
+            port: 54321,
+            service_endpoint: Some(("sql.corp.example".into(), 1433)),
+            ..direct_options()
+        };
+        let target = build_target(&options);
+
+        assert_eq!(target.config.get_addr(), "sql.corp.example:1433");
+        assert_eq!((target.dial_host.as_str(), target.dial_port), ("127.0.0.1", 54321));
+    }
+
+    #[test]
+    fn local_server_shorthand_dials_localhost() {
+        let options = ConnectOptions {
+            host: ".".into(),
+            ..direct_options()
+        };
+        let target = build_target(&options);
+
+        assert_eq!(target.config.get_addr(), "localhost:1433");
+        assert_eq!(target.dial_host, "localhost");
+    }
+
+    #[test]
+    fn kerberos_connect_attempts_do_not_accumulate() {
+        let first = KerberosAttempt::acquire().unwrap();
+        assert!(KerberosAttempt::acquire().is_err());
+        drop(first);
+        assert!(KerberosAttempt::acquire().is_ok());
+    }
+
+    #[test]
+    fn kerberos_uses_integrated_authentication() {
+        let options = ConnectOptions {
+            auth_mode: AuthMode::Kerberos,
+            username: "ignored".into(),
+            ..direct_options()
+        };
+
+        assert_eq!(auth_method(&options), AuthMethod::Integrated);
+        assert_eq!(auth_method(&direct_options()), AuthMethod::sql_server("", ""));
+    }
+
+    #[test]
+    fn gssapi_errors_are_classified_as_integrated_authentication_failures() {
+        let error = map_tiberius_error(tiberius::error::Error::Gssapi("ticket expired".into()));
+
+        assert!(matches!(error, DriverError::IntegratedAuth(detail) if detail == "ticket expired"));
     }
 
     #[test]

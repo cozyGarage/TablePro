@@ -32,6 +32,7 @@ async fn start_pg() -> (ContainerAsync<Postgres>, ConnectOptions) {
         username: "postgres".into(),
         password: secrecy::SecretString::new("postgres".to_string().into()),
         tls: tablepro_core::TlsConfig::disabled(),
+        ..Default::default()
     };
     (container, opts)
 }

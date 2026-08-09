@@ -54,7 +54,7 @@ Section: database
 Priority: optional
 Architecture: ${ARCH}
 Maintainer: TablePro Contributors <noreply@tablepro.app>
-Depends: libgtk-4-1, libadwaita-1-0, libgtksourceview-5-0, libsecret-1-0
+Depends: libgtk-4-1, libadwaita-1-0, libgtksourceview-5-0, libsecret-1-0, libgssapi-krb5-2, libkrb5-3
 Description: Native Linux database client
  TablePro is a fast, native GTK4 / libadwaita database client with
  policy-gated agent access (MCP) and a headless agentd binary.

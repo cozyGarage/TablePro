@@ -6,9 +6,10 @@ use relm4::{adw, gtk};
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
-use tablepro_core::{ConnectOptions, DriverMaturity, DriverRegistry, Environment, TableInfo, TlsMode};
+use tablepro_core::{AuthMode, ConnectOptions, DriverMaturity, DriverRegistry, Environment, TableInfo, TlsMode};
 use tablepro_storage::{
-    SavedConnection, SavedSshConfig, save_connections, store_password, store_ssh_passphrase, store_ssh_password,
+    SavedConnection, SavedSshConfig, delete_password, save_connections, store_password, store_ssh_passphrase,
+    store_ssh_password,
 };
 
 use super::ssh_section::{SshInputs, SshSecretToStore, SshSection};
@@ -24,6 +25,7 @@ pub struct ConnectDialog {
     database: adw::EntryRow,
     username: adw::EntryRow,
     password: adw::PasswordEntryRow,
+    auth_combo: adw::ComboRow,
     tls_mode: adw::ComboRow,
     read_only: adw::SwitchRow,
     environment: adw::ComboRow,
@@ -32,6 +34,7 @@ pub struct ConnectDialog {
     test_button: gtk::Button,
     submit: gtk::Button,
     toast_overlay: adw::ToastOverlay,
+    form: AuthFormState,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +42,44 @@ struct DriverEntry {
     id: String,
     display_name: String,
     maturity: DriverMaturity,
+}
+
+const AUTH_MODE_ROWS: [AuthMode; 2] = [AuthMode::Password, AuthMode::Kerberos];
+
+fn auth_mode_label(mode: AuthMode) -> String {
+    match mode {
+        AuthMode::Password => crate::tr!("Password"),
+        AuthMode::Kerberos => crate::tr!("Windows (Kerberos)"),
+    }
+}
+
+fn auth_mode_for_row(row: u32) -> AuthMode {
+    AUTH_MODE_ROWS.get(row as usize).copied().unwrap_or_default()
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct AuthFormState {
+    file_based: bool,
+    supports_integrated: bool,
+    selected: AuthMode,
+}
+
+impl AuthFormState {
+    fn mode(self) -> AuthMode {
+        if self.shows_method() {
+            self.selected
+        } else {
+            AuthMode::Password
+        }
+    }
+
+    fn shows_method(self) -> bool {
+        !self.file_based && self.supports_integrated
+    }
+
+    fn shows_credentials(self) -> bool {
+        !self.file_based && self.mode() == AuthMode::Password
+    }
 }
 
 pub struct ConnectDialogInit {
@@ -50,6 +91,7 @@ pub enum ConnectDialogInput {
     DriverChanged(u32),
     SshToggled,
     SshAuthChanged,
+    AuthModeChanged,
     Submit,
     TestConnection,
     InputChanged,
@@ -200,9 +242,22 @@ impl Component for ConnectDialog {
         connection_group.add(&port);
         connection_group.add(&database);
 
+        let auth_labels: Vec<String> = AUTH_MODE_ROWS.iter().map(|mode| auth_mode_label(*mode)).collect();
+        let auth_labels_ref: Vec<&str> = auth_labels.iter().map(String::as_str).collect();
+        let auth_mode_model = gtk::StringList::new(&auth_labels_ref);
+        let auth_combo = adw::ComboRow::builder()
+            .title(crate::tr!("Method"))
+            .model(&auth_mode_model)
+            .build();
+        let sender_for_auth_mode = sender.clone();
+        auth_combo.connect_selected_notify(move |_| {
+            sender_for_auth_mode.input(ConnectDialogInput::AuthModeChanged);
+        });
+
         let auth_group = adw::PreferencesGroup::builder()
             .title(crate::tr!("Authentication"))
             .build();
+        auth_group.add(&auth_combo);
         auth_group.add(&username);
         auth_group.add(&password);
 
@@ -232,7 +287,7 @@ impl Component for ConnectDialog {
         let toast_overlay = adw::ToastOverlay::new();
         toast_overlay.set_child(Some(&page));
 
-        let model = ConnectDialog {
+        let mut model = ConnectDialog {
             registry: init.registry,
             drivers: drivers.clone(),
             driver_combo,
@@ -241,6 +296,7 @@ impl Component for ConnectDialog {
             database,
             username,
             password,
+            auth_combo,
             tls_mode,
             read_only,
             environment,
@@ -249,6 +305,7 @@ impl Component for ConnectDialog {
             test_button,
             submit,
             toast_overlay,
+            form: AuthFormState::default(),
         };
         let widgets = view_output!();
 
@@ -274,7 +331,7 @@ impl Component for ConnectDialog {
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, root: &Self::Root) {
         match msg {
             ConnectDialogInput::DriverChanged(idx) => {
-                let Some(entry) = self.drivers.get(idx as usize) else {
+                let Some(entry) = self.drivers.get(idx as usize).cloned() else {
                     return;
                 };
                 if let Some(driver) = self.registry.get(&entry.id) {
@@ -283,6 +340,7 @@ impl Component for ConnectDialog {
                 }
                 self.refresh_driver_maturity_subtitle();
                 root.set_title(&crate::tr!("Connect to {name}").replace("{name}", &entry.display_name));
+                self.refresh_validity();
             }
 
             ConnectDialogInput::SshToggled => {
@@ -291,6 +349,12 @@ impl Component for ConnectDialog {
 
             ConnectDialogInput::SshAuthChanged => {
                 self.ssh.refresh_auth_visibility();
+                self.refresh_validity();
+            }
+
+            ConnectDialogInput::AuthModeChanged => {
+                self.form.selected = auth_mode_for_row(self.auth_combo.selected());
+                self.apply_form_state();
                 self.refresh_validity();
             }
 
@@ -317,17 +381,12 @@ impl Component for ConnectDialog {
                     }
                 };
 
-                let opts = ConnectOptions {
-                    host: self.host.text().to_string(),
-                    port: self.port.value() as u16,
-                    database: self.database.text().to_string(),
-                    username: self.username.text().to_string(),
-                    password: SecretString::new(self.password.text().to_string().into()),
-                    tls: self.tls_config_for(driver.as_ref()),
-                };
+                let opts = self.collect_options(driver.as_ref());
 
                 let label = if entry.id == "sqlite" {
                     opts.database.clone()
+                } else if opts.auth_mode == AuthMode::Kerberos {
+                    opts.host.clone()
                 } else {
                     format!("{}@{}", opts.username, opts.host)
                 };
@@ -381,14 +440,7 @@ impl Component for ConnectDialog {
                     self.show_toast(&crate::tr!("Driver {id} not registered").replace("{id}", &entry.id));
                     return;
                 };
-                let opts = ConnectOptions {
-                    host: self.host.text().to_string(),
-                    port: self.port.value() as u16,
-                    database: self.database.text().to_string(),
-                    username: self.username.text().to_string(),
-                    password: SecretString::new(self.password.text().to_string().into()),
-                    tls: self.tls_config_for(driver.as_ref()),
-                };
+                let opts = self.collect_options(driver.as_ref());
                 let ssh_inputs = if self.ssh.is_enabled() {
                     match self.ssh.collect() {
                         Ok(inputs) => Some(vec![inputs.cfg]),
@@ -456,11 +508,11 @@ impl ConnectDialog {
         let database_empty = self.database.text().trim().is_empty();
         toggle_error(&self.database, database_empty);
 
-        let host_required = self.host.is_visible();
+        let host_required = !self.form.file_based;
         let host_empty = host_required && self.host.text().trim().is_empty();
         toggle_error(&self.host, host_empty);
 
-        let username_required = self.username.is_visible();
+        let username_required = self.form.shows_credentials();
         let username_empty = username_required && self.username.text().trim().is_empty();
         toggle_error(&self.username, username_empty);
 
@@ -473,11 +525,11 @@ impl ConnectDialog {
         if self.database.text().trim().is_empty() {
             return false;
         }
-        if self.host.is_visible() {
+        if !self.form.file_based {
             if self.host.text().trim().is_empty() {
                 return false;
             }
-            if self.username.text().trim().is_empty() {
+            if self.form.shows_credentials() && self.username.text().trim().is_empty() {
                 return false;
             }
         }
@@ -509,22 +561,46 @@ impl ConnectDialog {
         crate::services::connection_service::tls_config(mode)
     }
 
-    fn apply_driver_form_visibility(&self, driver: &dyn tablepro_core::DatabaseDriver) {
-        let file_based = driver.is_file_based();
-        self.host.set_visible(!file_based);
-        self.port.set_visible(!file_based);
-        self.username.set_visible(!file_based);
-        self.password.set_visible(!file_based);
-        self.tls_mode.set_visible(!file_based);
-        // For file-based drivers (SQLite), only Connection + Options
-        // groups make sense; hide Authentication and SSH entirely.
-        self.auth_group.set_visible(!file_based);
-        self.ssh.set_visible(!file_based);
-        self.database.set_title(&if file_based {
+    fn apply_driver_form_visibility(&mut self, driver: &dyn tablepro_core::DatabaseDriver) {
+        self.form.file_based = driver.is_file_based();
+        self.form.supports_integrated = driver.supports_integrated_auth();
+        self.apply_form_state();
+        self.database.set_title(&if self.form.file_based {
             crate::tr!("File path")
         } else {
             crate::tr!("Database")
         });
+    }
+
+    fn apply_form_state(&self) {
+        let network = !self.form.file_based;
+        self.host.set_visible(network);
+        self.port.set_visible(network);
+        self.tls_mode.set_visible(network);
+        self.auth_group.set_visible(network);
+        self.ssh.set_visible(network);
+        self.auth_combo.set_visible(self.form.shows_method());
+        let credentials = self.form.shows_credentials();
+        self.username.set_visible(credentials);
+        self.password.set_visible(credentials);
+    }
+
+    fn collect_options(&self, driver: &dyn tablepro_core::DatabaseDriver) -> ConnectOptions {
+        let (username, password) = if self.form.shows_credentials() {
+            (self.username.text().to_string(), self.password.text().to_string())
+        } else {
+            (String::new(), String::new())
+        };
+        ConnectOptions {
+            host: self.host.text().to_string(),
+            port: self.port.value() as u16,
+            database: self.database.text().to_string(),
+            username,
+            password: SecretString::new(password.into()),
+            tls: self.tls_config_for(driver),
+            auth_mode: self.form.mode(),
+            service_endpoint: None,
+        }
     }
 
     fn refresh_driver_maturity_subtitle(&self) {
@@ -596,10 +672,11 @@ async fn run_connect(
     let server_version = conn.server_version().await.ok().flatten();
     let tables = conn.list_tables().await.map_err(|e| format!("list_tables: {e}"))?;
 
-    let id = match find_existing_id(&driver_id, &opts_clone, ssh.as_ref()).await {
-        Some(id) => id,
-        None => Uuid::new_v4(),
-    };
+    let existing = find_existing(&driver_id, &opts_clone, driver.is_file_based(), ssh.as_ref()).await;
+    let id = existing
+        .as_ref()
+        .map(|connection| connection.id)
+        .unwrap_or_else(Uuid::new_v4);
 
     let tls_mode = opts_clone.tls.mode;
     let saved = SavedConnection {
@@ -612,6 +689,7 @@ async fn run_connect(
         username: opts_clone.username.clone(),
         use_tls: tls_mode.encrypts(),
         tls_mode: Some(tls_mode),
+        auth_mode: opts_clone.auth_mode,
         read_only,
         environment,
         ssh: ssh.as_ref().map(|s| s.saved.clone()),
@@ -619,7 +697,26 @@ async fn run_connect(
     };
 
     save_one(&saved).await.map_err(|e| format!("save: {e}"))?;
-    let _ = store_password(saved.id, stored_password.expose_secret(), &label).await;
+    match saved.auth_mode {
+        AuthMode::Password => {
+            let _ = store_password(saved.id, stored_password.expose_secret(), &label).await;
+        }
+        AuthMode::Kerberos
+            if existing
+                .as_ref()
+                .is_some_and(|connection| connection.auth_mode == AuthMode::Password) =>
+        {
+            if let Err(error) = delete_password(saved.id).await {
+                if let Some(previous) = &existing {
+                    save_one(previous)
+                        .await
+                        .map_err(|rollback_error| format!("restore saved connection: {rollback_error}"))?;
+                }
+                return Err(format!("delete stored password: {error}"));
+            }
+        }
+        AuthMode::Kerberos => {}
+    }
     if let Some(s) = &ssh {
         match &s.secret_to_store {
             SshSecretToStore::Password(p) => {
@@ -656,19 +753,57 @@ async fn save_one(connection: &SavedConnection) -> Result<(), tablepro_storage::
     save_connections(&existing).await
 }
 
-async fn find_existing_id(driver_id: &str, opts: &ConnectOptions, ssh: Option<&SshInputs>) -> Option<Uuid> {
+async fn find_existing(
+    driver_id: &str,
+    opts: &ConnectOptions,
+    file_based: bool,
+    ssh: Option<&SshInputs>,
+) -> Option<SavedConnection> {
     let existing = tablepro_storage::load_connections().await.ok()?;
-    existing
-        .into_iter()
-        .find(|c| {
-            c.driver_id == driver_id
-                && c.host == opts.host
-                && c.port == opts.port
-                && c.database == opts.database
-                && c.username == opts.username
-                && saved_ssh_matches(&c.ssh, ssh)
-        })
-        .map(|c| c.id)
+    select_existing(&existing, driver_id, opts, file_based, ssh).cloned()
+}
+
+fn select_existing<'a>(
+    existing: &'a [SavedConnection],
+    driver_id: &str,
+    opts: &ConnectOptions,
+    file_based: bool,
+    ssh: Option<&SshInputs>,
+) -> Option<&'a SavedConnection> {
+    let candidates: Vec<_> = existing
+        .iter()
+        .filter(|saved| matches_endpoint(saved, driver_id, opts, file_based, ssh))
+        .collect();
+    candidates
+        .iter()
+        .copied()
+        .find(|saved| file_based || saved.username == opts.username && saved.auth_mode == opts.auth_mode)
+        .or_else(|| (candidates.len() == 1).then(|| candidates[0]))
+}
+
+fn matches_endpoint(
+    saved: &SavedConnection,
+    driver_id: &str,
+    opts: &ConnectOptions,
+    file_based: bool,
+    ssh: Option<&SshInputs>,
+) -> bool {
+    if saved.driver_id != driver_id || saved.database != opts.database {
+        return false;
+    }
+    file_based || saved.host == opts.host && saved.port == opts.port && saved_ssh_matches(&saved.ssh, ssh)
+}
+
+#[cfg(test)]
+fn matches_existing(
+    saved: &SavedConnection,
+    driver_id: &str,
+    opts: &ConnectOptions,
+    file_based: bool,
+    ssh: Option<&SshInputs>,
+) -> bool {
+    matches_endpoint(saved, driver_id, opts, file_based, ssh)
+        && (file_based || saved.username == opts.username && saved.auth_mode == opts.auth_mode)
 }
 
 fn saved_ssh_matches(saved: &Option<SavedSshConfig>, current: Option<&SshInputs>) -> bool {
@@ -676,5 +811,177 @@ fn saved_ssh_matches(saved: &Option<SavedSshConfig>, current: Option<&SshInputs>
         (None, None) => true,
         (Some(s), Some(c)) => &c.saved == s,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_form_state_drives_mode_and_visibility() {
+        let cases = [
+            (AuthFormState::default(), AuthMode::Password, false, true),
+            (
+                AuthFormState {
+                    file_based: false,
+                    supports_integrated: true,
+                    selected: AuthMode::Password,
+                },
+                AuthMode::Password,
+                true,
+                true,
+            ),
+            (
+                AuthFormState {
+                    file_based: false,
+                    supports_integrated: true,
+                    selected: AuthMode::Kerberos,
+                },
+                AuthMode::Kerberos,
+                true,
+                false,
+            ),
+            (
+                AuthFormState {
+                    file_based: false,
+                    supports_integrated: false,
+                    selected: AuthMode::Kerberos,
+                },
+                AuthMode::Password,
+                false,
+                true,
+            ),
+            (
+                AuthFormState {
+                    file_based: true,
+                    supports_integrated: true,
+                    selected: AuthMode::Kerberos,
+                },
+                AuthMode::Password,
+                false,
+                false,
+            ),
+        ];
+        for (state, mode, method, credentials) in cases {
+            assert_eq!(state.mode(), mode, "{state:?}");
+            assert_eq!(state.shows_method(), method, "{state:?}");
+            assert_eq!(state.shows_credentials(), credentials, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn auth_mode_rows_decode_to_their_modes() {
+        assert_eq!(auth_mode_for_row(0), AuthMode::Password);
+        assert_eq!(auth_mode_for_row(1), AuthMode::Kerberos);
+        assert_eq!(auth_mode_for_row(7), AuthMode::Password);
+    }
+
+    fn saved(driver_id: &str, username: &str, auth_mode: AuthMode) -> SavedConnection {
+        SavedConnection {
+            id: Uuid::new_v4(),
+            name: "saved".into(),
+            driver_id: driver_id.into(),
+            host: "sql.corp.example".into(),
+            port: 1433,
+            database: "sales".into(),
+            username: username.into(),
+            use_tls: false,
+            tls_mode: Some(TlsMode::Disabled),
+            auth_mode,
+            read_only: false,
+            environment: Environment::Local,
+            ssh: None,
+            last_opened_at: None,
+        }
+    }
+
+    fn opts(username: &str, auth_mode: AuthMode) -> ConnectOptions {
+        ConnectOptions {
+            host: "sql.corp.example".into(),
+            port: 1433,
+            database: "sales".into(),
+            username: username.into(),
+            auth_mode,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn file_based_entries_are_identified_by_path() {
+        let legacy = saved("sqlite", "postgres", AuthMode::Password);
+        assert!(matches_existing(
+            &legacy,
+            "sqlite",
+            &opts("", AuthMode::Password),
+            true,
+            None
+        ));
+    }
+
+    #[test]
+    fn network_entries_distinguish_user_and_auth_mode() {
+        let entry = saved("mssql", "sa", AuthMode::Password);
+        assert!(matches_existing(
+            &entry,
+            "mssql",
+            &opts("sa", AuthMode::Password),
+            false,
+            None
+        ));
+        assert!(!matches_existing(
+            &entry,
+            "mssql",
+            &opts("other", AuthMode::Password),
+            false,
+            None
+        ));
+        assert!(!matches_existing(
+            &entry,
+            "mssql",
+            &opts("", AuthMode::Kerberos),
+            false,
+            None
+        ));
+    }
+
+    #[test]
+    fn switching_auth_mode_reuses_the_only_endpoint_match() {
+        let password = saved("mssql", "sa", AuthMode::Password);
+        let selected = select_existing(
+            std::slice::from_ref(&password),
+            "mssql",
+            &opts("", AuthMode::Kerberos),
+            false,
+            None,
+        );
+
+        assert_eq!(selected.map(|connection| connection.id), Some(password.id));
+    }
+
+    #[test]
+    fn switching_auth_mode_does_not_guess_between_multiple_accounts() {
+        let accounts = [
+            saved("mssql", "sa", AuthMode::Password),
+            saved("mssql", "reader", AuthMode::Password),
+        ];
+        let selected = select_existing(&accounts, "mssql", &opts("", AuthMode::Kerberos), false, None);
+
+        assert!(selected.is_none());
+    }
+
+    #[test]
+    fn kerberos_entries_on_one_host_are_distinguished_by_database() {
+        let sales = saved("mssql", "", AuthMode::Kerberos);
+        let mut finance = opts("", AuthMode::Kerberos);
+        finance.database = "finance".into();
+        assert!(matches_existing(
+            &sales,
+            "mssql",
+            &opts("", AuthMode::Kerberos),
+            false,
+            None
+        ));
+        assert!(!matches_existing(&sales, "mssql", &finance, false, None));
     }
 }

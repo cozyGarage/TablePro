@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use secrecy::SecretString;
-use tablepro_core::{ConnectOptions, Connection, DriverRegistry, TlsConfig, TlsMode};
+use tablepro_core::{AuthMode, ConnectOptions, Connection, DriverRegistry, TlsConfig, TlsMode};
 use tablepro_ssh::{SshConfig, SshTunnel};
 use tablepro_storage::{
     SavedConnection, SavedSshAuth, SavedSshConfig, load_password, load_ssh_passphrase, load_ssh_password,
@@ -16,14 +16,18 @@ pub async fn open_saved(
     let driver = registry
         .get(&saved.driver_id)
         .ok_or_else(|| format!("driver {} not registered", saved.driver_id))?;
-    let password = load_password(saved.id)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| SecretString::new(String::new().into()));
+    let password = match saved.auth_mode {
+        AuthMode::Password => load_password(saved.id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| SecretString::new(String::new().into())),
+        AuthMode::Kerberos => SecretString::new(String::new().into()),
+    };
     let id = saved.id;
     let environment = saved.environment;
     let read_only = saved.read_only;
+    let auth_mode = saved.auth_mode;
     let tls_mode = saved.effective_tls_mode();
 
     let ssh_hops = match &saved.ssh {
@@ -41,6 +45,8 @@ pub async fn open_saved(
             mode: tls_mode,
             ..Default::default()
         },
+        auth_mode,
+        service_endpoint: None,
     };
 
     let (conn, tunnel) = establish(&*driver, opts.clone(), ssh_hops.clone()).await?;
@@ -68,23 +74,42 @@ pub async fn establish(
     mut opts: ConnectOptions,
     ssh: Option<Vec<SshConfig>>,
 ) -> Result<(Box<dyn Connection>, Option<SshTunnel>), String> {
+    check_auth_mode(opts.auth_mode, driver.supports_integrated_auth(), driver.display_name())?;
+
     let tunnel = if let Some(hops) = ssh {
         if hops.is_empty() {
             return Err("ssh: jump chain is empty".into());
         }
-        let remote_host = std::mem::take(&mut opts.host);
-        let remote_port = opts.port;
-        let tun = SshTunnel::open_chain(&hops, remote_host, remote_port)
+        let remote = (std::mem::take(&mut opts.host), opts.port);
+        let tun = SshTunnel::open_chain(&hops, remote.0.clone(), remote.1)
             .await
             .map_err(|e| format!("ssh: {e}"))?;
-        opts.host = tun.local_host().to_string();
-        opts.port = tun.local_port();
+        redirect_through_tunnel(&mut opts, remote, (tun.local_host().to_string(), tun.local_port()));
         Some(tun)
     } else {
         None
     };
-    let raw = driver.connect(opts).await.map_err(|e| format!("connect: {e}"))?;
+    let raw = driver
+        .connect(opts)
+        .await
+        .map_err(|error| crate::ui::error_text::driver_message(&error))?;
     Ok((raw, tunnel))
+}
+
+fn redirect_through_tunnel(opts: &mut ConnectOptions, service_endpoint: (String, u16), dial_endpoint: (String, u16)) {
+    opts.service_endpoint = Some(service_endpoint);
+    opts.host = dial_endpoint.0;
+    opts.port = dial_endpoint.1;
+}
+
+fn check_auth_mode(mode: AuthMode, supports_integrated_auth: bool, driver_name: &str) -> Result<(), String> {
+    if mode == AuthMode::Kerberos && !supports_integrated_auth {
+        return Err(
+            crate::tr!("The {driver} driver does not support Windows (Kerberos) authentication.")
+                .replace("{driver}", driver_name),
+        );
+    }
+    Ok(())
 }
 
 async fn resolve_saved_ssh_chain(id: uuid::Uuid, saved: &SavedSshConfig) -> Result<Vec<SshConfig>, String> {
@@ -146,5 +171,36 @@ pub fn tls_config(mode: TlsMode) -> TlsConfig {
     TlsConfig {
         mode,
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tunnel_uses_local_dial_endpoint_and_keeps_service_identity() {
+        let mut opts = ConnectOptions {
+            host: "sql.corp.example".into(),
+            port: 1433,
+            ..Default::default()
+        };
+
+        redirect_through_tunnel(
+            &mut opts,
+            ("sql.corp.example".into(), 1433),
+            ("127.0.0.1".into(), 54321),
+        );
+
+        assert_eq!(opts.host, "127.0.0.1");
+        assert_eq!(opts.port, 54321);
+        assert_eq!(opts.service_address(), ("sql.corp.example", 1433));
+    }
+
+    #[test]
+    fn kerberos_requires_driver_support() {
+        assert!(check_auth_mode(AuthMode::Kerberos, false, "PostgreSQL").is_err());
+        assert!(check_auth_mode(AuthMode::Kerberos, true, "SQL Server").is_ok());
+        assert!(check_auth_mode(AuthMode::Password, false, "PostgreSQL").is_ok());
     }
 }

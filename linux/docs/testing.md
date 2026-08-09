@@ -35,7 +35,7 @@ Run all unit tests:
 cargo test --workspace --lib --bins
 ```
 
-`--bins` is not optional: `tablepro-app` has no `lib.rs`, so `--lib` alone skips every test in the app crate. `scripts/ci-local.sh` runs this command; the CI workflow still passes `--lib` only.
+`--bins` is not optional: `tablepro-app` has no `lib.rs`, so `--lib` alone skips every test in the app crate. `scripts/ci-local.sh` and the CI workflow both run this command.
 
 ## Integration tests
 

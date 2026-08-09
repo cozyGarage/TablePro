@@ -13,7 +13,7 @@ mod tls;
 mod transaction;
 
 pub use activity::{ActivityQuery, activity_sql};
-pub use connection::{ConnectOptions, Connection};
+pub use connection::{AuthMode, ConnectOptions, Connection};
 pub use driver::{DatabaseDriver, DriverMaturity};
 pub use error::DriverError;
 pub use filter::{BuildFilterError, Combinator, FilterOp, FilterRule, FilterSet, FilterValue, build_filter_where};
