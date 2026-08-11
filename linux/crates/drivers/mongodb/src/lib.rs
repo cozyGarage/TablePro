@@ -520,13 +520,12 @@ fn split_collection_call<'a>(input: &'a str, method: &str) -> Option<(String, &'
         let name = rest[..end].to_string();
         let after = &rest[end + 2..];
         (name, after)
-    } else if let Some(rest) = rest.strip_prefix("['") {
+    } else {
+        let rest = rest.strip_prefix("['")?;
         let end = rest.find("']")?;
         let name = rest[..end].to_string();
         let after = &rest[end + 2..];
         (name, after)
-    } else {
-        return None;
     };
     let after = after.strip_prefix('.')?;
     let after = after.strip_prefix(method)?;

@@ -134,7 +134,7 @@ impl DatabaseService {
     pub fn all_connections(&self) -> Vec<ConnectionMetadata> {
         let entries = self.connections.lock().expect("database_service lock");
         let mut out: Vec<_> = entries.values().map(|e| e.metadata.clone()).collect();
-        out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        out.sort_by_key(|connection| connection.name.to_lowercase());
         out
     }
 

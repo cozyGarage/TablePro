@@ -1,165 +1,179 @@
 # Production-readiness audit
 
-**Date**: 2026-07-30
+**Date**: 2026-08-11
+
 **Branch**: `linux`
-**State**: daily-driver capable client; not yet a governed data plane
 
-This document replaces the 2026-04-26 audit. That snapshot described a
-demo with three drivers and ~31 tests. The tree has moved far past that.
-This audit records what is actually shipped, what is still wrong, and
-why the roadmap pivoted to a policy chokepoint plus agent access.
+**State**: capable personal database client; not ready for trusted production writes or unattended agents
 
----
+This document records current implementation and verification evidence. The repository-level [`PLAN.md`](../../PLAN.md) owns sequencing and acceptance criteria; [`ROADMAP.md`](../ROADMAP.md) is the concise status view.
 
-## What we have today
+## Evidence collected
 
-### Functional
+At audit time:
 
-- Four drivers: PostgreSQL (sqlx), MySQL (sqlx), SQLite (sqlx), MSSQL (tiberius)
-- Connect dialog with engine picker, TLS toggle, read-only switch, SSH section
-- Saved connections (JSON + libsecret) with delete, reconnect, last-opened
-- Multi-tab workspace (`AdwTabView`): browse, SQL editor, structure/DDL
-- Virtualized `GtkColumnView` browse with inline cell edit, drafts, undo
-- Filter strip with parameterized `query_params`; column-header sort
-- Pagination (offset/limit), CSV/JSON export, context menus
-- Structure tab: columns, indexes, FKs; create/edit/drop table
-- SQL editor: GtkSourceView 5, run/cancel, timeout, multi-statement result
-  sub-tabs, format, run-at-cursor, line comment, history recording
-- SSH tunnel (russh), single-hop, TOFU known_hosts
-- Auto-reconnect (30s ping, exponential backoff)
-- Query history (SQLite FTS5), preferences dialog, column-width persistence,
-  workspace-state persistence, single-instance flock
+- The Rust workspace contains 15 crates and approximately 37,000 lines of Rust.
+- 376 local tests passed; one Secret Service integration test was ignored.
+- The GTK application contributed 103 passing unit tests.
+- File-size and formatting gates passed.
+- `cargo deny check` and `cargo audit --no-fetch` passed. The unmaintained `paste` advisory is an explicitly allowed warning.
+- Arch's Rust 1.97 exposed a new Clippy lint in the MongoDB parser even though the project declares Rust 1.93. This demonstrates the need to test both the MSRV and current stable compiler.
+- Real driver integration tests and GTK end-to-end tests were not run as part of this audit.
 
-### Engineering
+## What exists
 
-- Relm4 SimpleComponent / Component / FactoryComponent architecture
-- `DatabaseService` singleton owning multi-connection map + health monitors
-- Typed errors with user-friendly message layer
-- ~294 unit / lib tests; Postgres + MySQL integration tests in CI (ignored
-  locally, run with `--include-ignored` in CI)
-- gettext-rs + `tr!` infrastructure (`po/` exists; LINGUAS empty)
-- Flatpak manifest, metainfo, desktop file, scalable SVG icon
-- Linux CI: fmt, clippy `-D warnings`, build, lib tests; integration job
+### Application workflows
 
-### Scale
+- Native GTK4/libadwaita application using Relm4
+- Saved connections in XDG JSON storage and secrets in Secret Service/libsecret
+- Multi-window, multi-tab browse, SQL editor, and structure workspace
+- Workspace restoration, connection recency, preferences, and persisted column widths
+- Virtualized data grid with sorting, parameterized filters, pagination, inline edit, staged inserts/updates/deletes, undo/redo, save, and discard
+- SQL editor with GtkSourceView highlighting, formatting, run-at-cursor, multiple statements, multiple result tabs, history recording, timeout, and cancel UI
+- Table structure editing for columns, indexes, and foreign keys
+- Query history backed by SQLite FTS5 with filtering, pinning, deletion, and export
+- CSV table export that pages through rows, plus JSON export
+- Server activity SQL, lock/replication views, session termination UI, and EXPLAIN display
 
-~28k lines of Rust across ~65 `.rs` files under `crates/`.
+### Drivers
 
----
+Stable labels:
 
-## What "production-ready" means now
+- PostgreSQL
+- MySQL
+- SQLite
+- SQL Server, including password and current-ticket Kerberos authentication
+- ClickHouse
 
-For a personal DBA / DE / SRE daily driver who also wants safe AI-agent
-access:
+Experimental labels:
 
-1. Install from Flathub (or run from source) on Fedora / Ubuntu / Arch
-2. Connect to everyday Postgres / MySQL / SQLite / MSSQL with verified TLS
-   and optional SSH
-3. Browse and edit real types (dates, decimals, JSON, UUIDs) correctly
-4. Run queries against large tables without OOM
-5. Treat **environment** (Local / Dev / Staging / Prod) as enforced policy,
-   not a cosmetic tag
-6. Let Cursor / Claude Code talk to the DB only through a gated MCP
-   surface with approval, row caps, and an audit journal
-7. Recover from network blips; cancel long queries
-8. Accessibility and i18n infrastructure in place
+- Redis
+- MongoDB
+- DuckDB, behind the `duckdb` Cargo feature
+- Oracle, behind the `odpi` Cargo/native-client feature
 
-Today we meet (3) partially, (4) partially (10k materialization cap), (5)
-not at all, (6) not at all, (7) partially, (8) partially.
+“Stable” currently means the common connect/browse/query/write path is implemented. It does not yet mean the full release matrix has been exercised for TLS, cancellation, reconnect, transactions, large results, and packaging.
 
----
+### Safety and automation foundations
 
-## Critical gaps (ordered)
+- SQL classification through `sqlparser`
+- Environment-aware policy rules
+- Read-only enforcement at the policy layer for classified writes, including data-changing CTEs
+- Principal-aware guarded connection handles
+- Blast-radius estimation and agent result masking
+- GTK approval dialog
+- Hash-chained JSONL audit journal
+- Interactive transactions for PostgreSQL, MySQL, and SQLite
+- MCP over stdio and loopback HTTP with scoped tokens, connection allowlists, and rate limiting
+- Headless `tablepro-agentd`
+- SSH tunnels and nested jump chains
+- Five TLS modes with `VerifyFull` as the secure network default
 
-### 1. Read-only is bypassable
+### Engineering and distribution foundations
 
-`ReadOnlyConnection` blocks `execute*` but passes `query` /
-`query_params` through. On PostgreSQL a data-modifying CTE is a write
-delivered as a query. String / regex checks miss this. Fix: AST
-classification via `sqlparser`, fail closed on parse errors, absorb
-read-only into a policy rule.
+- Layered Rust workspace with static driver registration
+- Typed errors and user-facing error translation
+- File-size ratchet, rustfmt, Clippy, unit tests, cargo-deny, and cargo-audit checks
+- Docker integration suites for PostgreSQL, MySQL, SQL Server, and ClickHouse in CI
+- Debian, AUR, and Flatpak scaffolding
+- gettext infrastructure and an accessibility checklist
 
-### 2. TLS does not authenticate the server
+## Release-blocking findings
 
-`PgSslMode::Require`, `MySqlSslMode::Required`, and MSSQL
-`EncryptionLevel::Required` + `trust_cert()` encrypt without verifying
-the certificate chain or hostname. MITM-able. Fix: `TlsConfig` with
-`VerifyFull` default and cert-fingerprint TOFU fallback.
+### 1. Approval can default to automatic
 
-### 3. No policy chokepoint
+`DatabaseService` starts with `AutoApproveSink`. GTK approval is installed later as a side effect of MCP startup, and the same mutable sink serves human and agent principals. A production action can therefore reach an automatic approval path before the correct UI sink is installed.
 
-`DatabaseService::get` / `active` return `Arc<dyn Connection>` to any
-caller. There is no principal (human vs agent), no statement-level rules,
-no approval sink, no blast-radius precheck, no column masking for agents.
+Required correction: route approval by principal and runtime. Production GUI and daemon code must never construct automatic approval.
 
-### 4. No agent surface
+### 2. Audit failure silently becomes no audit
 
-Zero MCP, zero chat, zero headless daemon. The macOS app has a mature MCP
-server; Linux has none. The roadmap now sequences MCP → agentd → optional
-chat on top of Stage 1 policy.
+Both the GTK service and headless daemon catch `AuditJournal::open_default()` failure and replace it with `NullAuditSink`. Production mutations and agent operations can continue without durable evidence.
 
-### 5. No audit journal
+Required correction: record durable intent before mutations, make audit errors observable, fail closed for governed operations, and verify journal writability, permissions, recovery, concurrency, and cross-process locking.
 
-Query history records what you ran. It does not answer "what did an agent
-do at 03:00" with principal, decision, rule, and outcome. Need a separate
-append-only hash-chained journal.
+### 3. Read-only precedence is incomplete
 
-### 6. Interactive transactions missing
+The policy evaluates unparseable SQL before it checks the connection's read-only setting. Human policy may therefore approve SQL that cannot be proven read-only.
 
-`execute_in_transaction` is all-or-nothing. Agent write preview needs
-`begin` → execute → report rows → commit / rollback.
+Required correction: read-only denies every statement that cannot be proven read-only before approval is considered.
 
-### 7. Result scaling
+### 4. Administrative SQL is classified as a read
 
-`MAX_QUERY_ROWS = 10_000`; full materialization; OFFSET pagination at high
-offsets is a linear rescan. Streaming and keyset pagination are Stage 5.
+Calls such as `SELECT pg_terminate_backend(pid)` have administrative side effects despite their SELECT syntax. Current session IDs are accepted as strings and interpolated into driver-specific SQL.
 
-### 8. TLS / cert UI and jump hosts
+Required correction: add an administrative operation class and accept only parsed numeric identifiers.
 
-No custom CA / client-cert UI; SSH is single-hop only.
+### 5. MCP query history bypasses connection isolation
 
-### 9. Distribution and a11y
+`search_query_history` reads the shared history database without applying the connection allowlist, SQL-literal redaction, policy, masking, or an audit event.
 
-Metainfo lists only three engines (MSSQL missing). No Flathub screenshots.
-Orca / keyboard-only untested. LINGUAS empty.
+Required correction: remove the tool until it is connection-isolated and governed.
 
-### 10. Observability and supply chain
+### 6. Partial policy files can weaken production defaults
 
-No `cargo-deny` / `cargo-audit` in CI. MSSQL integration tests not in CI.
+Serde field defaults are generic `EnvPolicy::default()` values. A partial `[environments.prod]` section can receive `agent_writes = approve` instead of inheriting secure production defaults.
 
----
+Required correction: deserialize optional overrides and merge them field by field over the selected environment's defaults.
 
-## What we are not chasing next
+### 7. PostgreSQL `VerifyFull` through SSH is unresolved
 
-ER diagrams, vim mode, multi-cursor, snippet systems, AppImage/.deb/.rpm
-packaging for a personal audience, and alphabetical driver expansion ahead
-of ClickHouse → Redis → DuckDB → MongoDB → Oracle.
+The core model separates the physical dial endpoint from the database service identity. SQL Server consumes this for TLS and Kerberos, but sqlx 0.8.6 does not expose separate PostgreSQL dial and TLS-server-name inputs.
 
----
+Required correction: use a supported sqlx API, a reviewed sqlx patch, or a connector that verifies the original hostname over the tunneled stream. Never downgrade verification silently.
 
-## Critical path (matches ROADMAP stages)
+### 8. Cancellation is not proven on the server
 
-1. Stage 0: docs + CI truth
-2. Stage 1: policy crate, TLS fix, journal, transactions, chokepoint
-3. Stage 2: MCP in the GTK app
-4. Stage 3: headless agentd
-5. Stage 5: activity / EXPLAIN / scale / drivers (reorderable)
-6. Stage 6: Flathub + a11y + i18n finish
-7. Stage 4: built-in chat (optional, last)
+The editor can race a cancellation token or timeout against the query future. Dropping a future does not prove PostgreSQL stopped the operation, and it can prevent a terminal audit outcome.
 
-Stages 1–2 are ~8 focused weeks and deliver the entire "safely work with
-an agent" outcome. Protect them from scope creep.
+Required correction: add a cancellable driver contract, send server cancellation, confirm the query leaves `pg_stat_activity`, discard an untrustworthy connection, and record cancelled, timed-out, or unknown outcomes.
 
----
+### 9. Release tests are missing
 
-## Effort tiers
+There is no deterministic PostgreSQL TLS/SSH/reconnect fixture and no GTK end-to-end safety test. Unit coverage is strong, but the most important safety properties cross driver, policy, storage, and UI boundaries.
 
-| Tier | Covers | Status |
-|---|---|---|
-| Working client | 4 drivers, multi-tab, edit, SSH, history | **current** |
-| Governed personal | Policy + TLS + journal + MCP | Stage 1–2 |
-| Headless SRE | + agentd | Stage 3 |
-| DBA depth | + activity, EXPLAIN, streaming, more drivers | Stage 5 |
-| Shipped daily driver | + Flathub, a11y, i18n | Stage 6 |
+Required correction: add the focused release fixture and three GTK approval/audit flows defined in `PLAN.md`.
 
-This audit is a snapshot at 2026-07-30. Re-run when Stage 1 lands.
+## Partial or overstated features
+
+- Parquet export is a stub that returns Unsupported; only CSV streaming is implemented.
+- Arbitrary query results are still materialized, with a high row cap; they are not true result streaming.
+- TLS fingerprint fields exist in the model but are not a complete storage/UI/driver workflow.
+- SSH jump chains exist in saved JSON but are not fully editable in the GTK connection form.
+- Packaging files build artifacts, but installation, launch, update, keyring, SSH, and Kerberos behavior are not release-verified.
+- English gettext infrastructure exists; complete translations do not.
+- Accessibility labels/checklists exist; full keyboard and screen-reader validation does not.
+
+## Swift parity position
+
+The Linux application matches the Swift application's core connection, query, browse, edit, structure, history, SSH, and explain workflows only partially. High-value gaps for Platform/DBA/Data Engineering work include:
+
+- Schema-aware autocomplete, named parameters, SQL favorites, and quick switching
+- SQL file workflows
+- Views, routines, triggers, sequences, extensions, users, roles, and privileges
+- Backup/restore and CSV/JSON/SQL import
+- Connection URL import, organization, reusable SSH profiles, and certificate configuration
+- True large-result streaming
+- Redshift/CockroachDB profiles, Trino, Snowflake, and BigQuery
+
+Apple sync, Handoff, Swift plugins, licensing, team accounts, and Sparkle are intentional non-ports.
+
+## Production readiness decision
+
+Safe for current development and personal testing:
+
+- Local/dev browsing and querying against non-critical databases
+- SQLite-based UI work
+- Driver development with disposable integration databases
+- Read-only exploration when the user independently limits database credentials
+
+Not approved as trusted behavior yet:
+
+- Production mutations
+- Unattended MCP or agent writes
+- Relying on the audit journal as durable evidence
+- Assuming cancel stopped a server query
+- PostgreSQL `VerifyFull` through SSH
+- Public stable package distribution
+
+Re-run this audit after Phases 1–4 of `PLAN.md` are release-verified.

@@ -1,198 +1,115 @@
-# Roadmap
+# TablePro Linux roadmap
 
-## Where we are (2026-08-10)
+Last audited: 2026-08-11
 
-The Linux app is a working GTK4 / libadwaita client, not a spike. PostgreSQL, MySQL, SQLite, MSSQL, and ClickHouse are stable, with additional experimental drivers. It includes SSH jump chains, multi-tab browsing, SQL and structure editors, inline editing, query history, policy-gated MCP and agent access, packaging scaffolding, and hundreds of tests.
+The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Swift parity backlog. This file is the concise Linux status view.
 
-Phases 0–1 and most of Phase 2 / Phase 3 from the April 2026 roadmap are
-done. Remaining work pivots away from DBeaver-parity checklists toward a
-**governed data plane**: one policy chokepoint every consumer (GUI, MCP
-server, headless daemon, chat) must pass through, then agent access on
-top.
+## Current state
 
-The execution order now lives in the repository-level [`PLAN.md`](../PLAN.md). The stages below preserve the earlier roadmap history. [`docs/production-audit.md`](docs/production-audit.md) still needs the truthfulness refresh scheduled for Bookie Phase 3.
+TablePro Linux is a substantial GTK4/libadwaita database client, not a prototype. Its core daily-driver workflows are implemented, but production approval, audit enforcement, PostgreSQL cancellation/TLS verification, and release-level testing still block a trusted release.
 
-## Stage legend
+Status terms:
 
-Stages are ordered by dependency. Each has a concrete exit criterion.
-Effort estimates assume one focused full-time engineer. Part-time
-multiplies calendar time by ~3.
+- **Implemented**: code and core unit tests exist.
+- **Integrated**: all intended production entry points use it.
+- **Release-verified**: deterministic real-driver, UI, or installed-package tests prove it.
+- **Complete**: all phase acceptance criteria are release-verified.
 
-| Stage | Goal | Effort |
+## Verified inventory
+
+| Area | Status | Notes |
 |---|---|---|
-| 0 — Ground truth | Docs and CI match reality | ~3 days |
-| 1 — Safety foundation | Policy engine, TLS fix, audit journal | ~4 weeks |
-| 2 — MCP server | Cursor / Claude Code gated against DBs | ~4 weeks |
-| 3 — Headless agentd | SRE / CI story without a desktop | ~3 weeks |
-| 4 — Built-in chat | Optional GTK chat panel (lowest priority) | ~4 weeks |
-| 5 — DBA / SRE / DE depth | Activity, EXPLAIN, scale, drivers | ~6 weeks |
-| 6 — Daily-driver polish | Flathub, a11y, i18n finish | ~3 weeks |
+| PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse | Implemented | Stable driver label; release matrix is incomplete |
+| Redis, MongoDB, DuckDB, Oracle | Implemented | Experimental; DuckDB/Oracle require Cargo/native features |
+| Browse/edit/filter/sort/pagination | Implemented | Keyset helper exists; large-result behavior needs release tests |
+| SQL editor and multiple result tabs | Implemented | Client timeout/cancel UI exists; server cancellation is unverified |
+| Structure editor | Implemented | Tables, columns, indexes, and foreign keys |
+| Saved connections and libsecret | Implemented | Keyring failure UX needs hardening |
+| SSH and jump chains | Implemented | Jump chains are JSON-only in the current GTK form |
+| TLS modes | Partially integrated | PostgreSQL `VerifyFull` through SSH remains unresolved |
+| Query history | Implemented | MCP access must be isolated before being re-exposed |
+| CSV/JSON export | Implemented | CSV streams table pages; Parquet is unsupported |
+| Activity and EXPLAIN | Implemented | Administrative classification and PID validation remain open |
+| Policy, MCP, and agentd | Implemented | Approval routing and audit failure behavior are unsafe |
+| Audit journal | Implemented | Hash chain exists; fail-closed durability and concurrency are unverified |
+| AUR, Debian, Flatpak | Scaffolded | Not release-verified or ready for a public stable package |
+| i18n and accessibility | Infrastructure | English strings/checklist exist; end-user verification is incomplete |
 
----
+## Active phases
 
-## Stage 0 — Ground truth
+### 0 — Development baseline
 
-**Status**: complete.
+- [x] Reconcile upstream SQL Server Kerberos and service identity without losing fork safety work
+- [x] Preserve legacy connection serialization
+- [ ] Pass Clippy on Rust 1.93 and current stable Rust
+- [ ] Document the Arch/rustup toolchain setup
+- [ ] Add scheduled current-stable CI
 
-- [x] Inventory: 4 drivers, multi-tab, SSH, structure editor, history, CI
-- [x] Rewrite this ROADMAP and `docs/production-audit.md`
-- [x] Fix metainfo (MSSQL, release date)
-- [x] MSSQL integration tests in CI
-- [x] `cargo-deny` and `cargo-audit` in the fast job
-- [x] Reconcile upstream Linux Kerberos support without replacing policy, MCP, audit, TLS modes, or SSH jump chains
-- [x] Separate SQL Server service identity from the local SSH dial endpoint
-- [x] Add Windows Kerberos authentication to GTK, saved connections, reconnect, agentd, CI, and packages
-- [x] Upgrade translation startup to the corrected `gettext-rs` 0.8 safety contract
+### 1 — Authorization and approval
 
-**Exit criterion**: a new contributor reading the docs is not misled about
-maturity, drivers, or next priorities. **Met.**
+- [ ] Replace production automatic approval with principal-aware routing
+- [ ] Enforce read-only before unparseable-statement fallback
+- [ ] Classify administrative side effects
+- [ ] Validate numeric session identifiers before building SQL
+- [ ] Remove or isolate MCP query-history search
+- [ ] Merge partial policies onto secure environment defaults
 
----
+### 2 — Fail-closed audit
 
-## Stage 1 — Safety foundation
+- [ ] Remove production fallback to `NullAuditSink`
+- [ ] Record durable intent before mutations
+- [ ] Record explicit outcome after mutations
+- [ ] Verify journal mode, writability, recovery, and cross-process locking
+- [ ] Refuse agent service when required audit storage is unavailable
 
-**Goal**: fix real safety holes; introduce one policy chokepoint. No AI yet.
-This alone makes the app safer for production work.
+### 3 — PostgreSQL release safety
 
-### Remaining hardening
+- [ ] Verify direct and SSH `VerifyFull`
+- [ ] Implement server-side cancellation
+- [ ] Verify rollback, activity, locks, reconnect, and SSH reconnect
+- [ ] Add deterministic PostgreSQL release fixture
 
-1. Approval routing, read-only precedence, administrative SQL classification, MCP history isolation, and partial policy inheritance remain in Bookie Phase 1.
-2. Production and agent operations still need fail-closed audit behavior from Bookie Phase 2.
-3. PostgreSQL `VerifyFull` through SSH still needs separate sqlx dial and service identities. Phase 0 added the core endpoint model without downgrading TLS.
+### 4 — GTK safety tests
 
-### Deliverables
+- [ ] Dismissed approval denies
+- [ ] Approve-once approves exactly one operation
+- [ ] Audit failure cannot be approved around
 
-- [x] New crate `crates/policy`: `classify` (sqlparser AST), `PolicyGuard`,
-      `rules`, `ApprovalSink`, `blast_radius`, `mask`, `policy.toml`
-- [x] Absorb and delete `core::read_only`; read-only becomes one rule
-- [x] `environment: Local | Dev | Staging | Prod` on saved connections
-- [x] `DatabaseService.handle(id, principal) -> GuardedConnection`; raw
-      connection unreachable outside the service
-- [x] `TlsConfig` with `VerifyFull` default and cert-fingerprint TOFU field
-- [x] Append-only hash-chained audit journal (distinct from query history)
-- [x] `Connection::begin` → `Transaction` trait (default `Unsupported`)
-- [x] Test matrix: classifier corpus, guard × principal × environment,
-      blast radius, masking, journal integrity
+### 5 — Documentation and Swift parity
 
-**Exit criterion**: the foundation is implemented. The production-hardening exit criterion remains open until Bookie Phases 1, 2, and 4 close the policy, audit, PostgreSQL TLS, cancellation, and release-test gaps.
+- [x] Replace the historical roadmap with evidence-based status
+- [ ] Keep the production audit synchronized with code and tests
+- [ ] Maintain the Swift-to-Linux parity matrix
+- [ ] Distinguish implementation from release verification in every claim
 
----
+### 6 — DBA and data-engineering depth
 
-## Stage 2 — MCP server in the GTK app
+- [ ] SQL autocomplete, parameters, favorites, and quick switcher
+- [ ] PostgreSQL objects, users/roles, and administration
+- [ ] Import/export and backup/restore
+- [ ] Connection organization and reusable transport profiles
+- [ ] True result streaming and optional Parquet export
 
-**Status**: complete.
+### 7 — Driver expansion
 
-**Goal**: Cursor and Claude Code become safe against your databases.
+Prioritize real workflows: Redshift/CockroachDB profiles, Trino, Snowflake, then BigQuery. Other Swift drivers remain demand-driven.
 
-- [x] Crate `crates/mcp` (stdio + loopback HTTP JSON-RPC)
-- [x] All tools route through `PolicyGuard` via ConnectionProvider
-- [x] Approval via GTK AlertDialog (elicitation-style) with statement,
-      targets, estimated rows, triggering rule
-- [x] Agent writes: `begin` → execute → preview → rollback (commit via
-      `preview=false`)
-- [x] Tokens in `$XDG_CONFIG_HOME/tablepro/mcp-tokens.json` + libsecret
-      for plaintext; scopes; per-connection allowlist; rate limiting;
-      loopback bind by default; Preferences → MCP pairing UI
-- [x] Integration test: tool path requires provider + token; read-only
-      token cannot write
-- [x] Boundary documented: scopes/allowlist = who/which connection;
-      `PolicyGuard` = what SQL (`ARCHITECTURE.md`)
+### 8 — Identity and packaging
 
-**Tools**: `list_connections`, `list_schemas`, `list_tables`,
-`describe_table`, `get_table_ddl`, `execute_query`, `execute_write`,
-`explain_query`, `search_query_history`, `export_data`
+Finalize the product name, repository, and application ID before publishing. AUR/Omarchy is first; Flatpak follows after sandbox and update behavior are verified.
 
-**Exit criterion**: an MCP client can list and SELECT under policy, and
-cannot write to Prod without an elicited approval that lands in the
-journal. **Met.**
+### 9 — Repository cleanup
 
----
+Keep the macOS tree as the parity reference until useful behavior, tests, documentation, and assets are extracted. Remove it only after a standalone Linux repository is explicitly chosen and Linux paths no longer depend on it.
 
-## Stage 3 — Headless `tablepro-agentd`
+## Explicit non-ports
 
-**Status**: complete.
+- iCloud Sync and Handoff
+- Apple Keychain and CloudKit behavior
+- Swift plugin ABI and registry loader
+- macOS licensing, team seats, and entitlements
+- Sparkle updates
 
-**Goal**: SRE and CI story without a desktop.
+## Next implementation target
 
-- [x] Binary crate `crates/agentd` (core + policy + storage + mcp, no GTK)
-- [x] stdio + streamable HTTP; systemd user unit; `--policy` required
-- [x] Headless `ApprovalSink`: auto, deny (default), or tty prompt
-- [x] Same audit journal as the GUI
-
-**Exit criterion**: `tablepro-agentd --policy policy.toml` serves MCP on
-stdio; a denied write is journalled; no GTK linkage in the binary.
-**Met.**
-
----
-
-## Stage 4 — Built-in chat panel (optional)
-
-Lowest priority; Cursor already covers agent UX.
-
-- [ ] GTK panel driving the same tool layer via in-process MCP client
-- [ ] Providers: Anthropic, OpenAI-compatible, Ollama
-- [ ] Per-connection AI rules as system-prompt guidance (masking remains
-      the enforcement control)
-
----
-
-## Stage 5 — DBA / SRE / DE depth
-
-**Status**: complete for the plan's listed items (MVP drivers).
-
-Reprioritized around the persona, not DBeaver parity.
-
-- [x] Activity tab: `pg_stat_activity` / `SHOW PROCESSLIST`, blocking locks,
-      long-running queries, replication lag, kill query
-- [x] `EXPLAIN` / `EXPLAIN ANALYZE` plan view
-- [x] Keyset pagination past OFFSET threshold
-- [x] Streaming export to CSV / Parquet; true result streaming
-      (CSV streams; Parquet stub returns Unsupported)
-- [x] Server version and capability detection
-- [x] Drivers in persona order: ClickHouse, Redis, DuckDB, MongoDB, Oracle
-      (Oracle registered only with `--features odpi`; maturity matrix in
-      `docs/driver-maturity.md`)
-- [x] SSH jump-host chains
-- [x] SQL Server Windows integrated authentication through the current Kerberos ticket cache
-
----
-
-## Stage 6 — Daily-driver polish
-
-**Status**: infrastructure complete; Flathub screenshots still need capture.
-
-- [x] Flathub submission docs + manifest/metainfo ready
-      (screenshots captured separately; see `docs/flathub.md`)
-- [x] gettext infrastructure (`po/`, `tr!`); English ships via source strings
-- [x] Accessibility checklist and chrome a11y labels (`docs/accessibility.md`)
-- [x] Multi-window (`win.new-window`)
-
----
-
-## Explicitly deferred (cut from the old Phase 5 / 6)
-
-ER diagram, schema-editor expansion, vim mode, multi-cursor, snippets,
-SQL formatter dialect matrix, drag-reorder columns, AppImage / .deb /
-.rpm / AUR packaging (Flatpak is enough for the personal audience), and
-an alphabetical 10-driver wishlist ahead of persona order. Parquet
-export stays stubbed until arrow/parquet compile cost is justified;
-CSV streaming covers the common path.
-
-## Non-goals
-
-- Runtime plugin system (see [ADR 0001](docs/decisions/0001-no-plugin-system.md))
-- RBAC / IdP / SSO / org-managed policy distribution / SIEM shipping
-  (single-user scope; policy engine and principal-aware journal leave the door open without a rewrite)
-- Cross-platform Linux binary for macOS / Windows
-
-## Realistic timeline
-
-| Stage | Focused FT | Part-time (~3x) |
-|---|---|---|
-| 0 | 3 days | 1–2 weeks |
-| 1–2 (agent-safe outcome) | ~8 weeks | ~6 months |
-| 0–5 excl. 4 | ~24 weeks | ~18 months |
-| +4 +6 | +7 weeks | +5 months |
-
-Stages 1 and 2 deliver the entire "safely work with an agent" outcome.
-Protect them from scope creep.
+Finish Phase 0 validation, then implement Phase 1 before adding new features. Production-write and agent-write workflows are not trusted until Phases 1–4 pass their release tests.
