@@ -23,6 +23,8 @@ git checkout linux && git merge origin/main
 
 System packages — see [README.md](README.md) for distro-specific commands. After they are installed, work happens entirely from the `linux/` directory.
 
+Rust 1.93 is the MSRV. Arch's direct `/usr/bin/cargo` follows the distro release rather than the repository override; see [docs/toolchains.md](docs/toolchains.md) before interpreting a local compiler result.
+
 Prefer the cheap gates before a full GTK link or `.deb` package:
 
 ```bash
@@ -72,7 +74,8 @@ docs(adding-drivers): clarify TLS configuration step
 2. PR title is the conventional commit message you intend to land.
 3. PR description has two sections: **Summary** (what and why, 2–4 bullets) and **Test plan** (checkbox list).
 4. Run `./scripts/preflight.sh` before every push. Run `./scripts/ci-local.sh` before packaging or opening an upstream PR. CI runs preflight, then GTK checks, then driver integration.
-5. UI changes must include before / after screenshots in the PR description, taken at HiDPI on both light and dark themes.
+5. When reconciling upstream Linux work, add an entry to [docs/upstream-sync.md](docs/upstream-sync.md) in the same commit.
+6. UI changes must include before / after screenshots in the PR description, taken at HiDPI on both light and dark themes.
 
 ## What does not belong here
 

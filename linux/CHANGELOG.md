@@ -29,6 +29,8 @@
 - Windows integrated authentication for SQL Server through the current Kerberos ticket cache
 - Principal-aware GUI approval routing with fail-closed behavior when no active window exists
 - Explicit administrative SQL classification for PostgreSQL backend-control functions and MySQL KILL
+- Weekly and manually dispatched full-workspace Clippy on current stable Rust, alongside the Rust 1.93 MSRV gate
+- Arch/Omarchy Rust toolchain guidance and a traceable upstream Linux sync log
 
 ### Changed
 

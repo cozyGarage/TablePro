@@ -1,6 +1,6 @@
 # TablePro Linux development plan
 
-Last audited: 2026-08-11
+Last audited: 2026-08-12
 
 This plan is the source of truth for the Linux application. It separates:
 
@@ -15,22 +15,24 @@ The Linux application is a native Rust/GTK product. It does not share source wit
 
 Audited branch state:
 
-- Audit baseline: `c1db742e`
+- Phase 0 verification HEAD: `e8c1aa37`
 - Tracking branch: `fork/linux`
-- Cached comparison with `origin/linux`: 38 commits ahead, 1 commit behind
+- Cached comparison with `origin/linux`: 41 commits ahead, 1 commit behind
 - Rust workspace: 15 crates and approximately 37,000 lines of Rust
 - Stable drivers: PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse
 - Experimental drivers: Redis, MongoDB, DuckDB, Oracle
 - No Linux account, subscription, receipt, license-key, or entitlement checks
 
-Verified locally on 2026-08-11:
+Verified locally on 2026-08-12:
 
 - File-size guard passes
 - `cargo fmt --all -- --check` passes
 - 387 fast tests and 5 MCP policy integration tests pass; one Secret Service integration test is ignored
 - `cargo deny check` passes
 - `cargo audit --no-fetch` passes with the allowed unmaintained `paste` warning
-- Rust 1.97 exposed one new MongoDB Clippy lint; compatibility is addressed in Phase 0
+- Full-workspace strict Clippy passes on Rust 1.93.0 and Arch stable Rust 1.97.1
+- The complete Rust 1.93 preflight passes, including 283 non-GTK unit tests and 5 MCP policy integration tests; one Secret Service test is ignored
+- All 27 Docker driver integration tests pass: PostgreSQL 4, MySQL 4, SQL Server 9, and ClickHouse 10
 
 The repository pins Rust 1.93, but an OS-packaged `/usr/bin/cargo` does not honor `rust-toolchain.toml` without rustup. CI must test the MSRV, while local development and a scheduled job should also test the current stable compiler.
 
@@ -66,17 +68,17 @@ A checkbox may be checked only when its stated criterion is verified. A stub or 
 
 ## Status
 
-In progress.
+Implemented and locally verified on 2026-08-12. The first hosted execution of the new scheduled current-stable job remains external confirmation after this change is pushed; it does not block Phase 2 development.
 
 ## Work
 
 - [x] Preserve the fork's policy, MCP, audit, transaction, TLS, and SSH jump-chain architecture while reconciling upstream SQL Server Kerberos support.
 - [x] Separate SQL Server's physical dial endpoint from its TLS/Kerberos service identity.
 - [x] Keep legacy saved connections compatible.
-- [ ] Pass Clippy on Rust 1.93 and current stable Rust.
-- [ ] Document rustup versus distro-toolchain behavior on Arch/Omarchy.
-- [ ] Add a current-stable scheduled CI check without changing the Rust 1.93 MSRV.
-- [ ] Record every upstream Linux sync in a short sync log.
+- [x] Pass Clippy on Rust 1.93 and current stable Rust.
+- [x] Document rustup versus distro-toolchain behavior on Arch/Omarchy.
+- [x] Add a current-stable scheduled CI check without changing the Rust 1.93 MSRV.
+- [x] Record every upstream Linux sync in a short sync log.
 
 ## Known transport gap
 
@@ -84,10 +86,10 @@ PostgreSQL through SSH cannot currently use a distinct TCP dial address and TLS 
 
 ## Acceptance criteria
 
-- Rust 1.93 remains the declared MSRV.
-- Preflight passes on the supported Arch/Omarchy development setup.
-- Current-stable Clippy cannot surprise contributors after an OS compiler update.
-- Direct TLS and SQL Server Kerberos behavior remain unchanged.
+- [x] Rust 1.93 remains the declared MSRV in `rust-toolchain.toml`, `Cargo.toml`, and `clippy.toml`.
+- [x] Preflight passes with Rust 1.93 on the supported Arch/Omarchy development setup.
+- [x] Full-workspace Clippy passes with Arch stable 1.97.1 and is repeated by scheduled CI using an explicit `+stable` selector.
+- [x] Direct endpoint, tunneled service identity, legacy serialization, and SQL Server password behavior remain covered by unit and real-driver integration tests.
 
 ---
 

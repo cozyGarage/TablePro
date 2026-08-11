@@ -106,6 +106,8 @@ Quick local `.deb`:
 | Roadmap and current stage | [ROADMAP.md](ROADMAP.md) |
 | Production gap analysis | [docs/production-audit.md](docs/production-audit.md) |
 | Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Rust toolchains on Arch/Omarchy | [docs/toolchains.md](docs/toolchains.md) |
+| Upstream Linux sync history | [docs/upstream-sync.md](docs/upstream-sync.md) |
 | Adding a database driver | [docs/adding-drivers.md](docs/adding-drivers.md) |
 | Driver maturity matrix | [docs/driver-maturity.md](docs/driver-maturity.md) |
 | State management with Relm4 | [docs/state-management.md](docs/state-management.md) |

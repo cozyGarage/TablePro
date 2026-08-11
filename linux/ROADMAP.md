@@ -1,6 +1,6 @@
 # TablePro Linux roadmap
 
-Last audited: 2026-08-11
+Last audited: 2026-08-12
 
 The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Swift parity backlog. This file is the concise Linux status view.
 
@@ -41,9 +41,11 @@ Status terms:
 
 - [x] Reconcile upstream SQL Server Kerberos and service identity without losing fork safety work
 - [x] Preserve legacy connection serialization
-- [ ] Pass Clippy on Rust 1.93 and current stable Rust
-- [ ] Document the Arch/rustup toolchain setup
-- [ ] Add scheduled current-stable CI
+- [x] Pass Clippy on Rust 1.93 and current stable Rust
+- [x] Document the Arch/rustup toolchain setup
+- [x] Add scheduled current-stable CI
+
+Phase 0 is implemented and locally verified. Its first hosted current-stable schedule is expected after the workflow change is pushed.
 
 ### 1 — Authorization and approval
 

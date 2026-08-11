@@ -1,6 +1,6 @@
 # Production-readiness audit
 
-**Date**: 2026-08-11
+**Date**: 2026-08-12
 
 **Branch**: `linux`
 
@@ -17,8 +17,10 @@ At audit time:
 - The GTK application contributed 104 passing unit tests.
 - File-size and formatting gates passed.
 - `cargo deny check` and `cargo audit --no-fetch` passed. The unmaintained `paste` advisory is an explicitly allowed warning.
-- Arch's Rust 1.97 exposed a new Clippy lint in the MongoDB parser even though the project declares Rust 1.93. This demonstrates the need to test both the MSRV and current stable compiler.
-- Real driver integration tests and GTK end-to-end tests were not run as part of this audit.
+- Full-workspace strict Clippy passed with Rust 1.93.0 and Arch stable Rust 1.97.1. Weekly CI now repeats the current-stable check with an explicit toolchain selector.
+- The full Rust 1.93 preflight passed, including 283 non-GTK unit tests and 5 MCP policy integration tests; one Secret Service test was ignored.
+- All 27 Docker driver integration tests passed: PostgreSQL 4, MySQL 4, SQL Server 9, and ClickHouse 10.
+- GTK end-to-end safety tests were not run because they do not yet exist; this remains a Phase 4 blocker.
 
 ## What exists
 

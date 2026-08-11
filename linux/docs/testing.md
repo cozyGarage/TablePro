@@ -148,13 +148,14 @@ Rust sources under `crates/` are capped like SwiftLint file length:
 
 ## CI
 
-GitHub Actions (`.github/workflows/build-linux.yml`), Ubuntu runner, two jobs:
+GitHub Actions (`.github/workflows/build-linux.yml`) uses these jobs:
 
 1. **Preflight**: `scripts/preflight.sh` (file-size guardrail, fmt, clippy, non-GTK unit tests).
 2. **Fast checks**: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace --lib --bins` (via `ci-local.sh`). Runs in an `ubuntu:25.10` container, which ships the glib version libadwaita 1.6 needs.
 3. **Driver integration tests**: runs after preflight. Boots Docker on the host runner and runs the Postgres, MySQL, MSSQL, and ClickHouse suites with `--include-ignored`.
+4. **Current stable Clippy**: runs weekly and on manual workflow dispatch with the latest stable Rust toolchain. It does not replace the Rust 1.93 preflight.
 
-PRs only merge when both jobs are green.
+PRs only merge when the required pull-request jobs are green. The scheduled stable job protects against new compiler lints between dependency updates.
 
 ## Coverage
 

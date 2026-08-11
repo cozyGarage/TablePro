@@ -105,6 +105,49 @@ jobs:
       - name: cargo-audit
         run: cargo audit
 
+  current-stable-clippy:
+    name: Current stable Clippy (scheduled)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    needs: preflight
+    container:
+      image: ubuntu:25.10
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'linux' || github.ref }}
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            curl \
+            git \
+            pkg-config \
+            libgtk-4-dev \
+            libadwaita-1-dev \
+            libgtksourceview-5-dev \
+            libssl-dev \
+            libsecret-1-dev \
+            libkrb5-dev \
+            clang
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: linux
+          prefix-key: linux-current-stable-clippy
+      - name: Clippy on current stable
+        # The repository override selects 1.93, so +stable is required here.
+        run: cargo +stable clippy --workspace --exclude tablepro-driver-duckdb --all-targets -- -D warnings
+
   integration:
     name: Driver integration tests (docker)
     runs-on: ubuntu-24.04
