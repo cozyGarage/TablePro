@@ -13,8 +13,8 @@ This document records current implementation and verification evidence. The repo
 At audit time:
 
 - The Rust workspace contains 15 crates and approximately 37,000 lines of Rust.
-- 376 local tests passed; one Secret Service integration test was ignored.
-- The GTK application contributed 103 passing unit tests.
+- 387 fast local tests and 5 MCP policy integration tests passed; one Secret Service integration test was ignored.
+- The GTK application contributed 104 passing unit tests.
 - File-size and formatting gates passed.
 - `cargo deny check` and `cargo audit --no-fetch` passed. The unmaintained `paste` advisory is an explicitly allowed warning.
 - Arch's Rust 1.97 exposed a new Clippy lint in the MongoDB parser even though the project declares Rust 1.93. This demonstrates the need to test both the MSRV and current stable compiler.
@@ -58,10 +58,11 @@ Experimental labels:
 
 - SQL classification through `sqlparser`
 - Environment-aware policy rules
-- Read-only enforcement at the policy layer for classified writes, including data-changing CTEs
+- Read-only enforcement before approval fallback, including unparseable SQL and data-changing CTEs
+- Administrative classification for PostgreSQL backend-control functions and MySQL `KILL`
 - Principal-aware guarded connection handles
 - Blast-radius estimation and agent result masking
-- GTK approval dialog
+- Principal-aware GTK approval routing that denies when no application window is active
 - Hash-chained JSONL audit journal
 - Interactive transactions for PostgreSQL, MySQL, and SQLite
 - MCP over stdio and loopback HTTP with scoped tokens, connection allowlists, and rate limiting
@@ -78,61 +79,45 @@ Experimental labels:
 - Debian, AUR, and Flatpak scaffolding
 - gettext infrastructure and an accessibility checklist
 
-## Release-blocking findings
+## Phase 1 corrections verified in code and local tests
 
-### 1. Approval can default to automatic
+- `DatabaseService` starts with deny and the GUI installs its approval router during startup, independently of MCP startup.
+- Production GUI and daemon code do not construct `AutoApproveSink`; agentd exposes deny and interactive TTY modes only.
+- GTK approval without an active application window denies, as does closing or dismissing the dialog.
+- Read-only enforcement runs before unparseable-statement handling.
+- PostgreSQL backend-control functions and MySQL `KILL` are administrative writes. Token-aware detection covers predicates and wrapper expressions without treating comments or string literals as calls.
+- Session termination accepts only positive numeric identifiers before driver-specific SQL is built.
+- MCP no longer advertises or dispatches `search_query_history`.
+- Partial environment and connection policy sections overlay secure environment defaults; omitted mask patterns retain sensitive-field defaults.
+- Transactional batches authorize once per batch rather than once per statement.
 
-`DatabaseService` starts with `AutoApproveSink`. GTK approval is installed later as a side effect of MCP startup, and the same mutable sink serves human and agent principals. A production action can therefore reach an automatic approval path before the correct UI sink is installed.
+These corrections are implemented and unit/integration tested. They are not yet release-verified through the real GTK dismissal and approve-once flows; Phase 4 owns those tests.
 
-Required correction: route approval by principal and runtime. Production GUI and daemon code must never construct automatic approval.
+## Remaining release-blocking findings
 
-### 2. Audit failure silently becomes no audit
+### 1. Audit failure silently becomes no audit
 
 Both the GTK service and headless daemon catch `AuditJournal::open_default()` failure and replace it with `NullAuditSink`. Production mutations and agent operations can continue without durable evidence.
 
 Required correction: record durable intent before mutations, make audit errors observable, fail closed for governed operations, and verify journal writability, permissions, recovery, concurrency, and cross-process locking.
 
-### 3. Read-only precedence is incomplete
-
-The policy evaluates unparseable SQL before it checks the connection's read-only setting. Human policy may therefore approve SQL that cannot be proven read-only.
-
-Required correction: read-only denies every statement that cannot be proven read-only before approval is considered.
-
-### 4. Administrative SQL is classified as a read
-
-Calls such as `SELECT pg_terminate_backend(pid)` have administrative side effects despite their SELECT syntax. Current session IDs are accepted as strings and interpolated into driver-specific SQL.
-
-Required correction: add an administrative operation class and accept only parsed numeric identifiers.
-
-### 5. MCP query history bypasses connection isolation
-
-`search_query_history` reads the shared history database without applying the connection allowlist, SQL-literal redaction, policy, masking, or an audit event.
-
-Required correction: remove the tool until it is connection-isolated and governed.
-
-### 6. Partial policy files can weaken production defaults
-
-Serde field defaults are generic `EnvPolicy::default()` values. A partial `[environments.prod]` section can receive `agent_writes = approve` instead of inheriting secure production defaults.
-
-Required correction: deserialize optional overrides and merge them field by field over the selected environment's defaults.
-
-### 7. PostgreSQL `VerifyFull` through SSH is unresolved
+### 2. PostgreSQL `VerifyFull` through SSH is unresolved
 
 The core model separates the physical dial endpoint from the database service identity. SQL Server consumes this for TLS and Kerberos, but sqlx 0.8.6 does not expose separate PostgreSQL dial and TLS-server-name inputs.
 
 Required correction: use a supported sqlx API, a reviewed sqlx patch, or a connector that verifies the original hostname over the tunneled stream. Never downgrade verification silently.
 
-### 8. Cancellation is not proven on the server
+### 3. Cancellation is not proven on the server
 
 The editor can race a cancellation token or timeout against the query future. Dropping a future does not prove PostgreSQL stopped the operation, and it can prevent a terminal audit outcome.
 
 Required correction: add a cancellable driver contract, send server cancellation, confirm the query leaves `pg_stat_activity`, discard an untrustworthy connection, and record cancelled, timed-out, or unknown outcomes.
 
-### 9. Release tests are missing
+### 4. Release tests are missing
 
 There is no deterministic PostgreSQL TLS/SSH/reconnect fixture and no GTK end-to-end safety test. Unit coverage is strong, but the most important safety properties cross driver, policy, storage, and UI boundaries.
 
-Required correction: add the focused release fixture and three GTK approval/audit flows defined in `PLAN.md`.
+Required correction: add the focused release fixture and three GTK approval/audit flows defined in `PLAN.md`. Those tests must promote the Phase 1 authorization work from locally verified to release-verified.
 
 ## Partial or overstated features
 

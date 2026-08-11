@@ -29,8 +29,8 @@ Status terms:
 | TLS modes | Partially integrated | PostgreSQL `VerifyFull` through SSH remains unresolved |
 | Query history | Implemented | MCP access must be isolated before being re-exposed |
 | CSV/JSON export | Implemented | CSV streams table pages; Parquet is unsupported |
-| Activity and EXPLAIN | Implemented | Administrative classification and PID validation remain open |
-| Policy, MCP, and agentd | Implemented | Approval routing and audit failure behavior are unsafe |
+| Activity and EXPLAIN | Implemented | Administrative classification and numeric session-ID validation are covered |
+| Policy, MCP, and agentd | Partially integrated | Approval bypasses are closed; fail-closed audit remains open |
 | Audit journal | Implemented | Hash chain exists; fail-closed durability and concurrency are unverified |
 | AUR, Debian, Flatpak | Scaffolded | Not release-verified or ready for a public stable package |
 | i18n and accessibility | Infrastructure | English strings/checklist exist; end-user verification is incomplete |
@@ -47,12 +47,14 @@ Status terms:
 
 ### 1 — Authorization and approval
 
-- [ ] Replace production automatic approval with principal-aware routing
-- [ ] Enforce read-only before unparseable-statement fallback
-- [ ] Classify administrative side effects
-- [ ] Validate numeric session identifiers before building SQL
-- [ ] Remove or isolate MCP query-history search
-- [ ] Merge partial policies onto secure environment defaults
+- [x] Replace production automatic approval with principal-aware routing
+- [x] Enforce read-only before unparseable-statement fallback
+- [x] Classify administrative side effects
+- [x] Validate numeric session identifiers before building SQL
+- [x] Remove or isolate MCP query-history search
+- [x] Merge partial policies onto secure environment defaults
+
+Phase 1 is implemented and locally verified. Phase 4 still owns release-level GTK proof for dialog dismissal and approve-once behavior.
 
 ### 2 — Fail-closed audit
 
@@ -112,4 +114,4 @@ Keep the macOS tree as the parity reference until useful behavior, tests, docume
 
 ## Next implementation target
 
-Finish Phase 0 validation, then implement Phase 1 before adding new features. Production-write and agent-write workflows are not trusted until Phases 1–4 pass their release tests.
+Continue Phase 0 toolchain validation and implement Phase 2 fail-closed auditing. Production-write and agent-write workflows are not trusted until Phases 1–4 pass their release tests.

@@ -12,7 +12,7 @@ pub mod sql_dialect;
 mod tls;
 mod transaction;
 
-pub use activity::{ActivityQuery, activity_sql};
+pub use activity::{ActivityQuery, activity_sql, parse_session_id};
 pub use connection::{AuthMode, ConnectOptions, Connection};
 pub use driver::{DatabaseDriver, DriverMaturity};
 pub use error::DriverError;

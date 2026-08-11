@@ -64,13 +64,12 @@ impl ApprovalSink for GtkApprovalSink {
                 }
             });
 
-            let parent = gtk::Application::default().active_window();
-            match parent {
-                Some(win) => dialog.present(Some(&win)),
-                None => {
-                    let win = gtk::Window::new();
-                    dialog.present(Some(&win));
-                }
+            if let Some(window) = gtk::Application::default().active_window() {
+                dialog.present(Some(&window));
+            } else if let Ok(mut guard) = tx.lock()
+                && let Some(sender) = guard.take()
+            {
+                let _ = sender.send(ApprovalOutcome::Deny);
             }
         });
 

@@ -15,7 +15,7 @@ The Linux application is a native Rust/GTK product. It does not share source wit
 
 Audited branch state:
 
-- Linux HEAD: `c0b368a2`
+- Audit baseline: `c1db742e`
 - Tracking branch: `fork/linux`
 - Cached comparison with `origin/linux`: 38 commits ahead, 1 commit behind
 - Rust workspace: 15 crates and approximately 37,000 lines of Rust
@@ -27,7 +27,7 @@ Verified locally on 2026-08-11:
 
 - File-size guard passes
 - `cargo fmt --all -- --check` passes
-- 376 tests pass; one Secret Service integration test is ignored
+- 387 fast tests and 5 MCP policy integration tests pass; one Secret Service integration test is ignored
 - `cargo deny check` passes
 - `cargo audit --no-fetch` passes with the allowed unmaintained `paste` warning
 - Rust 1.97 exposed one new MongoDB Clippy lint; compatibility is addressed in Phase 0
@@ -95,13 +95,13 @@ PostgreSQL through SSH cannot currently use a distinct TCP dial address and TLS 
 
 ## Status
 
-Not started. First release blocker.
+Implemented and locally verified on 2026-08-11. The code-level bypasses are closed; dismissed-dialog and real GTK flow verification remain in Phase 4 before this phase is release-complete.
 
 ## 1.1 Route approval by principal and runtime
 
-Current production code initializes `DatabaseService` with `AutoApproveSink`; GTK approval is installed later by MCP startup. One mutable sink therefore serves both human and agent callers.
+The application now installs a principal-aware approval router during GUI startup. Its default is deny, GTK approval requires an active application window, and the headless daemon offers only deny or interactive TTY approval.
 
-Implement an approval router with these rules:
+Implemented rules:
 
 - Human GUI operations always use GTK approval.
 - In-app MCP operations may request GTK approval only while an active application window exists.
@@ -121,11 +121,11 @@ Primary files:
 
 ## 1.2 Enforce read-only before parse fallback
 
-An unparseable human statement is currently considered for approval before the read-only rule. Read-only connections must deny any statement that cannot be proven read-only.
+Read-only enforcement now runs before unparseable-statement approval fallback. A read-only connection denies any statement that cannot be proven read-only.
 
 ## 1.3 Classify administrative side effects
 
-Add an explicit administrative operation class. A statement such as `SELECT pg_terminate_backend(pid)` is not a harmless read.
+`StatementClass::Administrative` covers MySQL `KILL` and PostgreSQL administrative functions, including calls nested outside the SELECT projection. A statement such as `SELECT pg_terminate_backend(pid)` is not treated as a harmless read.
 
 - Agents with read-only access cannot terminate sessions.
 - Activity termination accepts a parsed numeric session identifier, never arbitrary interpolated text.
@@ -136,13 +136,12 @@ Primary files:
 - `linux/crates/policy/src/classify.rs`
 - `linux/crates/policy/src/rules.rs`
 - `linux/crates/policy/src/guard.rs`
-- New: `linux/crates/policy/src/operation.rs`
 - `linux/crates/core/src/activity.rs`
 - `linux/crates/app/src/ui/activity_dialog.rs`
 
 ## 1.4 Isolate MCP query history
 
-Remove `search_query_history` from the MCP tool list until it:
+`search_query_history` is removed from the MCP tool list until it:
 
 - Filters to explicitly allowlisted connection IDs
 - Redacts SQL literals
@@ -152,18 +151,19 @@ Remove `search_query_history` from the MCP tool list until it:
 
 ## 1.5 Merge partial policy configuration safely
 
-Deserialize environment overrides as optional fields and merge them onto the secure defaults for that environment. A partial production configuration must retain `agent_writes = deny` unless the user explicitly changes it.
+Environment and connection overrides deserialize as optional fields and merge onto the selected environment's secure defaults. A partial production configuration retains `agent_writes = deny` unless the user explicitly changes it, and omitted masking rules retain the default sensitive-field patterns.
 
 ## Acceptance criteria
 
-- No production GUI or daemon path constructs `AutoApproveSink`.
-- GUI startup without MCP still uses GTK approval.
-- Read-only connections deny unparseable SQL and data-changing CTEs.
-- Agents cannot call administrative functions using read scope.
-- Session IDs parse as integers before SQL is built.
-- An empty MCP allowlist exposes no connection data or history.
-- Partial production policy retains secure defaults.
-- One user action requests at most one approval.
+- [x] No production GUI or daemon path constructs `AutoApproveSink`.
+- [x] GUI startup without MCP installs GTK approval routing.
+- [x] Read-only connections deny unparseable SQL and data-changing CTEs.
+- [x] Agents cannot call administrative functions using read scope.
+- [x] Session IDs parse as positive integers before SQL is built.
+- [x] An empty MCP allowlist exposes no connection data or history.
+- [x] Partial production policy retains secure defaults.
+- [x] One batch requests at most one approval.
+- [ ] Real GTK tests prove dismissal denies and approval applies to exactly one operation (Phase 4).
 
 ---
 

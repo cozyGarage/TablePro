@@ -7,7 +7,6 @@ pub const TOOL_NAMES: &[&str] = &[
     "execute_query",
     "execute_write",
     "explain_query",
-    "search_query_history",
     "export_data",
 ];
 
@@ -129,27 +128,6 @@ pub async fn dispatch(bridge: &McpBridge, token: &McpToken, name: &str, args: Js
                 }).collect::<Vec<_>>(),
             }))
         }
-        "search_query_history" => {
-            let q = args.get("query").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let filter = tablepro_storage::query_history::SearchFilter {
-                needle: if q.is_empty() { None } else { Some(q) },
-                limit: 50,
-                ..Default::default()
-            };
-            let hits = tablepro_storage::query_history::search(filter)
-                .await
-                .map_err(|e| e.to_string())?;
-            Ok(json!(
-                hits.into_iter()
-                    .map(|h| json!({
-                        "query": h.query,
-                        "connection_id": h.connection_id,
-                        "executed_at": chrono::DateTime::<chrono::Utc>::from(h.executed_at).to_rfc3339(),
-                        "was_successful": h.success,
-                    }))
-                    .collect::<Vec<_>>()
-            ))
-        }
         "export_data" => {
             let id = parse_uuid(&args, "connection_id")?;
             let sql = args
@@ -214,5 +192,15 @@ fn value_to_json(v: &tablepro_core::Value) -> JsonValue {
         tablepro_core::Value::Decimal(d) => json!(d.to_string()),
         tablepro_core::Value::Uuid(u) => json!(u.to_string()),
         tablepro_core::Value::Json(j) => j.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_query_history_is_not_exposed() {
+        assert!(!TOOL_NAMES.contains(&"search_query_history"));
     }
 }

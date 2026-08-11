@@ -22,8 +22,8 @@ use tablepro_mcp::{
     ConnectionProvider, McpBridge, McpServerConfig, TokenPermissions, TokenStore, serve_stdio, serve_streamable_http,
 };
 use tablepro_policy::{
-    ApprovalOutcome, ApprovalRequest, ApprovalSink, AutoApproveSink, DenyApprovalSink, GuardContext, NullAuditSink,
-    PolicyConfig, PolicyGuard, Principal, load_from_path,
+    ApprovalOutcome, ApprovalRequest, ApprovalSink, DenyApprovalSink, GuardContext, NullAuditSink, PolicyConfig,
+    PolicyGuard, Principal, load_from_path,
 };
 use tablepro_storage::{AuditJournal, SavedConnection, load_connections, load_password};
 use uuid::Uuid;
@@ -61,7 +61,6 @@ enum Transport {
 #[derive(Clone, Debug, ValueEnum)]
 enum ApprovalMode {
     Deny,
-    Auto,
     Tty,
 }
 
@@ -196,7 +195,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let approval: Arc<dyn tablepro_policy::ApprovalSink> = match args.approval {
         ApprovalMode::Deny => Arc::new(DenyApprovalSink),
-        ApprovalMode::Auto => Arc::new(AutoApproveSink),
         ApprovalMode::Tty => Arc::new(TtyApprovalSink),
     };
     let audit: Arc<dyn tablepro_policy::AuditSink> = match AuditJournal::open_default() {

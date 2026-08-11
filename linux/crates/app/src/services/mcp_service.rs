@@ -11,7 +11,6 @@ use tablepro_storage::{SavedConnection, load_connections, store_mcp_token};
 use uuid::Uuid;
 
 use super::database_service;
-use super::gtk_approval::GtkApprovalSink;
 
 static BRIDGE: OnceLock<Arc<McpBridge>> = OnceLock::new();
 
@@ -33,10 +32,8 @@ impl ConnectionProvider for AppConnectionProvider {
     }
 }
 
-/// Start the loopback MCP HTTP server and install the GTK approval sink.
+/// Start the loopback MCP HTTP server.
 pub fn start_background() -> Option<Arc<McpBridge>> {
-    database_service::instance().set_approval_sink(Arc::new(GtkApprovalSink));
-
     let tokens = match TokenStore::open_default() {
         Ok(t) => Arc::new(t),
         Err(e) => {

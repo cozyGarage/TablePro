@@ -29,7 +29,7 @@ pub trait ApprovalSink: Send + Sync {
     async fn request(&self, req: ApprovalRequest) -> ApprovalOutcome;
 }
 
-/// Always allows. Used for Local/Dev human paths and unit tests.
+/// Always allows. Tests may use this to isolate policy decisions from UI.
 pub struct AutoApproveSink;
 
 #[async_trait]

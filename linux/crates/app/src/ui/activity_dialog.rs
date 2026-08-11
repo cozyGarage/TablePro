@@ -4,7 +4,7 @@
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk};
 
-use tablepro_core::{ActivityQuery, Value, activity_sql};
+use tablepro_core::{ActivityQuery, Value, activity_sql, parse_session_id};
 
 use crate::services::database_service;
 use crate::tr;
@@ -109,11 +109,14 @@ pub fn present(parent: &gtk::Window) {
     let driver = driver_id.clone();
     let kill_entry_c = kill_entry.clone();
     kill_btn.connect_clicked(move |_| {
-        let id = kill_entry_c.text().to_string();
-        if id.trim().is_empty() {
-            return;
-        }
-        let Some(sql) = activity_sql(&driver, ActivityQuery::KillSession, Some(id.trim())) else {
+        let id = match parse_session_id(&kill_entry_c.text()) {
+            Some(id) => id,
+            None => {
+                status_l.set_text(&tr!("Session id must be a positive integer."));
+                return;
+            }
+        };
+        let Some(sql) = activity_sql(&driver, ActivityQuery::KillSession, Some(id)) else {
             status_l.set_text(&tr!("Kill not supported for this driver."));
             return;
         };

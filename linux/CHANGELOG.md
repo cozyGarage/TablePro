@@ -27,6 +27,8 @@
 - Driver maturity labels in the Connect dialog (Experimental subtitle for Redis, MongoDB, DuckDB, and Oracle)
 - Driver maturity matrix in `docs/driver-maturity.md`
 - Windows integrated authentication for SQL Server through the current Kerberos ticket cache
+- Principal-aware GUI approval routing with fail-closed behavior when no active window exists
+- Explicit administrative SQL classification for PostgreSQL backend-control functions and MySQL KILL
 
 ### Changed
 
@@ -37,7 +39,7 @@
 - DatabaseService exposes only policy-gated connection handles
 - Roadmap and production audit rewritten to match the governed data-plane plan
 - Arbitrary SQL query soft row cap raised to 1,000,000 (truncated flag still set); browse pagination remains uncapped by that constant
-- Agentd approval strategies: deny (default), auto, or tty
+- Agentd approval strategies are deny (default) or interactive TTY; automatic approval is test-only
 - DuckDB driver is an optional `duckdb` Cargo feature (bundled build is large)
 - Oracle appears in the driver list only when built with `--features odpi`
 - Linux CI runs a non-GTK preflight job before the full GTK checks; local `./scripts/preflight.sh` mirrors that gate
@@ -50,10 +52,15 @@
 - Flatpak CI bootstraps Rust 1.93 via rustup so the GNOME 47 SDK's older rust-stable extension is not required
 - MCP write preview and other `begin()` paths now run statements through PolicyGuard instead of a raw driver transaction
 - Agents are denied (and humans must approve) when a blast-radius estimate cannot be computed for UPDATE/DELETE
+- Read-only connections deny unparseable SQL before any human approval fallback
+- Activity termination accepts only validated positive numeric session identifiers
+- Partial environment and connection policies inherit secure environment defaults and default masking rules
+- Transactional batches request approval once instead of once per statement
 
 ### Removed
 
 - Unused `Approve for session` approval outcome (no session-grant store existed)
+- MCP `search_query_history` until history can be connection-isolated, redacted, rate-limited, and audited
 
 ### Security
 
@@ -62,3 +69,5 @@
 - MCP tokens with an empty connection allowlist can no longer touch any connection
 - SSH stack upgraded to russh 0.60.3 (fixes unbounded allocation advisories and drops vulnerable libcrux 0.0.4)
 - Translation locale initialization runs before worker threads and uses the corrected gettext safety contract
+- Production GUI and daemon paths no longer construct automatic approval sinks
+- PostgreSQL administrative function calls are detected outside projection expressions while literals and comments remain read-only

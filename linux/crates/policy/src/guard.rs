@@ -355,18 +355,13 @@ impl Connection for PolicyGuard {
     }
 
     async fn execute_in_transaction(&self, statements: &[(String, Vec<Value>)]) -> Result<Vec<u64>, DriverError> {
-        for (sql, _) in statements {
-            self.authorize(sql, true).await?;
-        }
-        let start = Instant::now();
         let combined = statements
             .iter()
-            .map(|(s, _)| s.as_str())
+            .map(|(sql, _)| sql.trim().trim_end_matches(';'))
             .collect::<Vec<_>>()
             .join(";\n");
-        let decision = Decision::Allow {
-            rule: "transaction_batch".into(),
-        };
+        let decision = self.authorize(&combined, true).await?;
+        let start = Instant::now();
         match self.inner.execute_in_transaction(statements).await {
             Ok(rows) => {
                 let total: u64 = rows.iter().sum();
@@ -565,7 +560,7 @@ impl Transaction for PolicyTransaction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::approval::DenyApprovalSink;
+    use crate::approval::{ApprovalOutcome, ApprovalRequest, DenyApprovalSink};
     use crate::principal::Principal;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -627,8 +622,9 @@ mod tests {
         async fn execute_params(&self, _: &str, _: &[Value]) -> Result<ExecResult, DriverError> {
             Err(DriverError::Unsupported("n/a".into()))
         }
-        async fn execute_in_transaction(&self, _: &[(String, Vec<Value>)]) -> Result<Vec<u64>, DriverError> {
-            Err(DriverError::Unsupported("n/a".into()))
+        async fn execute_in_transaction(&self, statements: &[(String, Vec<Value>)]) -> Result<Vec<u64>, DriverError> {
+            self.executes.fetch_add(statements.len(), Ordering::SeqCst);
+            Ok(vec![1; statements.len()])
         }
         async fn begin(&self) -> Result<Box<dyn Transaction>, DriverError> {
             Ok(Box::new(CountingTx {
@@ -678,5 +674,51 @@ mod tests {
         assert!(matches!(err, DriverError::PolicyDenied(_)), "{err:?}");
         assert_eq!(executes.load(Ordering::SeqCst), 0, "inner execute must not run");
         tx.rollback().await.expect("rollback");
+    }
+
+    struct CountingApprovalSink {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ApprovalSink for CountingApprovalSink {
+        async fn request(&self, _request: ApprovalRequest) -> ApprovalOutcome {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            ApprovalOutcome::AllowOnce
+        }
+    }
+
+    #[tokio::test]
+    async fn transaction_batch_requests_one_approval() {
+        let executes = Arc::new(AtomicUsize::new(0));
+        let approvals = Arc::new(AtomicUsize::new(0));
+        let guard = PolicyGuard::new(
+            Arc::new(CountingConn {
+                executes: executes.clone(),
+            }),
+            GuardContext {
+                connection_id: Uuid::nil(),
+                connection_name: "production".into(),
+                driver_id: "postgres".into(),
+                environment: Environment::Prod,
+                read_only: false,
+                principal: Principal::human_gui(),
+                policy: Arc::new(PolicyConfig::default()),
+                approval: Arc::new(CountingApprovalSink {
+                    calls: approvals.clone(),
+                }),
+                audit: Arc::new(NullAuditSink),
+            },
+        );
+        let statements = vec![
+            ("INSERT INTO jobs(id) VALUES (1)".into(), vec![]),
+            ("INSERT INTO jobs(id) VALUES (2)".into(), vec![]),
+        ];
+
+        let rows = guard.execute_in_transaction(&statements).await.expect("approved batch");
+
+        assert_eq!(rows, vec![1, 1]);
+        assert_eq!(approvals.load(Ordering::SeqCst), 1);
+        assert_eq!(executes.load(Ordering::SeqCst), 2);
     }
 }

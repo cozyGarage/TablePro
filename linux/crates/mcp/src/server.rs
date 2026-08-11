@@ -139,7 +139,6 @@ fn tool_description(name: &str) -> &'static str {
         "execute_query" => "Run a read SQL query (writes require tools:write scope and policy approval)",
         "execute_write" => "Run a write with optional transaction preview (preview=true by default)",
         "explain_query" => "Run EXPLAIN on a SQL statement",
-        "search_query_history" => "Full-text search of query history",
         "export_data" => "Run a query and return CSV or JSON",
         _ => "",
     }
@@ -168,13 +167,6 @@ fn tool_schema(name: &str) -> JsonValue {
                 "token": {"type": "string"}
             },
             "required": ["connection_id", "table"]
-        }),
-        "search_query_history" => json!({
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "token": {"type": "string"}
-            }
         }),
         _ => json!({"type": "object"}),
     }

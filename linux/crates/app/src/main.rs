@@ -54,6 +54,12 @@ fn main() {
     let registry = Arc::new(build_registry());
     tracing::info!(drivers = registry.len(), "starting tablepro-app");
 
+    let approval_router = services::approval_router::ApprovalRouter::new(
+        Arc::new(services::gtk_approval::GtkApprovalSink),
+        Arc::new(services::gtk_approval::GtkApprovalSink),
+    );
+    services::database_service::instance().set_approval_sink(Arc::new(approval_router));
+
     let _mcp = services::mcp_service::start_background();
 
     let app = RelmApp::new(APP_ID);

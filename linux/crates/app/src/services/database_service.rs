@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use tablepro_core::{ConnectOptions, Connection, DatabaseDriver, Environment};
 use tablepro_policy::{
-    AutoApproveSink, GuardContext, NullAuditSink, PolicyConfig, PolicyGuard, Principal, load_policy,
+    DenyApprovalSink, GuardContext, NullAuditSink, PolicyConfig, PolicyGuard, Principal, load_policy,
 };
 use tablepro_ssh::{SshConfig, SshTunnel};
 use tablepro_storage::AuditJournal;
@@ -78,7 +78,7 @@ impl DatabaseService {
             active: Mutex::new(None),
             policy: Mutex::new(Arc::new(load_policy())),
             audit,
-            approval: Mutex::new(Arc::new(AutoApproveSink)),
+            approval: Mutex::new(Arc::new(DenyApprovalSink)),
         }
     }
 

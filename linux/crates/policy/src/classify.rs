@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{
-    Cte, Delete, Expr, FromTable, Insert, ObjectName, Query, SelectItem, SetExpr, Statement, TableFactor, TableObject,
+    Cte, Delete, Expr, FromTable, FunctionArg, FunctionArgExpr, FunctionArguments, Insert, ObjectName, Query,
+    SelectItem, SetExpr, Statement, TableFactor, TableObject,
 };
 use sqlparser::dialect::{Dialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::{Token, Tokenizer};
 
 /// Coarse statement class used by policy rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -14,6 +16,7 @@ pub enum StatementClass {
     Update,
     Delete,
     Ddl,
+    Administrative,
     Transaction,
     Other,
     /// Parser rejected the SQL. Fail closed: treated as a write.
@@ -72,11 +75,16 @@ pub fn classify(sql: &str, driver_id: &str) -> StatementFacts {
     let mut writes = false;
     let mut tables = Vec::new();
     let mut has_where = true;
+    let contains_administrative_call =
+        driver_id == "postgres" && sql_contains_administrative_call(trimmed, dialect.as_ref());
 
     for stmt in &statements {
         let facts = classify_statement(stmt);
         writes |= facts.writes;
-        if facts.class.is_write() || class == StatementClass::Select {
+        if facts.class == StatementClass::Administrative {
+            class = StatementClass::Administrative;
+        } else if class != StatementClass::Administrative && (facts.class.is_write() || class == StatementClass::Select)
+        {
             class = facts.class;
         }
         for t in facts.tables {
@@ -87,6 +95,11 @@ pub fn classify(sql: &str, driver_id: &str) -> StatementFacts {
         if facts.class == StatementClass::Update || facts.class == StatementClass::Delete {
             has_where &= facts.has_where;
         }
+    }
+
+    if contains_administrative_call {
+        class = StatementClass::Administrative;
+        writes = true;
     }
 
     if writes && class == StatementClass::Select {
@@ -101,6 +114,30 @@ pub fn classify(sql: &str, driver_id: &str) -> StatementFacts {
         is_multi_statement: is_multi,
         parse_error: None,
     }
+}
+
+/// Detect PostgreSQL administrative functions anywhere in a successfully parsed
+/// statement. Token inspection complements the AST walk so calls hidden in
+/// predicates, ordering expressions, or less-common expression wrappers still
+/// fail closed, while names inside literals and comments remain harmless.
+fn sql_contains_administrative_call(sql: &str, dialect: &dyn Dialect) -> bool {
+    let Ok(tokens) = Tokenizer::new(dialect, sql).tokenize() else {
+        return false;
+    };
+
+    tokens.iter().enumerate().any(|(index, token)| {
+        let Token::Word(word) = token else {
+            return false;
+        };
+        if !is_administrative_function_name(&word.value) {
+            return false;
+        }
+
+        tokens[index + 1..]
+            .iter()
+            .find(|next| !matches!(next, Token::Whitespace(_)))
+            .is_some_and(|next| matches!(next, Token::LParen))
+    })
 }
 
 fn dialect_for(driver_id: &str) -> Box<dyn Dialect> {
@@ -177,6 +214,14 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
             is_multi_statement: false,
             parse_error: None,
         },
+        Statement::Kill { .. } => StatementFacts {
+            class: StatementClass::Administrative,
+            writes: true,
+            tables: Vec::new(),
+            has_where: true,
+            is_multi_statement: false,
+            parse_error: None,
+        },
         Statement::StartTransaction { .. } | Statement::Commit { .. } | Statement::Rollback { .. } => StatementFacts {
             class: StatementClass::Transaction,
             writes: false,
@@ -236,21 +281,27 @@ fn from_table_names(from: &FromTable) -> Vec<String> {
 
 fn classify_query(query: &Query) -> StatementFacts {
     let mut writes = false;
+    let mut administrative = false;
     let mut tables = Vec::new();
 
     if let Some(with) = &query.with {
         for Cte { query: cte_q, .. } in &with.cte_tables {
             let inner = classify_query(cte_q);
             writes |= inner.writes;
+            administrative |= inner.class == StatementClass::Administrative;
             tables.extend(inner.tables);
         }
     }
 
     writes |= set_expr_writes(query.body.as_ref());
+    administrative |= set_expr_administrative(query.body.as_ref());
+    writes |= administrative;
     tables.extend(set_expr_tables(query.body.as_ref()));
 
     StatementFacts {
-        class: if writes {
+        class: if administrative {
+            StatementClass::Administrative
+        } else if writes {
             StatementClass::Other
         } else {
             StatementClass::Select
@@ -260,6 +311,66 @@ fn classify_query(query: &Query) -> StatementFacts {
         has_where: true,
         is_multi_statement: false,
         parse_error: None,
+    }
+}
+
+fn set_expr_administrative(body: &SetExpr) -> bool {
+    match body {
+        SetExpr::Query(query) => classify_query(query).class == StatementClass::Administrative,
+        SetExpr::SetOperation { left, right, .. } => set_expr_administrative(left) || set_expr_administrative(right),
+        SetExpr::Select(select) => select.projection.iter().any(|item| match item {
+            SelectItem::ExprWithAlias { expr, .. } | SelectItem::UnnamedExpr(expr) => expr_is_administrative(expr),
+            _ => false,
+        }),
+        _ => false,
+    }
+}
+
+fn expr_is_administrative(expr: &Expr) -> bool {
+    match expr {
+        Expr::Function(function) => {
+            is_administrative_function(&function.name) || function_arguments_are_administrative(&function.args)
+        }
+        Expr::Subquery(query) => classify_query(query).class == StatementClass::Administrative,
+        Expr::BinaryOp { left, right, .. } => expr_is_administrative(left) || expr_is_administrative(right),
+        Expr::UnaryOp { expr, .. } | Expr::Nested(expr) => expr_is_administrative(expr),
+        Expr::Case {
+            operand,
+            conditions,
+            else_result,
+            ..
+        } => {
+            operand.as_ref().is_some_and(|expr| expr_is_administrative(expr))
+                || conditions
+                    .iter()
+                    .any(|case| expr_is_administrative(&case.condition) || expr_is_administrative(&case.result))
+                || else_result.as_ref().is_some_and(|expr| expr_is_administrative(expr))
+        }
+        _ => false,
+    }
+}
+
+fn is_administrative_function(name: &ObjectName) -> bool {
+    is_administrative_function_name(&name.to_string())
+}
+
+fn is_administrative_function_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "pg_cancel_backend" | "pg_terminate_backend" | "pg_reload_conf" | "pg_rotate_logfile"
+    )
+}
+
+fn function_arguments_are_administrative(arguments: &FunctionArguments) -> bool {
+    match arguments {
+        FunctionArguments::None => false,
+        FunctionArguments::Subquery(query) => classify_query(query).class == StatementClass::Administrative,
+        FunctionArguments::List(arguments) => arguments.args.iter().any(|argument| {
+            let expression = match argument {
+                FunctionArg::Named { arg, .. } | FunctionArg::ExprNamed { arg, .. } | FunctionArg::Unnamed(arg) => arg,
+            };
+            matches!(expression, FunctionArgExpr::Expr(expr) if expr_is_administrative(expr))
+        }),
     }
 }
 
@@ -416,5 +527,46 @@ mod tests {
         let f = classify("UPDATE dbo.t SET a = 1 WHERE a = 2", "mssql");
         assert_eq!(f.class, StatementClass::Update);
         assert!(f.has_where);
+    }
+
+    #[test]
+    fn postgres_terminate_backend_is_administrative() {
+        let facts = classify("SELECT pg_terminate_backend(42)", "postgres");
+        assert_eq!(facts.class, StatementClass::Administrative);
+        assert!(facts.writes);
+    }
+
+    #[test]
+    fn administrative_function_nested_in_expression_is_detected() {
+        let facts = classify("SELECT coalesce(pg_cancel_backend(42), false)", "postgres");
+        assert_eq!(facts.class, StatementClass::Administrative);
+        assert!(facts.writes);
+    }
+
+    #[test]
+    fn administrative_function_in_predicate_is_detected() {
+        let facts = classify("SELECT 1 WHERE pg_terminate_backend(42)", "postgres");
+        assert_eq!(facts.class, StatementClass::Administrative);
+        assert!(facts.writes);
+    }
+
+    #[test]
+    fn administrative_function_name_in_literal_or_comment_is_not_a_call() {
+        for sql in [
+            "SELECT 'pg_terminate_backend(42)'",
+            "SELECT 1 -- pg_terminate_backend(42)",
+            "SELECT 1 /* pg_terminate_backend(42) */",
+        ] {
+            let facts = classify(sql, "postgres");
+            assert_eq!(facts.class, StatementClass::Select, "SQL: {sql}");
+            assert!(!facts.writes, "SQL: {sql}");
+        }
+    }
+
+    #[test]
+    fn mysql_kill_is_administrative() {
+        let facts = classify("KILL 42", "mysql");
+        assert_eq!(facts.class, StatementClass::Administrative);
+        assert!(facts.writes);
     }
 }

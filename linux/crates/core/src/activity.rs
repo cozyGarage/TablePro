@@ -10,7 +10,11 @@ pub enum ActivityQuery {
     KillSession,
 }
 
-pub fn activity_sql(driver_id: &str, kind: ActivityQuery, session_id: Option<&str>) -> Option<String> {
+pub fn parse_session_id(input: &str) -> Option<u64> {
+    input.trim().parse::<u64>().ok().filter(|id| *id > 0)
+}
+
+pub fn activity_sql(driver_id: &str, kind: ActivityQuery, session_id: Option<u64>) -> Option<String> {
     match (driver_id, kind) {
         ("postgres", ActivityQuery::Sessions) => Some(
             "SELECT pid, usename, datname, state, wait_event_type, wait_event, \
@@ -100,9 +104,17 @@ mod tests {
     fn kill_requires_id() {
         assert!(activity_sql("postgres", ActivityQuery::KillSession, None).is_none());
         assert!(
-            activity_sql("postgres", ActivityQuery::KillSession, Some("42"))
+            activity_sql("postgres", ActivityQuery::KillSession, Some(42))
                 .unwrap()
                 .contains("42")
         );
+    }
+
+    #[test]
+    fn session_id_accepts_only_positive_integers() {
+        assert_eq!(parse_session_id(" 42 "), Some(42));
+        assert_eq!(parse_session_id("0"), None);
+        assert_eq!(parse_session_id("1; DROP TABLE users"), None);
+        assert_eq!(parse_session_id("-1"), None);
     }
 }

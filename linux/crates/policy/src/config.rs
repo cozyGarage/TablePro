@@ -15,26 +15,14 @@ pub enum WritePolicy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvPolicy {
-    #[serde(default)]
     pub agent_writes: WritePolicy,
-    #[serde(default)]
     pub agent_allow_ddl: bool,
-    #[serde(default)]
     pub agent_allow_multi_statement: bool,
-    #[serde(default)]
     pub human_approve_writes: bool,
-    #[serde(default)]
     pub human_approve_ddl: bool,
-    #[serde(default = "default_true")]
     pub human_approve_unparseable: bool,
-    #[serde(default)]
     pub blast_radius_max_rows: Option<u64>,
-    #[serde(default = "default_true")]
     pub mask_agent_results: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl Default for EnvPolicy {
@@ -49,6 +37,56 @@ impl Default for EnvPolicy {
             blast_radius_max_rows: Some(10_000),
             mask_agent_results: true,
         }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EnvPolicyOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_writes: Option<WritePolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_allow_ddl: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_allow_multi_statement: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_approve_writes: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_approve_ddl: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_approve_unparseable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blast_radius_max_rows: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_agent_results: Option<bool>,
+}
+
+impl EnvPolicyOverride {
+    fn apply_to(&self, mut policy: EnvPolicy) -> EnvPolicy {
+        if let Some(value) = self.agent_writes {
+            policy.agent_writes = value;
+        }
+        if let Some(value) = self.agent_allow_ddl {
+            policy.agent_allow_ddl = value;
+        }
+        if let Some(value) = self.agent_allow_multi_statement {
+            policy.agent_allow_multi_statement = value;
+        }
+        if let Some(value) = self.human_approve_writes {
+            policy.human_approve_writes = value;
+        }
+        if let Some(value) = self.human_approve_ddl {
+            policy.human_approve_ddl = value;
+        }
+        if let Some(value) = self.human_approve_unparseable {
+            policy.human_approve_unparseable = value;
+        }
+        if let Some(value) = self.blast_radius_max_rows {
+            policy.blast_radius_max_rows = Some(value);
+        }
+        if let Some(value) = self.mask_agent_results {
+            policy.mask_agent_results = value;
+        }
+        policy
     }
 }
 
@@ -95,48 +133,51 @@ pub struct MaskRule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyConfig {
     #[serde(default)]
-    pub environments: HashMap<String, EnvPolicy>,
+    pub environments: HashMap<String, EnvPolicyOverride>,
     #[serde(default)]
-    pub connection_overrides: HashMap<String, EnvPolicy>,
-    #[serde(default)]
+    pub connection_overrides: HashMap<String, EnvPolicyOverride>,
+    #[serde(default = "default_mask_rules")]
     pub mask_patterns: Vec<MaskRule>,
+}
+
+fn default_mask_rules() -> Vec<MaskRule> {
+    crate::mask::DEFAULT_SENSITIVE_PATTERNS
+        .iter()
+        .map(|pattern| MaskRule {
+            pattern: (*pattern).into(),
+        })
+        .collect()
 }
 
 impl Default for PolicyConfig {
     fn default() -> Self {
-        let mut environments = HashMap::new();
-        environments.insert("local".into(), EnvPolicy::local_defaults());
-        environments.insert("dev".into(), EnvPolicy::local_defaults());
-        environments.insert("staging".into(), EnvPolicy::staging_defaults());
-        environments.insert("prod".into(), EnvPolicy::prod_defaults());
         Self {
-            environments,
+            environments: HashMap::new(),
             connection_overrides: HashMap::new(),
-            mask_patterns: crate::mask::DEFAULT_SENSITIVE_PATTERNS
-                .iter()
-                .map(|p| MaskRule { pattern: (*p).into() })
-                .collect(),
+            mask_patterns: default_mask_rules(),
         }
     }
 }
 
 impl PolicyConfig {
     pub fn for_environment(&self, env: Environment) -> EnvPolicy {
+        let defaults = match env {
+            Environment::Local | Environment::Dev => EnvPolicy::local_defaults(),
+            Environment::Staging => EnvPolicy::staging_defaults(),
+            Environment::Prod => EnvPolicy::prod_defaults(),
+        };
         self.environments
             .get(env.as_str())
-            .cloned()
-            .unwrap_or_else(|| match env {
-                Environment::Local | Environment::Dev => EnvPolicy::local_defaults(),
-                Environment::Staging => EnvPolicy::staging_defaults(),
-                Environment::Prod => EnvPolicy::prod_defaults(),
-            })
+            .map_or(defaults.clone(), |overrides| overrides.apply_to(defaults))
     }
 
     pub fn for_connection(&self, connection_id: &str, env: Environment) -> EnvPolicy {
+        let environment_policy = self.for_environment(env);
         self.connection_overrides
             .get(connection_id)
-            .cloned()
-            .unwrap_or_else(|| self.for_environment(env))
+            .map_or(environment_policy.clone(), |overrides| {
+                overrides.apply_to(environment_policy)
+            })
     }
 }
 
@@ -184,5 +225,44 @@ mod tests {
         let text = toml::to_string_pretty(&p).unwrap();
         let back: PolicyConfig = toml::from_str(&text).unwrap();
         assert_eq!(back.for_environment(Environment::Prod).agent_writes, WritePolicy::Deny);
+    }
+
+    #[test]
+    fn partial_prod_policy_inherits_secure_defaults() {
+        let policy: PolicyConfig = toml::from_str(
+            r#"
+                [environments.prod]
+                human_approve_ddl = false
+            "#,
+        )
+        .unwrap();
+        let prod = policy.for_environment(Environment::Prod);
+        assert_eq!(prod.agent_writes, WritePolicy::Deny);
+        assert!(prod.human_approve_writes);
+        assert!(!prod.human_approve_ddl);
+        assert_eq!(prod.blast_radius_max_rows, Some(1_000));
+        assert!(prod.mask_agent_results);
+    }
+
+    #[test]
+    fn partial_connection_override_inherits_environment_policy() {
+        let id = "9ab424f0-76ae-4fec-931f-2346549b6ca3";
+        let policy: PolicyConfig = toml::from_str(&format!(
+            r#"
+                [connection_overrides."{id}"]
+                human_approve_ddl = false
+            "#
+        ))
+        .unwrap();
+        let prod = policy.for_connection(id, Environment::Prod);
+        assert_eq!(prod.agent_writes, WritePolicy::Deny);
+        assert!(prod.human_approve_writes);
+        assert!(!prod.human_approve_ddl);
+    }
+
+    #[test]
+    fn omitted_mask_patterns_keep_sensitive_defaults() {
+        let policy: PolicyConfig = toml::from_str("").unwrap();
+        assert!(!policy.mask_patterns.is_empty());
     }
 }

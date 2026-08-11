@@ -42,21 +42,28 @@ pub fn evaluate(
     env_policy: &EnvPolicy,
     estimated_rows: Option<u64>,
 ) -> Decision {
-    if facts.class == StatementClass::Unparseable {
-        return decide_unparseable(principal, env_policy);
-    }
-
     if connection_read_only && facts.writes {
         return Decision::Deny {
             rule: "connection_read_only".into(),
-            message: "connection is marked read-only; writes are not permitted".into(),
+            message: "connection is marked read-only; statements that may write are not permitted".into(),
         };
+    }
+
+    if facts.class == StatementClass::Unparseable {
+        return decide_unparseable(principal, env_policy);
     }
 
     if facts.is_multi_statement && principal.is_agent() && !env_policy.agent_allow_multi_statement {
         return Decision::Deny {
             rule: "agent_no_multi_statement".into(),
             message: "agents may not run multi-statement scripts".into(),
+        };
+    }
+
+    if facts.class == StatementClass::Administrative && principal.is_agent() {
+        return Decision::Deny {
+            rule: "agent_admin_denied".into(),
+            message: "agents may not run administrative database operations".into(),
         };
     }
 
@@ -282,6 +289,38 @@ mod tests {
             None,
         );
         assert!(matches!(d, Decision::Deny { .. }));
+    }
+
+    #[test]
+    fn read_only_human_cannot_approve_unparseable_sql() {
+        let facts = classify("NOT SQL AT ALL !!!", "postgres");
+        let decision = evaluate(
+            &Principal::human_gui(),
+            Environment::Prod,
+            &facts,
+            true,
+            &env_policy(Environment::Prod),
+            None,
+        );
+        assert!(matches!(decision, Decision::Deny { ref rule, .. } if rule == "connection_read_only"));
+    }
+
+    #[test]
+    fn agent_cannot_terminate_postgres_session() {
+        let facts = classify("SELECT pg_terminate_backend(42)", "postgres");
+        let decision = evaluate(
+            &Principal::Agent {
+                token: "token".into(),
+                client: None,
+                model: None,
+            },
+            Environment::Local,
+            &facts,
+            false,
+            &env_policy(Environment::Local),
+            None,
+        );
+        assert!(matches!(decision, Decision::Deny { ref rule, .. } if rule == "agent_admin_denied"));
     }
 
     #[test]
