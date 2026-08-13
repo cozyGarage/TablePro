@@ -68,7 +68,7 @@ A checkbox may be checked only when its stated criterion is verified. A stub or 
 
 ## Status
 
-Implemented and locally verified on 2026-08-12. The first hosted execution of the new scheduled current-stable job remains external confirmation after this change is pushed; it does not block Phase 2 development.
+Complete locally on 2026-08-13. Rust 1.93 CI is green, current stable Clippy passes locally and has a scheduled job, upstream Linux changes are logged, and the shared security fixes through `origin/main` at `c849d75f` are reconciled. The first hosted current-stable execution remains external confirmation after push.
 
 ## Work
 
@@ -78,7 +78,8 @@ Implemented and locally verified on 2026-08-12. The first hosted execution of th
 - [x] Pass Clippy on Rust 1.93 and current stable Rust.
 - [x] Document rustup versus distro-toolchain behavior on Arch/Omarchy.
 - [x] Add a current-stable scheduled CI check without changing the Rust 1.93 MSRV.
-- [x] Record every upstream Linux sync in a short sync log.
+- [x] Record upstream reconciliations from 2026-08-10 onward in a short sync log.
+- [x] Reconcile browser-origin, SSH host-key algorithm, and GitHub Action pinning fixes from upstream security work.
 
 ## Known transport gap
 
@@ -88,8 +89,9 @@ PostgreSQL through SSH cannot currently use a distinct TCP dial address and TLS 
 
 - [x] Rust 1.93 remains the declared MSRV in `rust-toolchain.toml`, `Cargo.toml`, and `clippy.toml`.
 - [x] Preflight passes with Rust 1.93 on the supported Arch/Omarchy development setup.
-- [x] Full-workspace Clippy passes with Arch stable 1.97.1 and is repeated by scheduled CI using an explicit `+stable` selector.
-- [x] Direct endpoint, tunneled service identity, legacy serialization, and SQL Server password behavior remain covered by unit and real-driver integration tests.
+- [x] Full-workspace Clippy passes with Arch stable 1.97.1, and scheduled CI uses an explicit `+stable` selector.
+- [x] Direct endpoint, tunneled service identity, and legacy serialization are unit-tested; SQL Server password behavior is real-driver tested.
+- [ ] Verified SQL Server TLS and real Kerberos/SPN negotiation need a deterministic release fixture in Phase 3. Phase 0 verifies configuration and endpoint construction, not external KDC behavior.
 
 ---
 

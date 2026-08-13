@@ -66,6 +66,9 @@
 
 ### Security
 
+- MCP HTTP rejects untrusted browser origins before JSON-RPC dispatch
+- SSH host-key changes across key algorithms are treated as mismatches instead of first use
+- Linux GitHub Actions are pinned to immutable commits
 - TLS certificate verification modes (VerifyCa / VerifyFull) replace encrypt-only Require
 - Agent results masked for sensitive column name patterns by default
 - MCP tokens with an empty connection allowlist can no longer touch any connection

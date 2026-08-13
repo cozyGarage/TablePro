@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use russh::ChannelMsg;
 use russh::client::{self, Config, Handle};
-use russh::keys::known_hosts::{check_known_hosts_path, learn_known_hosts_path};
+use russh::keys::known_hosts::{check_known_hosts_path, known_host_keys_path, learn_known_hosts_path};
 use russh::keys::ssh_key::{HashAlg, PublicKey};
 use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
 
@@ -174,11 +174,18 @@ impl client::Handler for ClientHandler {
 fn verify_or_learn(host: &str, port: u16, key: &PublicKey, known_hosts: &Path, fingerprint: &str) -> HostKeyOutcome {
     match check_known_hosts_path(host, port, key, known_hosts) {
         Ok(true) => HostKeyOutcome::Trusted,
-        Ok(false) => match ensure_parent_dir(known_hosts).and_then(|_| {
-            learn_known_hosts_path(host, port, key, known_hosts).map_err(|e| std::io::Error::other(format!("{e}")))
-        }) {
-            Ok(()) => HostKeyOutcome::LearnedNew {
+        Ok(false) => match known_host_keys_path(host, port, known_hosts) {
+            Ok(existing) if !existing.is_empty() => HostKeyOutcome::Changed {
                 fingerprint: fingerprint.to_string(),
+                line: existing[0].0,
+            },
+            Ok(_) => match ensure_parent_dir(known_hosts).and_then(|_| {
+                learn_known_hosts_path(host, port, key, known_hosts).map_err(|e| std::io::Error::other(format!("{e}")))
+            }) {
+                Ok(()) => HostKeyOutcome::LearnedNew {
+                    fingerprint: fingerprint.to_string(),
+                },
+                Err(e) => HostKeyOutcome::KnownHostsIo(e.to_string()),
             },
             Err(e) => HostKeyOutcome::KnownHostsIo(e.to_string()),
         },
@@ -449,6 +456,7 @@ mod tests {
 
     const KEY_A_BASE64: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIGAdbe+Xv3hfmzwpfcGVeMHE/jfo5bmR1IgIpfuP4ypR";
     const KEY_B_BASE64: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIFvC8V+mh5lxNlOLorBehIwTS2R/nvw2ghab6N1SlSk6";
+    const RSA_KEY_BASE64: &str = "AAAAB3NzaC1yc2EAAAADAQABAAABAQDNTWi6IachyABYXmaOyLJ2TyBGTwkzBdub6FHS7xEB4XyqU9ZkAaFajaYlhT+3zmoFgDHhnNxULyJtOK3nHpcRaouO9XT8IfUqmmcVbkJrgsoS/gUyHKWqqbzpr70uZXoqM+tjbBAvPt7S6kts1QsJgi+AvPod+1lpfbe9O6Az+hREcPqHIn0BznhMzU/d6DirOCTE81fWoACZm0y6hrhE4MDU17JpTMe9E5bbNKLUh65d2BXBo0MolCClns/UA5trjRboNz+28HRMnyPqIzqMCE7J9HLmpCdTD2+aEGnD2RbsVwYKPRokiyJVOHtQGZwMsEqTgnrG7T61sM1ZCG+D";
 
     fn parse_key(base64: &str) -> PublicKey {
         russh::keys::parse_public_key_base64(base64).expect("valid base64 public key")
@@ -472,6 +480,17 @@ mod tests {
         let _ = verify_or_learn("bastion.example.com", 22, &key, &path, "fp");
         let outcome = verify_or_learn("bastion.example.com", 22, &key, &path, "fp");
         assert!(matches!(outcome, HostKeyOutcome::Trusted));
+    }
+
+    #[test]
+    fn verify_or_learn_detects_key_type_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        let ed25519 = parse_key(KEY_A_BASE64);
+        let rsa = parse_key(RSA_KEY_BASE64);
+        let _ = verify_or_learn("bastion.example.com", 22, &ed25519, &path, "ed25519");
+        let outcome = verify_or_learn("bastion.example.com", 22, &rsa, &path, "rsa");
+        assert!(matches!(outcome, HostKeyOutcome::Changed { fingerprint, .. } if fingerprint == "rsa"));
     }
 
     #[test]

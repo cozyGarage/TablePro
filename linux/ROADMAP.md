@@ -44,8 +44,12 @@ Status terms:
 - [x] Pass Clippy on Rust 1.93 and current stable Rust
 - [x] Document the Arch/rustup toolchain setup
 - [x] Add scheduled current-stable CI
+- [x] Reject untrusted browser origins on the MCP loopback endpoint
+- [x] Detect SSH host-key changes across key algorithms
+- [x] Pin Linux GitHub Actions to immutable commits
+- [x] Log upstream reconciliations from 2026-08-10 onward
 
-Phase 0 is implemented and locally verified. Its first hosted current-stable schedule is expected after the workflow change is pushed.
+Phase 0 is complete locally. Rust 1.93 CI is green, current stable Clippy passes locally, and the first hosted current-stable schedule is expected after push. Real SQL Server TLS and Kerberos negotiation remain release-fixture work in Phase 3.
 
 ### 1 — Authorization and approval
 

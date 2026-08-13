@@ -21,11 +21,11 @@ jobs:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-47
       options: --privileged
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ github.event_name == 'schedule' && 'linux' || github.ref }}
       - name: Build Flatpak
-        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        uses: flatpak/flatpak-github-actions/flatpak-builder@401fe28a8384095fc1531b9d320b292f0ee45adb
         with:
           bundle: tablepro.flatpak
           manifest-path: linux/flatpak/com.tablepro.linux.json

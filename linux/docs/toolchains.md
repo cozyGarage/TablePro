@@ -1,6 +1,6 @@
 # Rust toolchains on Arch and Omarchy
 
-TablePro Linux declares Rust 1.93 as its minimum supported Rust version (MSRV) in `rust-toolchain.toml`, `Cargo.toml`, and `clippy.toml`. CI compiles and lints with 1.93. A separate scheduled job runs Clippy with the current stable release so new compiler lints are found before an Arch upgrade reaches contributors.
+TablePro Linux declares Rust 1.93 as its minimum supported Rust version (MSRV) in `rust-toolchain.toml`, `Cargo.toml`, and `clippy.toml`. CI compiles and lints with 1.93. A separate scheduled job runs Clippy with the current stable release so new compiler lints are found before an Arch or Omarchy upgrade reaches contributors. Omarchy uses Arch packages, so the same toolchain behavior applies.
 
 ## Why Arch's Cargo may ignore `rust-toolchain.toml`
 
@@ -13,18 +13,21 @@ type -a cargo rustc
 cargo --version
 rustc --version
 rustup show active-toolchain  # available only with rustup
+cargo +1.93.0 --version
+cargo +stable --version
 ```
 
 Using a newer Arch compiler is useful for the current-stable check, but it does not prove MSRV compatibility.
 
 ## Recommended contributor setup: rustup
 
-Install Arch's `rustup` package instead of the direct `rust` package, then install both test toolchains:
+Install Arch's `rustup` package instead of the direct `rust` package, then install both test toolchains. The Arch `rust` and `rustup` packages conflict, so pacman replaces the direct compiler package with rustup-managed proxies.
 
 ```bash
 sudo pacman -S rustup
 rustup toolchain install 1.93.0 --profile minimal --component rustfmt,clippy
 rustup toolchain install stable --profile minimal --component clippy
+rustup default stable
 ```
 
 Inside `linux/`, the repository override selects 1.93 automatically. Use an explicit `+stable` selector for the forward-compatibility check:

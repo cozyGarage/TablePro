@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use axum::http::{HeaderMap, Uri, header::ORIGIN};
 use serde_json::{Value as JsonValue, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -172,10 +173,33 @@ fn tool_schema(name: &str) -> JsonValue {
     }
 }
 
+fn origin_is_allowed(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(ORIGIN) else {
+        return true;
+    };
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    if origin.is_empty() {
+        return true;
+    }
+    let Ok(uri) = origin.parse::<Uri>() else {
+        return false;
+    };
+    if !matches!(uri.scheme_str(), Some("http" | "https")) {
+        return false;
+    }
+    matches!(
+        uri.host().map(str::to_ascii_lowercase).as_deref(),
+        Some("localhost" | "127.0.0.1" | "[::1]" | "claude.ai" | "app.cursor.com")
+    )
+}
+
 /// Bind a loopback streamable-HTTP endpoint that forwards tool calls to
 /// the same bridge. Loopback only by default.
 pub async fn serve_streamable_http(bridge: Arc<McpBridge>, config: McpServerConfig) -> Result<(), String> {
-    use axum::{Json, Router, routing::post};
+    use axum::response::IntoResponse;
+    use axum::{Json, Router, http::StatusCode, routing::post};
     use std::net::SocketAddr;
 
     if config.bind_host != "127.0.0.1" && config.bind_host != "localhost" && config.bind_host != "::1" {
@@ -185,9 +209,20 @@ pub async fn serve_streamable_http(bridge: Arc<McpBridge>, config: McpServerConf
     let bridge = bridge.clone();
     let app = Router::new().route(
         "/mcp",
-        post(move |Json(body): Json<JsonValue>| {
+        post(move |headers: HeaderMap, Json(body): Json<JsonValue>| {
             let bridge = bridge.clone();
             async move {
+                if !origin_is_allowed(&headers) {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({
+                            "jsonrpc": "2.0",
+                            "id": null,
+                            "error": {"code": -32000, "message": "forbidden origin"}
+                        })),
+                    )
+                        .into_response();
+                }
                 let id = body.get("id").cloned().unwrap_or(JsonValue::Null);
                 let method = body.get("method").and_then(|m| m.as_str()).unwrap_or("");
                 let params = body.get("params").cloned().unwrap_or(json!({}));
@@ -211,7 +246,7 @@ pub async fn serve_streamable_http(bridge: Arc<McpBridge>, config: McpServerConf
                     Ok(r) => json!({"jsonrpc": "2.0", "id": id, "result": r}),
                     Err(e) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": e}}),
                 };
-                Json(response)
+                Json(response).into_response()
             }
         }),
     );
@@ -222,4 +257,47 @@ pub async fn serve_streamable_http(bridge: Arc<McpBridge>, config: McpServerConf
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| e.to_string())?;
     tracing::info!(%addr, "MCP HTTP listening (loopback)");
     axum::serve(listener, app).await.map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    fn headers_with_origin(origin: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(ORIGIN, HeaderValue::from_str(origin).unwrap());
+        headers
+    }
+
+    #[test]
+    fn native_requests_without_origin_are_allowed() {
+        assert!(origin_is_allowed(&HeaderMap::new()));
+    }
+
+    #[test]
+    fn trusted_browser_origins_are_allowed() {
+        for origin in [
+            "http://localhost:3000",
+            "http://127.0.0.1:8080",
+            "http://[::1]:8080",
+            "https://claude.ai",
+            "https://app.cursor.com",
+        ] {
+            assert!(origin_is_allowed(&headers_with_origin(origin)), "{origin}");
+        }
+    }
+
+    #[test]
+    fn untrusted_browser_origins_are_rejected() {
+        for origin in [
+            "https://example.com",
+            "https://cursor.com",
+            "https://evil.claude.ai",
+            "file:///tmp/request",
+            "null",
+        ] {
+            assert!(!origin_is_allowed(&headers_with_origin(origin)), "{origin}");
+        }
+    }
 }
