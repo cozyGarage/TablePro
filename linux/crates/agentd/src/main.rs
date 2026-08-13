@@ -1,6 +1,7 @@
 //! Headless TablePro agent daemon. Serves MCP over stdio or loopback HTTP
 //! with a required policy file and no GTK dependency.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -50,6 +51,9 @@ struct Args {
     /// Issue a new read-write token and print it, then exit.
     #[arg(long)]
     issue_token: Option<String>,
+
+    #[arg(long, requires = "issue_token")]
+    connection: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -156,6 +160,17 @@ impl ConnectionProvider for DaemonProvider {
     }
 }
 
+fn validate_token_connections(requested: &[Uuid], saved: &[SavedConnection]) -> Result<(), String> {
+    if requested.is_empty() {
+        return Err("--issue-token requires at least one --connection UUID".into());
+    }
+    let saved_ids: HashSet<Uuid> = saved.iter().map(|connection| connection.id).collect();
+    if let Some(unknown) = requested.iter().find(|id| !saved_ids.contains(id)) {
+        return Err(format!("connection {unknown} not found"));
+    }
+    Ok(())
+}
+
 fn build_registry() -> DriverRegistry {
     let mut r = DriverRegistry::new();
     r.register(Arc::new(ClickhouseDriver));
@@ -188,7 +203,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tokens = Arc::new(TokenStore::open_default().map_err(|e| e.to_string())?);
     if let Some(name) = args.issue_token {
-        let (_meta, plain) = tokens.issue(name, TokenPermissions::ReadWrite, vec![], None)?;
+        let saved = load_connections().await?;
+        validate_token_connections(&args.connection, &saved)?;
+        let (_meta, plain) = tokens.issue(name, TokenPermissions::ReadWrite, args.connection, None)?;
         println!("{plain}");
         return Ok(());
     }
@@ -227,4 +244,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tablepro_core::{AuthMode, Environment};
+
+    fn saved_connection(id: Uuid) -> SavedConnection {
+        SavedConnection {
+            id,
+            name: "test".into(),
+            driver_id: "postgres".into(),
+            host: "localhost".into(),
+            port: 5432,
+            database: "postgres".into(),
+            username: "postgres".into(),
+            use_tls: false,
+            tls_mode: None,
+            read_only: false,
+            auth_mode: AuthMode::Password,
+            environment: Environment::Local,
+            ssh: None,
+            last_opened_at: None,
+        }
+    }
+
+    #[test]
+    fn token_connections_require_at_least_one_saved_connection() {
+        let id = Uuid::new_v4();
+        let saved = vec![saved_connection(id)];
+
+        assert!(validate_token_connections(&[], &saved).is_err());
+        assert!(validate_token_connections(&[Uuid::new_v4()], &saved).is_err());
+        assert!(validate_token_connections(&[id], &saved).is_ok());
+    }
 }

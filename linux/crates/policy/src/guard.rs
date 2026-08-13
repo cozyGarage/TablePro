@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::approval::{ApprovalOutcome, ApprovalRequest, ApprovalSink};
 use crate::blast_radius::count_sql_for_mutation;
-use crate::classify::{StatementClass, classify};
+use crate::classify::classify;
 use crate::config::PolicyConfig;
 use crate::mask::apply_masking;
 use crate::principal::Principal;
@@ -90,10 +90,7 @@ impl PolicyGuard {
             .policy
             .for_connection(&self.ctx.connection_id.to_string(), self.ctx.environment);
 
-        let estimated_rows = if facts.writes
-            && matches!(facts.class, StatementClass::Update | StatementClass::Delete)
-            && env_policy.blast_radius_max_rows.is_some()
-        {
+        let estimated_rows = if facts.contains_mutating_dml && env_policy.blast_radius_max_rows.is_some() {
             self.estimate_blast_radius(sql).await
         } else {
             None
@@ -686,6 +683,89 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             ApprovalOutcome::AllowOnce
         }
+    }
+
+    #[tokio::test]
+    async fn mixed_transaction_batch_cannot_hide_ddl() {
+        let executes = Arc::new(AtomicUsize::new(0));
+        let mut policy = PolicyConfig::default();
+        let local = policy.environments.entry("local".into()).or_default();
+        local.agent_writes = Some(crate::config::WritePolicy::Allow);
+        local.agent_allow_multi_statement = Some(true);
+        local.agent_allow_ddl = Some(false);
+        let guard = PolicyGuard::new(
+            Arc::new(CountingConn {
+                executes: executes.clone(),
+            }),
+            GuardContext {
+                connection_id: Uuid::nil(),
+                connection_name: "local".into(),
+                driver_id: "postgres".into(),
+                environment: Environment::Local,
+                read_only: false,
+                principal: Principal::Agent {
+                    token: "tok".into(),
+                    client: None,
+                    model: None,
+                },
+                policy: Arc::new(policy),
+                approval: Arc::new(DenyApprovalSink),
+                audit: Arc::new(NullAuditSink),
+            },
+        );
+        let statements = vec![
+            ("DROP TABLE protected_data".into(), vec![]),
+            ("INSERT INTO audit_log VALUES (1)".into(), vec![]),
+        ];
+
+        let error = guard
+            .execute_in_transaction(&statements)
+            .await
+            .expect_err("mixed DDL batch must be denied");
+
+        assert!(matches!(error, DriverError::PolicyDenied(_)), "{error:?}");
+        assert_eq!(executes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn mixed_transaction_batch_cannot_hide_unknown_write() {
+        let executes = Arc::new(AtomicUsize::new(0));
+        let mut policy = PolicyConfig::default();
+        let local = policy.environments.entry("local".into()).or_default();
+        local.agent_writes = Some(crate::config::WritePolicy::Allow);
+        local.agent_allow_multi_statement = Some(true);
+        let guard = PolicyGuard::new(
+            Arc::new(CountingConn {
+                executes: executes.clone(),
+            }),
+            GuardContext {
+                connection_id: Uuid::nil(),
+                connection_name: "local".into(),
+                driver_id: "postgres".into(),
+                environment: Environment::Local,
+                read_only: false,
+                principal: Principal::Agent {
+                    token: "tok".into(),
+                    client: None,
+                    model: None,
+                },
+                policy: Arc::new(policy),
+                approval: Arc::new(DenyApprovalSink),
+                audit: Arc::new(NullAuditSink),
+            },
+        );
+        let statements = vec![
+            ("SET session_replication_role = replica".into(), vec![]),
+            ("INSERT INTO jobs(id) VALUES (1)".into(), vec![]),
+        ];
+
+        let error = guard
+            .execute_in_transaction(&statements)
+            .await
+            .expect_err("unknown write in mixed batch must be denied");
+
+        assert!(matches!(error, DriverError::PolicyDenied(_)), "{error:?}");
+        assert_eq!(executes.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

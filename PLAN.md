@@ -99,7 +99,7 @@ PostgreSQL through SSH cannot currently use a distinct TCP dial address and TLS 
 
 ## Status
 
-Implemented and locally verified on 2026-08-11. The code-level bypasses are closed; dismissed-dialog and real GTK flow verification remain in Phase 4 before this phase is release-complete.
+Implemented on 2026-08-11 and security-reviewed on 2026-08-13. The review closed mixed-script risk aggregation, PostgreSQL side-effecting function classification, agent token allowlist issuance, and activity API validation. Dismissed-dialog and real GTK flow verification remain in Phase 4 before this phase is release-complete.
 
 ## 1.1 Route approval by principal and runtime
 
@@ -129,7 +129,7 @@ Read-only enforcement now runs before unparseable-statement approval fallback. A
 
 ## 1.3 Classify administrative side effects
 
-`StatementClass::Administrative` covers MySQL `KILL` and PostgreSQL administrative functions, including calls nested outside the SELECT projection. A statement such as `SELECT pg_terminate_backend(pid)` is not treated as a harmless read.
+`StatementClass::Administrative` covers MySQL `KILL` and PostgreSQL administrative or side-effecting functions, including calls nested outside the SELECT projection. Calls such as `pg_terminate_backend`, `pg_promote`, `nextval`, `setval`, advisory locks, large-object mutation, and server configuration changes are not treated as harmless reads.
 
 - Agents with read-only access cannot terminate sessions.
 - Activity termination accepts a parsed numeric session identifier, never arbitrary interpolated text.
@@ -166,6 +166,8 @@ Environment and connection overrides deserialize as optional fields and merge on
 - [x] Session IDs parse as positive integers before SQL is built.
 - [x] An empty MCP allowlist exposes no connection data or history.
 - [x] Partial production policy retains secure defaults.
+- [x] Mixed transaction batches preserve DDL and unscoped DML restrictions in either statement order.
+- [x] Agent token issuance requires at least one existing saved connection.
 - [x] One batch requests at most one approval.
 - [ ] Real GTK tests prove dismissal denies and approval applies to exactly one operation (Phase 4).
 

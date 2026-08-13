@@ -37,6 +37,10 @@ pub struct StatementFacts {
     pub writes: bool,
     pub tables: Vec<String>,
     pub has_where: bool,
+    pub contains_ddl: bool,
+    pub contains_mutating_dml: bool,
+    pub contains_unscoped_dml: bool,
+    pub contains_unknown_write: bool,
     pub is_multi_statement: bool,
     pub parse_error: Option<String>,
 }
@@ -48,6 +52,10 @@ impl StatementFacts {
             writes: true,
             tables: Vec::new(),
             has_where: false,
+            contains_ddl: false,
+            contains_mutating_dml: false,
+            contains_unscoped_dml: false,
+            contains_unknown_write: true,
             is_multi_statement: false,
             parse_error: Some(message.into()),
         }
@@ -75,12 +83,20 @@ pub fn classify(sql: &str, driver_id: &str) -> StatementFacts {
     let mut writes = false;
     let mut tables = Vec::new();
     let mut has_where = true;
+    let mut contains_ddl = false;
+    let mut contains_mutating_dml = false;
+    let mut contains_unscoped_dml = false;
+    let mut contains_unknown_write = false;
     let contains_administrative_call =
         driver_id == "postgres" && sql_contains_administrative_call(trimmed, dialect.as_ref());
 
     for stmt in &statements {
         let facts = classify_statement(stmt);
         writes |= facts.writes;
+        contains_ddl |= facts.contains_ddl;
+        contains_mutating_dml |= facts.contains_mutating_dml;
+        contains_unscoped_dml |= facts.contains_unscoped_dml;
+        contains_unknown_write |= facts.contains_unknown_write;
         if facts.class == StatementClass::Administrative {
             class = StatementClass::Administrative;
         } else if class != StatementClass::Administrative && (facts.class.is_write() || class == StatementClass::Select)
@@ -111,6 +127,10 @@ pub fn classify(sql: &str, driver_id: &str) -> StatementFacts {
         writes,
         tables,
         has_where,
+        contains_ddl,
+        contains_mutating_dml,
+        contains_unscoped_dml,
+        contains_unknown_write,
         is_multi_statement: is_multi,
         parse_error: None,
     }
@@ -159,6 +179,10 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
             writes: true,
             tables: table_factor_names(&table.relation),
             has_where: selection.is_some(),
+            contains_ddl: false,
+            contains_mutating_dml: true,
+            contains_unscoped_dml: selection.is_none(),
+            contains_unknown_write: false,
             is_multi_statement: false,
             parse_error: None,
         },
@@ -168,6 +192,10 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
             writes: true,
             tables: object_name_strings(&c.name),
             has_where: true,
+            contains_ddl: true,
+            contains_mutating_dml: false,
+            contains_unscoped_dml: false,
+            contains_unknown_write: false,
             is_multi_statement: false,
             parse_error: None,
         },
@@ -176,6 +204,10 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
             writes: true,
             tables: object_name_strings(name),
             has_where: true,
+            contains_ddl: true,
+            contains_mutating_dml: false,
+            contains_unscoped_dml: false,
+            contains_unknown_write: false,
             is_multi_statement: false,
             parse_error: None,
         },
@@ -187,6 +219,10 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
                 None => object_name_strings(&c.table_name),
             },
             has_where: true,
+            contains_ddl: true,
+            contains_mutating_dml: false,
+            contains_unscoped_dml: false,
+            contains_unknown_write: false,
             is_multi_statement: false,
             parse_error: None,
         },
@@ -195,6 +231,10 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
             writes: true,
             tables: object_name_strings(name),
             has_where: true,
+            contains_ddl: true,
+            contains_mutating_dml: false,
+            contains_unscoped_dml: false,
+            contains_unknown_write: false,
             is_multi_statement: false,
             parse_error: None,
         },
@@ -203,22 +243,58 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
             writes: true,
             tables: names.iter().flat_map(object_name_strings).collect(),
             has_where: true,
+            contains_ddl: true,
+            contains_mutating_dml: false,
+            contains_unscoped_dml: false,
+            contains_unknown_write: false,
             is_multi_statement: false,
             parse_error: None,
         },
-        Statement::Truncate { table_names, .. } => StatementFacts {
-            class: StatementClass::Ddl,
-            writes: true,
-            tables: table_names.iter().map(|t| t.name.to_string()).collect(),
-            has_where: false,
-            is_multi_statement: false,
-            parse_error: None,
-        },
+        Statement::Truncate { table_names, .. } => ddl_facts(table_names.iter().map(|t| t.name.to_string()).collect()),
+        Statement::CreateVirtualTable { .. }
+        | Statement::CreateRole { .. }
+        | Statement::CreateSecret { .. }
+        | Statement::CreateServer(_)
+        | Statement::CreatePolicy { .. }
+        | Statement::CreateConnector(_)
+        | Statement::AlterIndex { .. }
+        | Statement::AlterView { .. }
+        | Statement::AlterType(_)
+        | Statement::AlterRole { .. }
+        | Statement::AlterPolicy { .. }
+        | Statement::AlterConnector { .. }
+        | Statement::DropFunction { .. }
+        | Statement::DropDomain(_)
+        | Statement::DropProcedure { .. }
+        | Statement::DropSecret { .. }
+        | Statement::DropPolicy { .. }
+        | Statement::DropConnector { .. }
+        | Statement::CreateExtension { .. }
+        | Statement::DropExtension { .. }
+        | Statement::Comment { .. }
+        | Statement::CreateSchema { .. }
+        | Statement::CreateDatabase { .. }
+        | Statement::CreateFunction(_)
+        | Statement::CreateTrigger { .. }
+        | Statement::DropTrigger { .. }
+        | Statement::CreateProcedure { .. }
+        | Statement::CreateMacro { .. }
+        | Statement::CreateStage { .. }
+        | Statement::Grant { .. }
+        | Statement::Deny(_)
+        | Statement::Revoke { .. }
+        | Statement::CreateSequence { .. }
+        | Statement::CreateDomain(_)
+        | Statement::CreateType { .. } => ddl_facts(Vec::new()),
         Statement::Kill { .. } => StatementFacts {
             class: StatementClass::Administrative,
             writes: true,
             tables: Vec::new(),
             has_where: true,
+            contains_ddl: false,
+            contains_mutating_dml: false,
+            contains_unscoped_dml: false,
+            contains_unknown_write: false,
             is_multi_statement: false,
             parse_error: None,
         },
@@ -227,6 +303,10 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
             writes: false,
             tables: Vec::new(),
             has_where: true,
+            contains_ddl: false,
+            contains_mutating_dml: false,
+            contains_unscoped_dml: false,
+            contains_unknown_write: false,
             is_multi_statement: false,
             parse_error: None,
         },
@@ -235,9 +315,28 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
             writes: true,
             tables: Vec::new(),
             has_where: true,
+            contains_ddl: false,
+            contains_mutating_dml: false,
+            contains_unscoped_dml: false,
+            contains_unknown_write: true,
             is_multi_statement: false,
             parse_error: None,
         },
+    }
+}
+
+fn ddl_facts(tables: Vec<String>) -> StatementFacts {
+    StatementFacts {
+        class: StatementClass::Ddl,
+        writes: true,
+        tables,
+        has_where: true,
+        contains_ddl: true,
+        contains_mutating_dml: false,
+        contains_unscoped_dml: false,
+        contains_unknown_write: false,
+        is_multi_statement: false,
+        parse_error: None,
     }
 }
 
@@ -251,6 +350,10 @@ fn classify_insert(insert: &Insert) -> StatementFacts {
         writes: true,
         tables,
         has_where: true,
+        contains_ddl: false,
+        contains_mutating_dml: false,
+        contains_unscoped_dml: false,
+        contains_unknown_write: false,
         is_multi_statement: false,
         parse_error: None,
     }
@@ -267,6 +370,10 @@ fn classify_delete(delete: &Delete) -> StatementFacts {
         writes: true,
         tables,
         has_where: delete.selection.is_some(),
+        contains_ddl: false,
+        contains_mutating_dml: true,
+        contains_unscoped_dml: delete.selection.is_none(),
+        contains_unknown_write: false,
         is_multi_statement: false,
         parse_error: None,
     }
@@ -282,6 +389,10 @@ fn from_table_names(from: &FromTable) -> Vec<String> {
 fn classify_query(query: &Query) -> StatementFacts {
     let mut writes = false;
     let mut administrative = false;
+    let mut contains_ddl = false;
+    let mut contains_mutating_dml = false;
+    let mut contains_unscoped_dml = false;
+    let mut contains_unknown_write = false;
     let mut tables = Vec::new();
 
     if let Some(with) = &query.with {
@@ -289,14 +400,23 @@ fn classify_query(query: &Query) -> StatementFacts {
             let inner = classify_query(cte_q);
             writes |= inner.writes;
             administrative |= inner.class == StatementClass::Administrative;
+            contains_ddl |= inner.contains_ddl;
+            contains_mutating_dml |= inner.contains_mutating_dml;
+            contains_unscoped_dml |= inner.contains_unscoped_dml;
+            contains_unknown_write |= inner.contains_unknown_write;
             tables.extend(inner.tables);
         }
     }
 
-    writes |= set_expr_writes(query.body.as_ref());
-    administrative |= set_expr_administrative(query.body.as_ref());
+    let body_facts = classify_set_expr(query.body.as_ref());
+    writes |= body_facts.writes;
+    administrative |= body_facts.class == StatementClass::Administrative;
+    contains_ddl |= body_facts.contains_ddl;
+    contains_mutating_dml |= body_facts.contains_mutating_dml;
+    contains_unscoped_dml |= body_facts.contains_unscoped_dml;
+    contains_unknown_write |= body_facts.contains_unknown_write;
     writes |= administrative;
-    tables.extend(set_expr_tables(query.body.as_ref()));
+    tables.extend(body_facts.tables);
 
     StatementFacts {
         class: if administrative {
@@ -308,9 +428,67 @@ fn classify_query(query: &Query) -> StatementFacts {
         },
         writes,
         tables,
-        has_where: true,
+        has_where: !contains_unscoped_dml,
+        contains_ddl,
+        contains_mutating_dml,
+        contains_unscoped_dml,
+        contains_unknown_write,
         is_multi_statement: false,
         parse_error: None,
+    }
+}
+
+fn classify_set_expr(body: &SetExpr) -> StatementFacts {
+    match body {
+        SetExpr::Insert(statement) | SetExpr::Update(statement) | SetExpr::Delete(statement) => {
+            classify_statement(statement)
+        }
+        SetExpr::Query(query) => classify_query(query),
+        SetExpr::SetOperation { left, right, .. } => {
+            let left = classify_set_expr(left);
+            let right = classify_set_expr(right);
+            StatementFacts {
+                class: if left.class == StatementClass::Administrative || right.class == StatementClass::Administrative
+                {
+                    StatementClass::Administrative
+                } else if left.writes || right.writes {
+                    StatementClass::Other
+                } else {
+                    StatementClass::Select
+                },
+                writes: left.writes || right.writes,
+                tables: left.tables.into_iter().chain(right.tables).collect(),
+                has_where: left.has_where && right.has_where,
+                contains_ddl: left.contains_ddl || right.contains_ddl,
+                contains_mutating_dml: left.contains_mutating_dml || right.contains_mutating_dml,
+                contains_unscoped_dml: left.contains_unscoped_dml || right.contains_unscoped_dml,
+                contains_unknown_write: left.contains_unknown_write || right.contains_unknown_write,
+                is_multi_statement: false,
+                parse_error: None,
+            }
+        }
+        _ => {
+            let administrative = set_expr_administrative(body);
+            let writes = set_expr_writes(body) || administrative;
+            StatementFacts {
+                class: if administrative {
+                    StatementClass::Administrative
+                } else if writes {
+                    StatementClass::Other
+                } else {
+                    StatementClass::Select
+                },
+                writes,
+                tables: set_expr_tables(body),
+                has_where: true,
+                contains_ddl: false,
+                contains_mutating_dml: false,
+                contains_unscoped_dml: false,
+                contains_unknown_write: writes && !administrative,
+                is_multi_statement: false,
+                parse_error: None,
+            }
+        }
     }
 }
 
@@ -357,7 +535,46 @@ fn is_administrative_function(name: &ObjectName) -> bool {
 fn is_administrative_function_name(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
-        "pg_cancel_backend" | "pg_terminate_backend" | "pg_reload_conf" | "pg_rotate_logfile"
+        "lo_create"
+            | "lo_export"
+            | "lo_import"
+            | "lo_put"
+            | "lo_unlink"
+            | "lowrite"
+            | "nextval"
+            | "pg_advisory_lock"
+            | "pg_advisory_lock_shared"
+            | "pg_advisory_unlock"
+            | "pg_advisory_unlock_all"
+            | "pg_advisory_unlock_shared"
+            | "pg_advisory_xact_lock"
+            | "pg_advisory_xact_lock_shared"
+            | "pg_backup_start"
+            | "pg_backup_stop"
+            | "pg_cancel_backend"
+            | "pg_create_restore_point"
+            | "pg_create_logical_replication_slot"
+            | "pg_create_physical_replication_slot"
+            | "pg_drop_replication_slot"
+            | "pg_log_backend_memory_contexts"
+            | "pg_promote"
+            | "pg_reload_conf"
+            | "pg_rotate_logfile"
+            | "pg_start_backup"
+            | "pg_stop_backup"
+            | "pg_switch_wal"
+            | "pg_terminate_backend"
+            | "pg_try_advisory_lock"
+            | "pg_try_advisory_lock_shared"
+            | "pg_try_advisory_xact_lock"
+            | "pg_try_advisory_xact_lock_shared"
+            | "pg_wal_replay_pause"
+            | "pg_wal_replay_resume"
+            | "lo_from_bytea"
+            | "lo_truncate"
+            | "lo_truncate64"
+            | "set_config"
+            | "setval"
     )
 }
 
@@ -501,6 +718,40 @@ mod tests {
     }
 
     #[test]
+    fn mixed_script_preserves_ddl_in_both_orders() {
+        for sql in [
+            "DROP TABLE protected_data; INSERT INTO audit_log VALUES (1)",
+            "INSERT INTO audit_log VALUES (1); DROP TABLE protected_data",
+        ] {
+            let facts = classify(sql, "postgres");
+            assert!(facts.contains_ddl, "SQL: {sql}");
+        }
+    }
+
+    #[test]
+    fn mixed_script_preserves_unknown_writes_in_both_orders() {
+        for sql in [
+            "SET session_replication_role = replica; INSERT INTO jobs(id) VALUES (1)",
+            "INSERT INTO jobs(id) VALUES (1); SET session_replication_role = replica",
+        ] {
+            let facts = classify(sql, "postgres");
+            assert!(facts.contains_unknown_write, "SQL: {sql}");
+        }
+    }
+
+    #[test]
+    fn mixed_script_preserves_unscoped_dml_in_both_orders() {
+        for sql in [
+            "DELETE FROM protected_data; CREATE TABLE replacement(id integer)",
+            "CREATE TABLE replacement(id integer); DELETE FROM protected_data",
+        ] {
+            let facts = classify(sql, "postgres");
+            assert!(facts.contains_mutating_dml, "SQL: {sql}");
+            assert!(facts.contains_unscoped_dml, "SQL: {sql}");
+        }
+    }
+
+    #[test]
     fn parse_failure_fail_closed() {
         let f = classify("SELECCT * FROM", "postgres");
         assert_eq!(f.class, StatementClass::Unparseable);
@@ -513,6 +764,20 @@ mod tests {
         let f = classify("TRUNCATE TABLE payments", "postgres");
         assert!(f.writes);
         assert_eq!(f.class, StatementClass::Ddl);
+    }
+
+    #[test]
+    fn broader_schema_and_privilege_changes_are_ddl() {
+        for sql in [
+            "CREATE SCHEMA reporting",
+            "CREATE SEQUENCE job_ids",
+            "CREATE FUNCTION answer() RETURNS integer LANGUAGE SQL AS 'SELECT 42'",
+            "GRANT SELECT ON TABLE jobs TO analyst",
+            "REVOKE SELECT ON TABLE jobs FROM analyst",
+        ] {
+            let facts = classify(sql, "postgres");
+            assert!(facts.contains_ddl, "SQL: {sql}, facts: {facts:?}");
+        }
     }
 
     #[test]
@@ -534,6 +799,24 @@ mod tests {
         let facts = classify("SELECT pg_terminate_backend(42)", "postgres");
         assert_eq!(facts.class, StatementClass::Administrative);
         assert!(facts.writes);
+    }
+
+    #[test]
+    fn postgres_side_effecting_functions_are_administrative() {
+        for sql in [
+            "SELECT pg_promote()",
+            "SELECT nextval('jobs_id_seq')",
+            "SELECT setval('jobs_id_seq', 10)",
+            "SELECT pg_advisory_lock(42)",
+            "SELECT pg_try_advisory_lock(42)",
+            "SELECT pg_wal_replay_pause()",
+            "SELECT pg_wal_replay_resume()",
+            "SELECT set_config('work_mem', '64MB', false)",
+        ] {
+            let facts = classify(sql, "postgres");
+            assert_eq!(facts.class, StatementClass::Administrative, "SQL: {sql}");
+            assert!(facts.writes, "SQL: {sql}");
+        }
     }
 
     #[test]

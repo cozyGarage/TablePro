@@ -112,14 +112,21 @@ fn evaluate_agent_write(
         };
     }
 
-    if matches!(facts.class, StatementClass::Ddl) && !env_policy.agent_allow_ddl {
+    if facts.contains_ddl && !env_policy.agent_allow_ddl {
         return Decision::Deny {
             rule: "agent_ddl_denied".into(),
             message: "agents may not run DDL".into(),
         };
     }
 
-    if !facts.has_where && matches!(facts.class, StatementClass::Update | StatementClass::Delete) {
+    if facts.contains_unknown_write {
+        return Decision::Deny {
+            rule: "agent_unknown_write_denied".into(),
+            message: "agents may not run writes whose safety category cannot be determined".into(),
+        };
+    }
+
+    if facts.contains_unscoped_dml {
         return Decision::Deny {
             rule: "agent_no_unscoped_dml".into(),
             message: "agents may not run UPDATE/DELETE without a WHERE clause".into(),
@@ -127,7 +134,7 @@ fn evaluate_agent_write(
     }
 
     if let Some(limit) = env_policy.blast_radius_max_rows
-        && matches!(facts.class, StatementClass::Update | StatementClass::Delete)
+        && facts.contains_mutating_dml
     {
         match estimated_rows {
             Some(rows) if rows > limit => {
@@ -166,7 +173,7 @@ fn evaluate_human_write(
     env_policy: &EnvPolicy,
     estimated_rows: Option<u64>,
 ) -> Decision {
-    if !facts.has_where && matches!(facts.class, StatementClass::Update | StatementClass::Delete) {
+    if facts.contains_unscoped_dml {
         return Decision::RequireApproval {
             rule: "human_unscoped_dml".into(),
             reason: "UPDATE/DELETE without WHERE".into(),
@@ -174,7 +181,7 @@ fn evaluate_human_write(
         };
     }
 
-    if matches!(facts.class, StatementClass::Ddl) && env_policy.human_approve_ddl {
+    if facts.contains_ddl && env_policy.human_approve_ddl {
         return Decision::RequireApproval {
             rule: "human_ddl_approve".into(),
             reason: format!("DDL on {}", environment.as_str()),
@@ -183,7 +190,7 @@ fn evaluate_human_write(
     }
 
     if let Some(limit) = env_policy.blast_radius_max_rows
-        && matches!(facts.class, StatementClass::Update | StatementClass::Delete)
+        && facts.contains_mutating_dml
     {
         match estimated_rows {
             Some(rows) if rows > limit => {
@@ -321,6 +328,142 @@ mod tests {
             None,
         );
         assert!(matches!(decision, Decision::Deny { ref rule, .. } if rule == "agent_admin_denied"));
+    }
+
+    #[test]
+    fn agent_cannot_call_postgres_side_effecting_function() {
+        let facts = classify("SELECT nextval('jobs_id_seq')", "postgres");
+        let decision = evaluate(
+            &Principal::Agent {
+                token: "token".into(),
+                client: None,
+                model: None,
+            },
+            Environment::Local,
+            &facts,
+            false,
+            &env_policy(Environment::Local),
+            None,
+        );
+        assert!(matches!(decision, Decision::Deny { ref rule, .. } if rule == "agent_admin_denied"));
+    }
+
+    #[test]
+    fn read_only_connection_blocks_postgres_side_effecting_function() {
+        let facts = classify("SELECT nextval('jobs_id_seq')", "postgres");
+        let decision = evaluate(
+            &Principal::human_gui(),
+            Environment::Local,
+            &facts,
+            true,
+            &env_policy(Environment::Local),
+            None,
+        );
+        assert!(matches!(decision, Decision::Deny { ref rule, .. } if rule == "connection_read_only"));
+    }
+
+    #[test]
+    fn agent_cannot_hide_ddl_in_mixed_script() {
+        let facts = classify(
+            "DROP TABLE protected_data; INSERT INTO audit_log VALUES (1)",
+            "postgres",
+        );
+        let mut policy = EnvPolicy::local_defaults();
+        policy.agent_writes = WritePolicy::Allow;
+        policy.agent_allow_multi_statement = true;
+        policy.agent_allow_ddl = false;
+        let decision = evaluate(
+            &Principal::Agent {
+                token: "token".into(),
+                client: None,
+                model: None,
+            },
+            Environment::Local,
+            &facts,
+            false,
+            &policy,
+            None,
+        );
+        assert!(matches!(decision, Decision::Deny { ref rule, .. } if rule == "agent_ddl_denied"));
+    }
+
+    #[test]
+    fn agent_cannot_hide_scoped_dml_blast_radius_in_mixed_script() {
+        let facts = classify(
+            "UPDATE protected_data SET value = 'x' WHERE tenant_id = 42; INSERT INTO audit_log VALUES (1)",
+            "postgres",
+        );
+        let mut policy = EnvPolicy::local_defaults();
+        policy.agent_writes = WritePolicy::Allow;
+        policy.agent_allow_multi_statement = true;
+        let decision = evaluate(
+            &Principal::Agent {
+                token: "token".into(),
+                client: None,
+                model: None,
+            },
+            Environment::Local,
+            &facts,
+            false,
+            &policy,
+            None,
+        );
+        assert!(matches!(decision, Decision::Deny { ref rule, .. } if rule == "blast_radius_unknown"));
+    }
+
+    #[test]
+    fn agent_cannot_hide_unscoped_dml_in_mixed_script() {
+        let facts = classify(
+            "CREATE TABLE replacement(id integer); DELETE FROM protected_data",
+            "postgres",
+        );
+        let mut policy = EnvPolicy::local_defaults();
+        policy.agent_writes = WritePolicy::Allow;
+        policy.agent_allow_multi_statement = true;
+        policy.agent_allow_ddl = true;
+        let decision = evaluate(
+            &Principal::Agent {
+                token: "token".into(),
+                client: None,
+                model: None,
+            },
+            Environment::Local,
+            &facts,
+            false,
+            &policy,
+            None,
+        );
+        assert!(matches!(decision, Decision::Deny { ref rule, .. } if rule == "agent_no_unscoped_dml"));
+    }
+
+    #[test]
+    fn agent_cannot_run_or_hide_unclassified_write() {
+        for sql in [
+            "SET application_name = 'agent'",
+            "SET session_replication_role = replica; INSERT INTO jobs(id) VALUES (1)",
+            "INSERT INTO jobs(id) VALUES (1); SET session_replication_role = replica",
+        ] {
+            let facts = classify(sql, "postgres");
+            let mut policy = EnvPolicy::local_defaults();
+            policy.agent_writes = WritePolicy::Allow;
+            policy.agent_allow_multi_statement = true;
+            let decision = evaluate(
+                &Principal::Agent {
+                    token: "token".into(),
+                    client: None,
+                    model: None,
+                },
+                Environment::Local,
+                &facts,
+                false,
+                &policy,
+                None,
+            );
+            assert!(
+                matches!(decision, Decision::Deny { ref rule, .. } if rule == "agent_unknown_write_denied"),
+                "SQL: {sql}, decision: {decision:?}"
+            );
+        }
     }
 
     #[test]

@@ -61,7 +61,7 @@ pub fn activity_sql(driver_id: &str, kind: ActivityQuery, session_id: Option<u64
                 .into(),
         ),
         ("postgres", ActivityQuery::KillSession) => {
-            let pid = session_id?;
+            let pid = session_id.filter(|id| *id > 0)?;
             Some(format!("SELECT pg_terminate_backend({pid})"))
         }
         ("mysql", ActivityQuery::Sessions) => Some("SHOW FULL PROCESSLIST".into()),
@@ -73,7 +73,7 @@ pub fn activity_sql(driver_id: &str, kind: ActivityQuery, session_id: Option<u64
                 .into(),
         ),
         ("mysql", ActivityQuery::KillSession) => {
-            let id = session_id?;
+            let id = session_id.filter(|id| *id > 0)?;
             Some(format!("KILL {id}"))
         }
         ("mssql", ActivityQuery::Sessions) => Some(
@@ -83,7 +83,7 @@ pub fn activity_sql(driver_id: &str, kind: ActivityQuery, session_id: Option<u64
                 .into(),
         ),
         ("mssql", ActivityQuery::KillSession) => {
-            let id = session_id?;
+            let id = session_id.filter(|id| *id > 0)?;
             Some(format!("KILL {id}"))
         }
         _ => None,
@@ -101,8 +101,11 @@ mod tests {
     }
 
     #[test]
-    fn kill_requires_id() {
-        assert!(activity_sql("postgres", ActivityQuery::KillSession, None).is_none());
+    fn kill_requires_positive_id() {
+        for driver in ["postgres", "mysql", "mssql"] {
+            assert!(activity_sql(driver, ActivityQuery::KillSession, None).is_none());
+            assert!(activity_sql(driver, ActivityQuery::KillSession, Some(0)).is_none());
+        }
         assert!(
             activity_sql("postgres", ActivityQuery::KillSession, Some(42))
                 .unwrap()

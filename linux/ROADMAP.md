@@ -55,12 +55,14 @@ Phase 0 is complete locally. Rust 1.93 CI is green, current stable Clippy passes
 
 - [x] Replace production automatic approval with principal-aware routing
 - [x] Enforce read-only before unparseable-statement fallback
-- [x] Classify administrative side effects
+- [x] Classify administrative and PostgreSQL side-effecting functions
+- [x] Preserve DDL and unscoped DML restrictions across mixed transaction batches
 - [x] Validate numeric session identifiers before building SQL
+- [x] Require explicit saved-connection allowlists when agentd issues tokens
 - [x] Remove or isolate MCP query-history search
 - [x] Merge partial policies onto secure environment defaults
 
-Phase 1 is implemented and locally verified. Phase 4 still owns release-level GTK proof for dialog dismissal and approve-once behavior.
+Phase 1 is implemented, security-reviewed, and locally verified. Phase 4 still owns release-level GTK proof for dialog dismissal and approve-once behavior.
 
 ### 2 — Fail-closed audit
 

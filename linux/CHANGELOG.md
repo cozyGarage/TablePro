@@ -58,6 +58,8 @@
 - Activity termination accepts only validated positive numeric session identifiers
 - Partial environment and connection policies inherit secure environment defaults and default masking rules
 - Transactional batches request approval once instead of once per statement
+- Mixed SQL batches retain DDL and unscoped UPDATE or DELETE restrictions regardless of statement order
+- The agent daemon requires at least one existing saved connection when issuing a token
 
 ### Removed
 
@@ -75,4 +77,4 @@
 - SSH stack upgraded to russh 0.60.3 (fixes unbounded allocation advisories and drops vulnerable libcrux 0.0.4)
 - Translation locale initialization runs before worker threads and uses the corrected gettext safety contract
 - Production GUI and daemon paths no longer construct automatic approval sinks
-- PostgreSQL administrative function calls are detected outside projection expressions while literals and comments remain read-only
+- PostgreSQL administrative and side-effecting function calls are denied to agents and read-only connections while literals and comments remain read-only
