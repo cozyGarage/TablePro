@@ -34,6 +34,10 @@ impl ConnectionProvider for AppConnectionProvider {
 
 /// Start the loopback MCP HTTP server.
 pub fn start_background() -> Option<Arc<McpBridge>> {
+    if !database_service::instance().audit_available() {
+        tracing::error!("MCP server disabled because the required audit journal is unavailable");
+        return None;
+    }
     let tokens = match TokenStore::open_default() {
         Ok(t) => Arc::new(t),
         Err(e) => {

@@ -9,6 +9,7 @@
 agent_writes = "approve"
 human_approve_writes = false
 human_approve_ddl = false
+human_allow_unaudited_writes = false
 blast_radius_max_rows = 100000
 mask_agent_results = true
 
@@ -16,6 +17,7 @@ mask_agent_results = true
 agent_writes = "approve"
 human_approve_writes = false
 human_approve_ddl = false
+human_allow_unaudited_writes = false
 blast_radius_max_rows = 100000
 mask_agent_results = true
 

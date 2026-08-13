@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use tablepro_core::{ConnectOptions, Connection, DatabaseDriver, Environment};
 use tablepro_policy::{
-    DenyApprovalSink, GuardContext, NullAuditSink, PolicyConfig, PolicyGuard, Principal, load_policy,
+    AuditState, DenyApprovalSink, GuardContext, NullAuditSink, PolicyConfig, PolicyGuard, Principal, load_policy,
 };
 use tablepro_ssh::{SshConfig, SshTunnel};
 use tablepro_storage::AuditJournal;
@@ -61,25 +61,52 @@ pub struct DatabaseService {
     active: Mutex<Option<Uuid>>,
     policy: Mutex<Arc<PolicyConfig>>,
     audit: Arc<dyn tablepro_policy::AuditSink>,
+    audit_available: bool,
+    audit_state: Arc<AuditState>,
     approval: Mutex<Arc<dyn tablepro_policy::ApprovalSink>>,
 }
 
 impl DatabaseService {
     fn new() -> Self {
-        let audit: Arc<dyn tablepro_policy::AuditSink> = match AuditJournal::open_default() {
-            Ok(j) => Arc::new(j),
-            Err(e) => {
-                tracing::warn!("audit journal unavailable: {e}");
-                Arc::new(NullAuditSink)
-            }
-        };
+        let (audit, audit_available, audit_state): (Arc<dyn tablepro_policy::AuditSink>, bool, Arc<AuditState>) =
+            match AuditJournal::open_default() {
+                Ok(journal) => {
+                    let recovered = journal.recovery().recovered_unresolved_operations();
+                    if recovered {
+                        tracing::error!(
+                            operations = journal.recovery().recovered_operation_ids().len(),
+                            "unresolved audit intents recovered; governed writes remain disabled"
+                        );
+                    }
+                    let state = if recovered {
+                        AuditState::with_governed_writes_disabled()
+                    } else {
+                        AuditState::new()
+                    };
+                    (Arc::new(journal), true, Arc::new(state))
+                }
+                Err(error) => {
+                    tracing::error!(%error, "audit journal unavailable; MCP and governed writes are disabled");
+                    (
+                        Arc::new(NullAuditSink),
+                        false,
+                        Arc::new(AuditState::with_governed_writes_disabled()),
+                    )
+                }
+            };
         Self {
             connections: Mutex::new(HashMap::new()),
             active: Mutex::new(None),
             policy: Mutex::new(Arc::new(load_policy())),
             audit,
+            audit_available,
+            audit_state,
             approval: Mutex::new(Arc::new(DenyApprovalSink)),
         }
+    }
+
+    pub fn audit_available(&self) -> bool {
+        self.audit_available
     }
 
     pub fn set_approval_sink(&self, sink: Arc<dyn tablepro_policy::ApprovalSink>) {
@@ -156,6 +183,7 @@ impl DatabaseService {
             policy,
             approval,
             audit: self.audit.clone(),
+            audit_state: self.audit_state.clone(),
         };
         Some(Arc::new(PolicyGuard::new(inner.connection.clone(), ctx)) as Arc<dyn Connection>)
     }

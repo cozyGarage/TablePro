@@ -42,35 +42,68 @@ pub fn evaluate(
     env_policy: &EnvPolicy,
     estimated_rows: Option<u64>,
 ) -> Decision {
+    evaluate_categorical(principal, environment, facts, connection_read_only, env_policy)
+        .unwrap_or_else(|| evaluate_eligible_write(principal, environment, facts, env_policy, estimated_rows))
+}
+
+pub(crate) fn evaluate_categorical(
+    principal: &Principal,
+    environment: Environment,
+    facts: &StatementFacts,
+    connection_read_only: bool,
+    env_policy: &EnvPolicy,
+) -> Option<Decision> {
     if connection_read_only && facts.writes {
-        return Decision::Deny {
+        return Some(Decision::Deny {
             rule: "connection_read_only".into(),
             message: "connection is marked read-only; statements that may write are not permitted".into(),
-        };
+        });
     }
 
     if facts.class == StatementClass::Unparseable {
-        return decide_unparseable(principal, env_policy);
+        let decision = decide_unparseable(principal, env_policy);
+        if matches!(decision, Decision::Deny { .. }) {
+            return Some(decision);
+        }
+        return None;
     }
 
     if facts.is_multi_statement && principal.is_agent() && !env_policy.agent_allow_multi_statement {
-        return Decision::Deny {
+        return Some(Decision::Deny {
             rule: "agent_no_multi_statement".into(),
             message: "agents may not run multi-statement scripts".into(),
-        };
+        });
     }
 
     if facts.class == StatementClass::Administrative && principal.is_agent() {
-        return Decision::Deny {
+        return Some(Decision::Deny {
             rule: "agent_admin_denied".into(),
             message: "agents may not run administrative database operations".into(),
-        };
+        });
     }
 
     if !facts.writes {
-        return Decision::Allow {
+        return Some(Decision::Allow {
             rule: "read_allow".into(),
-        };
+        });
+    }
+
+    if principal.is_agent() {
+        return evaluate_agent_write_categorical(environment, facts, env_policy);
+    }
+
+    None
+}
+
+pub(crate) fn evaluate_eligible_write(
+    principal: &Principal,
+    environment: Environment,
+    facts: &StatementFacts,
+    env_policy: &EnvPolicy,
+    estimated_rows: Option<u64>,
+) -> Decision {
+    if facts.class == StatementClass::Unparseable {
+        return decide_unparseable(principal, env_policy);
     }
 
     if principal.is_agent() {
@@ -99,38 +132,50 @@ fn decide_unparseable(principal: &Principal, env_policy: &EnvPolicy) -> Decision
     }
 }
 
+fn evaluate_agent_write_categorical(
+    environment: Environment,
+    facts: &StatementFacts,
+    env_policy: &EnvPolicy,
+) -> Option<Decision> {
+    if env_policy.agent_writes == crate::config::WritePolicy::Deny {
+        return Some(Decision::Deny {
+            rule: "agent_writes_denied".into(),
+            message: format!("agent writes are denied in {}", environment.as_str()),
+        });
+    }
+
+    if facts.contains_ddl && !env_policy.agent_allow_ddl {
+        return Some(Decision::Deny {
+            rule: "agent_ddl_denied".into(),
+            message: "agents may not run DDL".into(),
+        });
+    }
+
+    if facts.contains_unknown_write {
+        return Some(Decision::Deny {
+            rule: "agent_unknown_write_denied".into(),
+            message: "agents may not run writes whose safety category cannot be determined".into(),
+        });
+    }
+
+    if facts.contains_unscoped_dml {
+        return Some(Decision::Deny {
+            rule: "agent_no_unscoped_dml".into(),
+            message: "agents may not run UPDATE/DELETE without a WHERE clause".into(),
+        });
+    }
+
+    None
+}
+
 fn evaluate_agent_write(
     environment: Environment,
     facts: &StatementFacts,
     env_policy: &EnvPolicy,
     estimated_rows: Option<u64>,
 ) -> Decision {
-    if env_policy.agent_writes == crate::config::WritePolicy::Deny {
-        return Decision::Deny {
-            rule: "agent_writes_denied".into(),
-            message: format!("agent writes are denied in {}", environment.as_str()),
-        };
-    }
-
-    if facts.contains_ddl && !env_policy.agent_allow_ddl {
-        return Decision::Deny {
-            rule: "agent_ddl_denied".into(),
-            message: "agents may not run DDL".into(),
-        };
-    }
-
-    if facts.contains_unknown_write {
-        return Decision::Deny {
-            rule: "agent_unknown_write_denied".into(),
-            message: "agents may not run writes whose safety category cannot be determined".into(),
-        };
-    }
-
-    if facts.contains_unscoped_dml {
-        return Decision::Deny {
-            rule: "agent_no_unscoped_dml".into(),
-            message: "agents may not run UPDATE/DELETE without a WHERE clause".into(),
-        };
+    if let Some(decision) = evaluate_agent_write_categorical(environment, facts, env_policy) {
+        return decision;
     }
 
     if let Some(limit) = env_policy.blast_radius_max_rows
@@ -167,26 +212,38 @@ fn evaluate_agent_write(
     }
 }
 
+fn evaluate_human_write_categorical(
+    environment: Environment,
+    facts: &StatementFacts,
+    env_policy: &EnvPolicy,
+) -> Option<Decision> {
+    if facts.contains_unscoped_dml {
+        return Some(Decision::RequireApproval {
+            rule: "human_unscoped_dml".into(),
+            reason: "UPDATE/DELETE without WHERE".into(),
+            preview: Some(format!("tables: {}", facts.tables.join(", "))),
+        });
+    }
+
+    if facts.contains_ddl && env_policy.human_approve_ddl {
+        return Some(Decision::RequireApproval {
+            rule: "human_ddl_approve".into(),
+            reason: format!("DDL on {}", environment.as_str()),
+            preview: Some(format!("tables: {}", facts.tables.join(", "))),
+        });
+    }
+
+    None
+}
+
 fn evaluate_human_write(
     environment: Environment,
     facts: &StatementFacts,
     env_policy: &EnvPolicy,
     estimated_rows: Option<u64>,
 ) -> Decision {
-    if facts.contains_unscoped_dml {
-        return Decision::RequireApproval {
-            rule: "human_unscoped_dml".into(),
-            reason: "UPDATE/DELETE without WHERE".into(),
-            preview: Some(format!("tables: {}", facts.tables.join(", "))),
-        };
-    }
-
-    if facts.contains_ddl && env_policy.human_approve_ddl {
-        return Decision::RequireApproval {
-            rule: "human_ddl_approve".into(),
-            reason: format!("DDL on {}", environment.as_str()),
-            preview: Some(format!("tables: {}", facts.tables.join(", "))),
-        };
+    if let Some(decision) = evaluate_human_write_categorical(environment, facts, env_policy) {
+        return decision;
     }
 
     if let Some(limit) = env_policy.blast_radius_max_rows

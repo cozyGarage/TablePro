@@ -47,6 +47,7 @@
 - Linux CI runs a non-GTK preflight job before the full GTK checks; local `./scripts/preflight.sh` mirrors that gate
 - Policy evaluation takes the resolved connection EnvPolicy once; connection overrides no longer re-run evaluate
 - Connect dialog TLS control is a mode picker (Disabled / Prefer / Require / Verify CA / Verify Full), defaulting to Verify Full for network drivers
+- Local and development human writes require audit by default; best-effort unaudited writes require an explicit policy setting
 
 ### Fixed
 
@@ -60,6 +61,7 @@
 - Transactional batches request approval once instead of once per statement
 - Mixed SQL batches retain DDL and unscoped UPDATE or DELETE restrictions regardless of statement order
 - The agent daemon requires at least one existing saved connection when issuing a token
+- Verified legacy audit journals rotate intact when upgrading to durable intent and outcome records
 
 ### Removed
 
@@ -77,4 +79,8 @@
 - SSH stack upgraded to russh 0.60.3 (fixes unbounded allocation advisories and drops vulnerable libcrux 0.0.4)
 - Translation locale initialization runs before worker threads and uses the corrected gettext safety contract
 - Production GUI and daemon paths no longer construct automatic approval sinks
+- Mutations, DDL, administration, and transaction completion persist durable audit intent before database execution and fail closed when required records cannot be written
+- Unknown or interrupted write outcomes block later governed writes across restarts and concurrent app and daemon processes
+- The audit journal enforces private file permissions, verifies its hash chain, recovers interrupted appends, and serializes writers across processes
+- Agentd and in-app MCP refuse service when required audit storage is unavailable
 - PostgreSQL administrative and side-effecting function calls are denied to agents and read-only connections while literals and comments remain read-only

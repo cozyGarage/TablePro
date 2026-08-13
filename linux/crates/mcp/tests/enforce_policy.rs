@@ -102,7 +102,7 @@ async fn read_only_token_cannot_call_administrative_function() {
 #[tokio::test]
 async fn guarded_tool_path_journals_policy_decision() {
     use tablepro_core::Environment;
-    use tablepro_policy::{AuditSink, AutoApproveSink, GuardContext, PolicyConfig, PolicyGuard, Principal};
+    use tablepro_policy::{AuditSink, AuditState, AutoApproveSink, GuardContext, PolicyConfig, PolicyGuard, Principal};
     use tablepro_storage::AuditJournal;
 
     let dir = tempfile::TempDir::new().unwrap();
@@ -137,6 +137,7 @@ async fn guarded_tool_path_journals_policy_decision() {
                 policy: Arc::new(PolicyConfig::default()),
                 approval: Arc::new(AutoApproveSink),
                 audit: self.journal.clone() as Arc<dyn AuditSink>,
+                audit_state: Arc::new(AuditState::new()),
             };
             Ok(Arc::new(PolicyGuard::new(raw, ctx)) as Arc<dyn Connection>)
         }

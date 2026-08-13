@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Linux MCP server rejects untrusted browser origins, SSH detects host-key algorithm changes, and Linux CI actions use immutable revisions.
 - The Linux policy guard preserves DDL and unscoped data-change restrictions across mixed batches and blocks PostgreSQL side-effecting functions on agent and read-only paths.
+- Linux governed writes now persist audit intent before database execution, block on unavailable or unresolved audit state, and serialize the private hash-chained journal across processes.
 - The Linux app initializes translations before worker threads start, avoiding unsafe concurrent locale changes.
 
 ## [0.61.0] - 2026-07-30

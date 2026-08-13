@@ -21,6 +21,7 @@ pub struct EnvPolicy {
     pub human_approve_writes: bool,
     pub human_approve_ddl: bool,
     pub human_approve_unparseable: bool,
+    pub human_allow_unaudited_writes: bool,
     pub blast_radius_max_rows: Option<u64>,
     pub mask_agent_results: bool,
 }
@@ -34,6 +35,7 @@ impl Default for EnvPolicy {
             human_approve_writes: false,
             human_approve_ddl: false,
             human_approve_unparseable: true,
+            human_allow_unaudited_writes: false,
             blast_radius_max_rows: Some(10_000),
             mask_agent_results: true,
         }
@@ -54,6 +56,8 @@ pub struct EnvPolicyOverride {
     pub human_approve_ddl: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub human_approve_unparseable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_allow_unaudited_writes: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blast_radius_max_rows: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -79,6 +83,9 @@ impl EnvPolicyOverride {
         }
         if let Some(value) = self.human_approve_unparseable {
             policy.human_approve_unparseable = value;
+        }
+        if let Some(value) = self.human_allow_unaudited_writes {
+            policy.human_allow_unaudited_writes = value;
         }
         if let Some(value) = self.blast_radius_max_rows {
             policy.blast_radius_max_rows = Some(value);
@@ -239,6 +246,7 @@ mod tests {
         let prod = policy.for_environment(Environment::Prod);
         assert_eq!(prod.agent_writes, WritePolicy::Deny);
         assert!(prod.human_approve_writes);
+        assert!(!prod.human_allow_unaudited_writes);
         assert!(!prod.human_approve_ddl);
         assert_eq!(prod.blast_radius_max_rows, Some(1_000));
         assert!(prod.mask_agent_results);
@@ -258,6 +266,26 @@ mod tests {
         assert_eq!(prod.agent_writes, WritePolicy::Deny);
         assert!(prod.human_approve_writes);
         assert!(!prod.human_approve_ddl);
+    }
+
+    #[test]
+    fn local_unaudited_writes_require_explicit_opt_in() {
+        let default_policy = PolicyConfig::default();
+        assert!(
+            !default_policy
+                .for_environment(Environment::Local)
+                .human_allow_unaudited_writes
+        );
+
+        let policy: PolicyConfig = toml::from_str(
+            r#"
+                [environments.local]
+                human_allow_unaudited_writes = true
+            "#,
+        )
+        .unwrap();
+        assert!(policy.for_environment(Environment::Local).human_allow_unaudited_writes);
+        assert!(!policy.for_environment(Environment::Prod).human_allow_unaudited_writes);
     }
 
     #[test]

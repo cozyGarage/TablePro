@@ -177,7 +177,7 @@ Environment and connection overrides deserialize as optional fields and merge on
 
 ## Status
 
-Not started. Release blocker.
+Implemented and locally verified on 2026-08-13. Release verification remains tied to the PostgreSQL cancellation fixture in Phase 3 and the GTK safety flows in Phase 4.
 
 ## Required behavior
 
@@ -221,12 +221,16 @@ Tests to add:
 
 ## Acceptance criteria
 
-- Audit initialization failure cannot become `NullAuditSink` in production.
-- Production mutations are denied before driver execution when intent cannot be persisted.
-- Agentd does not serve MCP without its required journal.
-- One thousand concurrent appends produce one valid chain.
-- Two processes cannot fork the sequence.
-- A failure after database execution returns “operation may have succeeded” and disables further governed writes.
+- [x] Audit initialization failure cannot silently become an available `NullAuditSink`; governed writes are disabled and in-app MCP does not start.
+- [x] Production mutations are denied before driver execution when intent cannot be persisted.
+- [x] Agentd does not serve MCP without its required journal or with unresolved write outcomes.
+- [x] One thousand concurrent appends produce one valid chain.
+- [x] Two processes cannot fork the sequence.
+- [x] A failure after database execution returns “operation may have succeeded” and disables further governed writes.
+- [x] Timed-out or dropped mutation futures leave durable intent and block later governed writes.
+- [x] Unresolved writes remain blocked across process restarts and concurrent GUI/daemon processes.
+- [x] Verified Phase 1 journals rotate intact before the new event schema starts.
+- [ ] Phase 3 proves server cancellation and terminal cancellation outcomes against PostgreSQL.
 
 ---
 

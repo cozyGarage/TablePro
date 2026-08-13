@@ -1,6 +1,6 @@
 # Production-readiness audit
 
-**Date**: 2026-08-12
+**Date**: 2026-08-13
 
 **Branch**: `linux`
 
@@ -65,7 +65,7 @@ Experimental labels:
 - Principal-aware guarded connection handles
 - Blast-radius estimation and agent result masking
 - Principal-aware GTK approval routing that denies when no application window is active
-- Hash-chained JSONL audit journal
+- Hash-chained JSONL audit journal with durable mutation intents, terminal outcomes, legacy migration, and cross-process locking
 - Interactive transactions for PostgreSQL, MySQL, and SQLite
 - MCP over stdio and loopback HTTP with scoped tokens, connection allowlists, and rate limiting
 - Headless `tablepro-agentd`
@@ -95,27 +95,34 @@ Experimental labels:
 
 These corrections are implemented and unit/integration tested. They are not yet release-verified through the real GTK dismissal and approve-once flows; Phase 4 owns those tests.
 
+## Phase 2 audit corrections verified in code and local tests
+
+- `AuditSink::record` reports persistence failures.
+- State-changing operations persist redacted, hash-correlated intent before driver execution and a terminal outcome afterward.
+- Production, staging, and agent operations fail closed when required audit records cannot be written.
+- Local and development human writes require audit by default. Best-effort writes require the explicit `human_allow_unaudited_writes` policy setting.
+- Agentd refuses startup without a valid journal or while unresolved write outcomes exist. In-app MCP does not start when audit initialization fails.
+- Unknown, timed-out, dropped, or ambiguous write outcomes disable further governed writes across restarts and concurrent processes.
+- Journal initialization verifies the chain and writability, enforces mode `0600`, recovers safe trailing fragments, rotates verified Phase 1 journals intact, and serializes writers with process locks.
+- Tests cover 1,000 concurrent appends, two subprocess writers, restart recovery, legacy migration, and MCP timeout poisoning.
+
+These corrections are locally verified. PostgreSQL server-side cancellation and installed GTK warning behavior remain release checks in Phases 3 and 4.
+
 ## Remaining release-blocking findings
 
-### 1. Audit failure silently becomes no audit
-
-Both the GTK service and headless daemon catch `AuditJournal::open_default()` failure and replace it with `NullAuditSink`. Production mutations and agent operations can continue without durable evidence.
-
-Required correction: record durable intent before mutations, make audit errors observable, fail closed for governed operations, and verify journal writability, permissions, recovery, concurrency, and cross-process locking.
-
-### 2. PostgreSQL `VerifyFull` through SSH is unresolved
+### 1. PostgreSQL `VerifyFull` through SSH is unresolved
 
 The core model separates the physical dial endpoint from the database service identity. SQL Server consumes this for TLS and Kerberos, but sqlx 0.8.6 does not expose separate PostgreSQL dial and TLS-server-name inputs.
 
 Required correction: use a supported sqlx API, a reviewed sqlx patch, or a connector that verifies the original hostname over the tunneled stream. Never downgrade verification silently.
 
-### 3. Cancellation is not proven on the server
+### 2. Cancellation is not proven on the server
 
 The editor can race a cancellation token or timeout against the query future. Dropping a future does not prove PostgreSQL stopped the operation, and it can prevent a terminal audit outcome.
 
 Required correction: add a cancellable driver contract, send server cancellation, confirm the query leaves `pg_stat_activity`, discard an untrustworthy connection, and record cancelled, timed-out, or unknown outcomes.
 
-### 4. Release tests are missing
+### 3. Release tests are missing
 
 There is no deterministic PostgreSQL TLS/SSH/reconnect fixture and no GTK end-to-end safety test. Unit coverage is strong, but the most important safety properties cross driver, policy, storage, and UI boundaries.
 
@@ -158,7 +165,7 @@ Not approved as trusted behavior yet:
 
 - Production mutations
 - Unattended MCP or agent writes
-- Relying on the audit journal as durable evidence
+
 - Assuming cancel stopped a server query
 - PostgreSQL `VerifyFull` through SSH
 - Public stable package distribution

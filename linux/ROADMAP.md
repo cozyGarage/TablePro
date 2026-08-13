@@ -1,6 +1,6 @@
 # TablePro Linux roadmap
 
-Last audited: 2026-08-12
+Last audited: 2026-08-13
 
 The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Swift parity backlog. This file is the concise Linux status view.
 
@@ -30,8 +30,8 @@ Status terms:
 | Query history | Implemented | MCP access must be isolated before being re-exposed |
 | CSV/JSON export | Implemented | CSV streams table pages; Parquet is unsupported |
 | Activity and EXPLAIN | Implemented | Administrative classification and numeric session-ID validation are covered |
-| Policy, MCP, and agentd | Partially integrated | Approval bypasses are closed; fail-closed audit remains open |
-| Audit journal | Implemented | Hash chain exists; fail-closed durability and concurrency are unverified |
+| Policy, MCP, and agentd | Integrated | Approval and audit failures deny governed operations; release fixtures remain open |
+| Audit journal | Integrated | Durable intent/outcome records, recovery, private mode, and cross-process locking are locally verified |
 | AUR, Debian, Flatpak | Scaffolded | Not release-verified or ready for a public stable package |
 | i18n and accessibility | Infrastructure | English strings/checklist exist; end-user verification is incomplete |
 
@@ -66,11 +66,14 @@ Phase 1 is implemented, security-reviewed, and locally verified. Phase 4 still o
 
 ### 2 — Fail-closed audit
 
-- [ ] Remove production fallback to `NullAuditSink`
-- [ ] Record durable intent before mutations
-- [ ] Record explicit outcome after mutations
-- [ ] Verify journal mode, writability, recovery, and cross-process locking
-- [ ] Refuse agent service when required audit storage is unavailable
+- [x] Disable governed writes and in-app MCP when audit initialization fails
+- [x] Record durable intent before mutations and transaction completion
+- [x] Record explicit, sanitized outcomes after operations
+- [x] Verify journal mode, writability, legacy migration, recovery, and cross-process locking
+- [x] Refuse agent service when audit storage is unavailable or unresolved writes exist
+- [x] Persist unresolved write state across restarts and concurrent processes
+
+Phase 2 is implemented, security-reviewed, and locally verified. Phase 3 still owns PostgreSQL server cancellation and real-driver terminal outcome proof.
 
 ### 3 — PostgreSQL release safety
 
@@ -122,4 +125,4 @@ Keep the macOS tree as the parity reference until useful behavior, tests, docume
 
 ## Next implementation target
 
-Continue Phase 0 toolchain validation and implement Phase 2 fail-closed auditing. Production-write and agent-write workflows are not trusted until Phases 1–4 pass their release tests.
+Begin Phase 3 with the deterministic PostgreSQL TLS, SSH, cancellation, rollback, lock, and reconnect fixture. Production-write and agent-write workflows are not release-trusted until Phases 1–4 pass their real-driver and GTK tests.

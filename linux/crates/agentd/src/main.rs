@@ -23,7 +23,7 @@ use tablepro_mcp::{
     ConnectionProvider, McpBridge, McpServerConfig, TokenPermissions, TokenStore, serve_stdio, serve_streamable_http,
 };
 use tablepro_policy::{
-    ApprovalOutcome, ApprovalRequest, ApprovalSink, DenyApprovalSink, GuardContext, NullAuditSink, PolicyConfig,
+    ApprovalOutcome, ApprovalRequest, ApprovalSink, AuditState, DenyApprovalSink, GuardContext, PolicyConfig,
     PolicyGuard, Principal, load_from_path,
 };
 use tablepro_storage::{AuditJournal, SavedConnection, load_connections, load_password};
@@ -95,6 +95,7 @@ struct DaemonProvider {
     registry: Arc<DriverRegistry>,
     policy: Arc<PolicyConfig>,
     audit: Arc<dyn tablepro_policy::AuditSink>,
+    audit_state: Arc<AuditState>,
     approval: Arc<dyn tablepro_policy::ApprovalSink>,
 }
 
@@ -155,6 +156,7 @@ impl ConnectionProvider for DaemonProvider {
             policy: self.policy.clone(),
             approval: self.approval.clone(),
             audit: self.audit.clone(),
+            audit_state: self.audit_state.clone(),
         };
         Ok(Arc::new(PolicyGuard::new(Arc::from(raw), ctx)) as Arc<dyn Connection>)
     }
@@ -214,18 +216,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ApprovalMode::Deny => Arc::new(DenyApprovalSink),
         ApprovalMode::Tty => Arc::new(TtyApprovalSink),
     };
-    let audit: Arc<dyn tablepro_policy::AuditSink> = match AuditJournal::open_default() {
-        Ok(j) => Arc::new(j),
-        Err(e) => {
-            tracing::warn!("audit journal unavailable: {e}");
-            Arc::new(NullAuditSink)
-        }
-    };
+    let journal =
+        AuditJournal::open_default().map_err(|error| format!("required audit journal unavailable: {error}"))?;
+    if journal.recovery().recovered_unresolved_operations() {
+        return Err(format!(
+            "refusing to start with {} unresolved audit operation(s)",
+            journal.recovery().recovered_operation_ids().len()
+        )
+        .into());
+    }
+    let audit: Arc<dyn tablepro_policy::AuditSink> = Arc::new(journal);
 
     let provider = Arc::new(DaemonProvider {
         registry: Arc::new(build_registry()),
         policy,
         audit,
+        audit_state: Arc::new(AuditState::new()),
         approval,
     });
     let bridge = Arc::new(McpBridge::new(provider, tokens));

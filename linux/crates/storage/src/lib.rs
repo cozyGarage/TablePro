@@ -4,7 +4,7 @@ mod error;
 pub mod query_history;
 mod secrets;
 
-pub use audit_journal::{AuditJournal, sample_event};
+pub use audit_journal::{AuditJournal, AuditJournalRecovery, LegacyJournalRotation, sample_event};
 pub use connections::{
     SavedConnection, SavedSshAuth, SavedSshConfig, delete_connection, load_connections, save_connections,
     touch_last_opened,
