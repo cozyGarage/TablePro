@@ -3,6 +3,7 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::error::DriverError;
+use crate::operation::{OperationControl, run_controlled};
 use crate::query::{ColumnInfo, ExecResult, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo, Value};
 use crate::tls::TlsConfig;
 use crate::transaction::Transaction;
@@ -62,6 +63,9 @@ pub trait Connection: Send + Sync {
         limit: u64,
     ) -> Result<QueryResult, DriverError>;
     async fn query(&self, sql: &str) -> Result<QueryResult, DriverError>;
+    async fn query_controlled(&self, sql: &str, control: &OperationControl) -> Result<QueryResult, DriverError> {
+        run_controlled(self.query(sql), control).await
+    }
     /// Parameterised SELECT. Bound `Value`s are passed through to the
     /// driver's prepare/bind path (sqlx::query::bind for the built-in
     /// drivers). Default impl delegates to `query` when params is
@@ -76,8 +80,27 @@ pub trait Connection: Send + Sync {
             ))
         }
     }
+    async fn query_params_controlled(
+        &self,
+        sql: &str,
+        params: &[Value],
+        control: &OperationControl,
+    ) -> Result<QueryResult, DriverError> {
+        run_controlled(self.query_params(sql, params), control).await
+    }
     async fn execute(&self, sql: &str) -> Result<ExecResult, DriverError>;
+    async fn execute_controlled(&self, sql: &str, control: &OperationControl) -> Result<ExecResult, DriverError> {
+        run_controlled(self.execute(sql), control).await
+    }
     async fn execute_params(&self, sql: &str, params: &[Value]) -> Result<ExecResult, DriverError>;
+    async fn execute_params_controlled(
+        &self,
+        sql: &str,
+        params: &[Value],
+        control: &OperationControl,
+    ) -> Result<ExecResult, DriverError> {
+        run_controlled(self.execute_params(sql, params), control).await
+    }
     /// Run a sequence of parameterised statements inside a single
     /// database transaction. Rolls back automatically if any
     /// statement errors; returns `DriverError::Transaction` with the

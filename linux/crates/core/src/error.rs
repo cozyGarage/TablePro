@@ -29,6 +29,15 @@ pub enum DriverError {
     #[error("driver internal error: {0}")]
     Internal(String),
 
+    #[error("operation cancelled")]
+    Cancelled,
+
+    #[error("operation timed out")]
+    TimedOut,
+
+    #[error("operation outcome is unknown after interruption: {source}")]
+    OperationOutcomeUnknown { source: Box<DriverError> },
+
     #[error("integrated authentication failed: {0}")]
     IntegratedAuth(String),
 

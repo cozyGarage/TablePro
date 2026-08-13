@@ -3,6 +3,7 @@ use relm4::{adw, gtk};
 
 use super::{StatementOutcome, StatementOutcomeKind};
 use crate::ui::grid::{TabGridContext, build_column_view};
+use tablepro_core::{DriverError, OperationControl};
 
 pub(crate) fn clear_box(b: &gtk::Box) {
     while let Some(child) = b.first_child() {
@@ -10,12 +11,19 @@ pub(crate) fn clear_box(b: &gtk::Box) {
     }
 }
 
+pub(crate) enum ScriptRunResult {
+    Completed(Vec<StatementOutcome>),
+    Cancelled,
+    TimedOut,
+}
+
 pub(crate) async fn run_statements(
     conn: std::sync::Arc<dyn tablepro_core::Connection>,
     statements: Vec<String>,
-) -> Vec<StatementOutcome> {
+    control: &OperationControl,
+) -> ScriptRunResult {
     if statements.is_empty() {
-        return Vec::new();
+        return ScriptRunResult::Completed(Vec::new());
     }
     let mut out = Vec::with_capacity(statements.len());
     let mut aborted = false;
@@ -30,8 +38,11 @@ pub(crate) async fn run_statements(
             continue;
         }
         let started = std::time::Instant::now();
-        let kind = match conn.query(&sql).await {
+        let kind = match conn.query_controlled(&sql, control).await {
             Ok(qr) => StatementOutcomeKind::Rows(qr),
+            Err(DriverError::Cancelled) => return ScriptRunResult::Cancelled,
+            Err(DriverError::TimedOut) => return ScriptRunResult::TimedOut,
+
             Err(e) => {
                 aborted = true;
                 StatementOutcomeKind::Error(crate::ui::error_text::driver_message(&e))
@@ -43,7 +54,7 @@ pub(crate) async fn run_statements(
             kind,
         });
     }
-    out
+    ScriptRunResult::Completed(out)
 }
 
 fn sql_preview(sql: &str) -> String {

@@ -11,14 +11,14 @@ use relm4::{adw, gtk};
 use sourceview5::prelude::*;
 use tokio_util::sync::CancellationToken;
 
-use tablepro_core::QueryResult;
+use tablepro_core::{OperationControl, QueryResult};
 use tablepro_storage::query_history::{self, NewEntry, Outcome};
 
 use crate::services::database_service::{self, ConnectionMetadata};
 
 pub use schema::{SQL_KEYWORDS, build_schema_buffer, derive_tab_label, update_schema_buffer};
 
-use outcomes::{clear_box, render_outcomes, run_statements, summary_label};
+use outcomes::{ScriptRunResult, clear_box, render_outcomes, run_statements, summary_label};
 use schema::{apply_editor_font_size, apply_editor_scheme};
 use sql_text::{split_sql_statements, statement_at_cursor, toggle_line_comment};
 
@@ -521,20 +521,13 @@ impl SqlEditor {
             shutdown
                 .register(async move {
                     let statements = split_sql_statements(&trimmed);
-                    let timeout: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> = if timeout_secs > 0 {
-                        Box::pin(tokio::time::sleep(std::time::Duration::from_secs(timeout_secs as u64)))
-                    } else {
-                        Box::pin(std::future::pending::<()>())
-                    };
-                    let token_for_timeout = token.clone();
-                    let msg = tokio::select! {
-                        biased;
-                        _ = token.cancelled() => SqlEditorInput::ShowCancelled,
-                        _ = timeout => {
-                            token_for_timeout.cancel();
-                            SqlEditorInput::ShowTimedOut(timeout_secs)
-                        }
-                        outcomes = run_statements(conn, statements) => {
+                    let deadline = (timeout_secs > 0)
+                        .then(|| tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64));
+                    let control = OperationControl::new(token, deadline);
+                    let msg = match run_statements(conn, statements, &control).await {
+                        ScriptRunResult::Cancelled => SqlEditorInput::ShowCancelled,
+                        ScriptRunResult::TimedOut => SqlEditorInput::ShowTimedOut(timeout_secs),
+                        ScriptRunResult::Completed(outcomes) => {
                             let total_ms: u128 = outcomes.iter().map(|o| o.elapsed_ms).sum();
                             let n_ok = outcomes
                                 .iter()

@@ -6,11 +6,12 @@ use serde_json::json;
 use uuid::Uuid;
 
 use drivers_postgres::PgDriver;
-use tablepro_core::{ConnectOptions, Connection, DatabaseDriver, Value};
+use tablepro_core::{ConnectOptions, Connection, DatabaseDriver, DriverError, OperationControl, Value};
 use testcontainers::ContainerAsync;
 use testcontainers::ImageExt;
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
+use tokio_util::sync::CancellationToken;
 
 async fn start_pg() -> (ContainerAsync<Postgres>, ConnectOptions) {
     // Pin to Postgres 16: the introspection query in `fetch_columns`
@@ -39,6 +40,195 @@ async fn start_pg() -> (ContainerAsync<Postgres>, ConnectOptions) {
 
 async fn connect(opts: ConnectOptions) -> Box<dyn Connection> {
     PgDriver.connect(opts).await.expect("connect")
+}
+
+async fn tagged_query_is_active(connection: &dyn Connection, tag: &str) -> bool {
+    let sql = format!(
+        "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query LIKE '%{tag}%' AND pid <> pg_backend_pid()"
+    );
+    let result = connection.query(&sql).await.expect("inspect pg_stat_activity");
+    matches!(result.rows.first().and_then(|row| row.first()), Some(Value::Int(count)) if *count > 0)
+}
+
+async fn wait_for_tagged_query(connection: &dyn Connection, tag: &str, active: bool) {
+    for _ in 0..100 {
+        if tagged_query_is_active(connection, tag).await == active {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("query tag {tag} did not reach active={active}");
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn controlled_cancel_stops_server_query_and_keeps_pool_usable() {
+    let (_container, opts) = start_pg().await;
+    let connection: std::sync::Arc<dyn Connection> = PgDriver.connect(opts.clone()).await.expect("connect").into();
+    let observer = connect(opts).await;
+    let token = CancellationToken::new();
+    let control = OperationControl::new(token.clone(), None);
+    let operation_connection = connection.clone();
+    let task = tokio::spawn(async move {
+        operation_connection
+            .query_controlled("SELECT pg_sleep(30) /* bookie_controlled_cancel */", &control)
+            .await
+    });
+
+    wait_for_tagged_query(observer.as_ref(), "bookie_controlled_cancel", true).await;
+    token.cancel();
+    let error = task.await.expect("query task").expect_err("query should be cancelled");
+    assert!(matches!(error, DriverError::Cancelled));
+    wait_for_tagged_query(observer.as_ref(), "bookie_controlled_cancel", false).await;
+
+    let result = connection.query("SELECT 1").await.expect("pool remains usable");
+    assert_eq!(result.rows, vec![vec![Value::Int(1)]]);
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn controlled_parameterized_cancel_stops_server_query_and_keeps_pool_usable() {
+    let (_container, opts) = start_pg().await;
+    let connection: std::sync::Arc<dyn Connection> = PgDriver.connect(opts.clone()).await.expect("connect").into();
+    let observer = connect(opts).await;
+    let token = CancellationToken::new();
+    let control = OperationControl::new(token.clone(), None);
+    let operation_connection = connection.clone();
+    let task = tokio::spawn(async move {
+        operation_connection
+            .query_params_controlled(
+                "SELECT $1::int FROM pg_sleep($2::double precision) /* bookie_controlled_params_cancel */",
+                &[Value::Int(7), Value::Float(30.0)],
+                &control,
+            )
+            .await
+    });
+
+    wait_for_tagged_query(observer.as_ref(), "bookie_controlled_params_cancel", true).await;
+    token.cancel();
+    let error = task.await.expect("query task").expect_err("query should be cancelled");
+    assert!(matches!(error, DriverError::Cancelled));
+    wait_for_tagged_query(observer.as_ref(), "bookie_controlled_params_cancel", false).await;
+
+    let result = connection.query("SELECT 1").await.expect("pool remains usable");
+    assert_eq!(result.rows, vec![vec![Value::Int(1)]]);
+
+    let token = CancellationToken::new();
+    let control = OperationControl::new(token.clone(), None);
+    let operation_connection = connection.clone();
+    let task = tokio::spawn(async move {
+        operation_connection
+            .execute_params_controlled(
+                "SELECT pg_sleep($1::double precision) /* bookie_controlled_execute_params_cancel */",
+                &[Value::Float(30.0)],
+                &control,
+            )
+            .await
+    });
+
+    wait_for_tagged_query(observer.as_ref(), "bookie_controlled_execute_params_cancel", true).await;
+    token.cancel();
+    let error = task
+        .await
+        .expect("execute task")
+        .expect_err("execute should be cancelled");
+    assert!(matches!(error, DriverError::Cancelled));
+    wait_for_tagged_query(observer.as_ref(), "bookie_controlled_execute_params_cancel", false).await;
+
+    let result = connection.query("SELECT 1").await.expect("pool remains usable");
+    assert_eq!(result.rows, vec![vec![Value::Int(1)]]);
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn controlled_transaction_cancel_allows_rollback() {
+    let (_container, opts) = start_pg().await;
+    let connection = connect(opts.clone()).await;
+    let observer = connect(opts).await;
+    connection
+        .execute("CREATE TABLE controlled_transaction (value int NOT NULL)")
+        .await
+        .expect("create table");
+    let mut transaction = connection.begin().await.expect("begin transaction");
+    transaction
+        .execute_params_controlled(
+            "INSERT INTO controlled_transaction (value) VALUES ($1)",
+            &[Value::Int(9)],
+            &OperationControl::new(CancellationToken::new(), None),
+        )
+        .await
+        .expect("insert in transaction");
+    let token = CancellationToken::new();
+    let control = OperationControl::new(token.clone(), None);
+    let task = tokio::spawn(async move {
+        let result = transaction
+            .query_params_controlled(
+                "SELECT $1::int FROM pg_sleep($2::double precision) /* bookie_transaction_cancel */",
+                &[Value::Int(7), Value::Float(30.0)],
+                &control,
+            )
+            .await;
+        (transaction, result)
+    });
+
+    wait_for_tagged_query(observer.as_ref(), "bookie_transaction_cancel", true).await;
+    token.cancel();
+    let (transaction, result) = task.await.expect("transaction task");
+    let error = result.expect_err("transaction query should be cancelled");
+    assert!(matches!(error, DriverError::Cancelled));
+    wait_for_tagged_query(observer.as_ref(), "bookie_transaction_cancel", false).await;
+    transaction.rollback().await.expect("rollback cancelled transaction");
+
+    let result = connection
+        .query("SELECT count(*) FROM controlled_transaction")
+        .await
+        .expect("count rows");
+    assert_eq!(result.rows, vec![vec![Value::Int(0)]]);
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn controlled_timeout_stops_server_query_and_keeps_pool_usable() {
+    let (_container, opts) = start_pg().await;
+    let connection = connect(opts.clone()).await;
+    let observer = connect(opts).await;
+    let control = OperationControl::new(
+        CancellationToken::new(),
+        Some(tokio::time::Instant::now() + std::time::Duration::from_millis(250)),
+    );
+
+    let error = connection
+        .query_controlled("SELECT pg_sleep(30) /* bookie_controlled_timeout */", &control)
+        .await
+        .expect_err("query should time out");
+    assert!(matches!(error, DriverError::TimedOut));
+    wait_for_tagged_query(observer.as_ref(), "bookie_controlled_timeout", false).await;
+
+    let result = connection.query("SELECT 1").await.expect("pool remains usable");
+    assert_eq!(result.rows, vec![vec![Value::Int(1)]]);
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn dropped_transaction_discards_uncommitted_session() {
+    let (_container, opts) = start_pg().await;
+    let connection = connect(opts).await;
+    connection
+        .execute("CREATE TABLE dropped_transaction (id integer PRIMARY KEY)")
+        .await
+        .expect("create table");
+    let mut transaction = connection.begin().await.expect("begin transaction");
+    transaction
+        .execute("INSERT INTO dropped_transaction (id) VALUES (1)")
+        .await
+        .expect("insert row");
+    drop(transaction);
+
+    let result = connection
+        .query("SELECT count(*) FROM dropped_transaction")
+        .await
+        .expect("query after dropped transaction");
+    assert_eq!(result.rows, vec![vec![Value::Int(0)]]);
 }
 
 #[tokio::test]

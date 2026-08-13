@@ -36,6 +36,12 @@ pub fn driver_message(error: &DriverError) -> String {
             crate::tr!("This driver does not support: {detail}").replace("{detail}", detail)
         }
         DriverError::Internal(detail) => crate::tr!("Internal driver error: {detail}").replace("{detail}", detail),
+        DriverError::Cancelled => crate::tr!("The operation was cancelled."),
+        DriverError::TimedOut => crate::tr!("The operation timed out."),
+        DriverError::OperationOutcomeUnknown { source } => crate::tr!(
+            "The operation was interrupted, but the database outcome could not be confirmed: {detail}"
+        )
+        .replace("{detail}", &driver_message(source)),
         DriverError::IntegratedAuth(detail) => crate::tr!(
             "Kerberos login failed: {detail}. Check that klist shows a valid ticket, run kinit if it does not, and make sure the server's SPN matches the host you typed."
         )

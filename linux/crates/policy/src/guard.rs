@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use tablepro_core::{
-    ColumnInfo, Connection, DriverError, Environment, ExecResult, ForeignKeyInfo, IndexInfo, QueryResult, TableInfo,
-    Transaction, Value,
+    ColumnInfo, Connection, DriverError, Environment, ExecResult, ForeignKeyInfo, IndexInfo, OperationControl,
+    QueryResult, TableInfo, Transaction, Value,
 };
 use uuid::Uuid;
 
@@ -544,6 +544,48 @@ impl PolicyGuard {
         self.handle_read_audit_failure(audit_result)
     }
 
+    async fn audit_controlled_read_result<T>(
+        &self,
+        operation: &AuditOperation<'_>,
+        start: Instant,
+        result: &Result<T, DriverError>,
+        rows: Option<u64>,
+    ) -> Result<(), DriverError> {
+        let audit_result = match result {
+            Ok(_) => {
+                self.record_outcome(
+                    operation,
+                    AuditOutcome {
+                        terminal_status: AuditTerminalStatus::Succeeded,
+                        transaction_outcome: AuditTransactionOutcome::NotApplicable,
+                        rows_affected: rows,
+                        error_category: None,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    },
+                )
+                .await
+            }
+            Err(error) => {
+                let terminal_status = controlled_error_terminal_status(error);
+                if matches!(error, DriverError::OperationOutcomeUnknown { .. }) {
+                    self.ctx.audit_state.disable_governed_writes();
+                }
+                self.record_outcome(
+                    operation,
+                    AuditOutcome {
+                        terminal_status,
+                        transaction_outcome: AuditTransactionOutcome::NotApplicable,
+                        rows_affected: None,
+                        error_category: Some(error_category(error)),
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    },
+                )
+                .await
+            }
+        };
+        self.handle_read_audit_failure(audit_result)
+    }
+
     async fn audit_transaction_result<T>(
         &self,
         operation: &AuditOperation<'_>,
@@ -566,12 +608,15 @@ impl PolicyGuard {
                 .await
             }
             Err(error) => {
-                self.ctx.audit_state.disable_governed_writes();
+                let (terminal_status, transaction_outcome, disables_governed_writes) = transaction_error_outcome(error);
+                if disables_governed_writes {
+                    self.ctx.audit_state.disable_governed_writes();
+                }
                 self.record_outcome(
                     operation,
                     AuditOutcome {
-                        terminal_status: AuditTerminalStatus::Unknown,
-                        transaction_outcome: AuditTransactionOutcome::Unknown,
+                        terminal_status,
+                        transaction_outcome,
                         rows_affected: None,
                         error_category: Some(error_category(error)),
                         duration_ms: start.elapsed().as_millis() as u64,
@@ -608,18 +653,14 @@ impl PolicyGuard {
                 .await
             }
             Err(error) => {
-                let ambiguous = is_ambiguous_post_dispatch(error);
-                if ambiguous {
+                let (terminal_status, disables_governed_writes) = write_error_outcome(error);
+                if disables_governed_writes {
                     self.ctx.audit_state.disable_governed_writes();
                 }
                 self.record_outcome(
                     operation,
                     AuditOutcome {
-                        terminal_status: if ambiguous {
-                            AuditTerminalStatus::Unknown
-                        } else {
-                            AuditTerminalStatus::Failed
-                        },
+                        terminal_status,
                         transaction_outcome: AuditTransactionOutcome::NotApplicable,
                         rows_affected: None,
                         error_category: Some(error_category(error)),
@@ -665,6 +706,33 @@ fn sanitized_error_detail(category: AuditErrorCategory) -> String {
     .into()
 }
 
+fn controlled_error_terminal_status(error: &DriverError) -> AuditTerminalStatus {
+    match error {
+        DriverError::Cancelled => AuditTerminalStatus::Cancelled,
+        DriverError::TimedOut => AuditTerminalStatus::TimedOut,
+        DriverError::OperationOutcomeUnknown { .. } => AuditTerminalStatus::Unknown,
+        _ => AuditTerminalStatus::Failed,
+    }
+}
+
+fn write_error_outcome(error: &DriverError) -> (AuditTerminalStatus, bool) {
+    match error {
+        DriverError::Cancelled => (AuditTerminalStatus::Cancelled, false),
+        DriverError::TimedOut => (AuditTerminalStatus::TimedOut, false),
+        DriverError::OperationOutcomeUnknown { .. } => (AuditTerminalStatus::Unknown, true),
+        _ if is_ambiguous_post_dispatch(error) => (AuditTerminalStatus::Unknown, true),
+        _ => (AuditTerminalStatus::Failed, false),
+    }
+}
+
+fn transaction_error_outcome(error: &DriverError) -> (AuditTerminalStatus, AuditTransactionOutcome, bool) {
+    match error {
+        DriverError::Cancelled => (AuditTerminalStatus::Cancelled, AuditTransactionOutcome::Pending, false),
+        DriverError::TimedOut => (AuditTerminalStatus::TimedOut, AuditTransactionOutcome::Pending, false),
+        _ => (AuditTerminalStatus::Unknown, AuditTransactionOutcome::Unknown, true),
+    }
+}
+
 fn is_ambiguous_post_dispatch(error: &DriverError) -> bool {
     match error {
         DriverError::ConnectionRefused
@@ -672,12 +740,15 @@ fn is_ambiguous_post_dispatch(error: &DriverError) -> bool {
         | DriverError::AuthFailed
         | DriverError::IntegratedAuth(_)
         | DriverError::Tls(_)
-        | DriverError::Internal(_) => true,
+        | DriverError::Internal(_)
+        | DriverError::OperationOutcomeUnknown { .. } => true,
         DriverError::Transaction { source, .. } => is_ambiguous_post_dispatch(source),
         DriverError::Query { .. }
         | DriverError::ReadOnly
         | DriverError::PolicyDenied(_)
-        | DriverError::Unsupported(_) => false,
+        | DriverError::Unsupported(_)
+        | DriverError::Cancelled
+        | DriverError::TimedOut => false,
     }
 }
 
@@ -691,498 +762,14 @@ fn error_category(error: &DriverError) -> AuditErrorCategory {
         DriverError::PolicyDenied(_) => AuditErrorCategory::Policy,
         DriverError::Unsupported(_) => AuditErrorCategory::Unsupported,
         DriverError::Internal(_) => AuditErrorCategory::Internal,
+        DriverError::Cancelled => AuditErrorCategory::Cancelled,
+        DriverError::TimedOut => AuditErrorCategory::Timeout,
+        DriverError::OperationOutcomeUnknown { .. } => AuditErrorCategory::Unknown,
         DriverError::Transaction { .. } => AuditErrorCategory::Transaction,
     }
 }
 
-#[async_trait]
-impl Connection for PolicyGuard {
-    async fn list_tables(&self) -> Result<Vec<TableInfo>, DriverError> {
-        let operation = self.metadata_operation("LIST TABLES", Vec::new());
-        self.prepare_governed_read(&operation).await?;
-        let start = Instant::now();
-        let result = self.inner.list_tables().await;
-        let rows = result.as_ref().ok().map(|tables| tables.len() as u64);
-        self.audit_read_result(&operation, start, &result, rows).await?;
-        result
-    }
-
-    async fn fetch_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<ColumnInfo>, DriverError> {
-        let target = schema.map_or_else(|| table.to_string(), |schema| format!("{schema}.{table}"));
-        let operation = self.metadata_operation("FETCH COLUMNS", vec![target]);
-        self.prepare_governed_read(&operation).await?;
-        let start = Instant::now();
-        let result = self.inner.fetch_columns(schema, table).await;
-        let rows = result.as_ref().ok().map(|columns| columns.len() as u64);
-        self.audit_read_result(&operation, start, &result, rows).await?;
-        result
-    }
-
-    async fn fetch_rows(
-        &self,
-        schema: Option<&str>,
-        table: &str,
-        offset: u64,
-        limit: u64,
-    ) -> Result<QueryResult, DriverError> {
-        let target = schema.map_or_else(|| table.to_string(), |schema| format!("{schema}.{table}"));
-        let operation = self.metadata_operation("FETCH ROWS", vec![target]);
-        self.prepare_governed_read(&operation).await?;
-        let start = Instant::now();
-        let result = self
-            .inner
-            .fetch_rows(schema, table, offset, limit)
-            .await
-            .map(|rows| self.mask_result(rows));
-        let row_count = result.as_ref().ok().map(|rows| rows.rows.len() as u64);
-        self.audit_read_result(&operation, start, &result, row_count).await?;
-        result
-    }
-
-    async fn query(&self, sql: &str) -> Result<QueryResult, DriverError> {
-        let authorization = self.authorize(sql, false).await?;
-        if authorization.facts.writes {
-            return self
-                .execute_query_write(sql, None, authorization, |inner| inner.query(sql))
-                .await;
-        }
-        let operation = self.operation(
-            sql,
-            None,
-            &authorization.facts,
-            &authorization.decision,
-            authorization.approval_outcome,
-            authorization.preview_state,
-        );
-        self.prepare_governed_read(&operation).await?;
-        let start = Instant::now();
-        let result = self.inner.query(sql).await.map(|value| self.mask_result(value));
-        let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
-        self.audit_read_result(&operation, start, &result, rows).await?;
-        result
-    }
-
-    async fn query_params(&self, sql: &str, params: &[Value]) -> Result<QueryResult, DriverError> {
-        let authorization = self.authorize(sql, true).await?;
-        if authorization.facts.writes {
-            return self
-                .execute_query_write(sql, None, authorization, |inner| inner.query_params(sql, params))
-                .await;
-        }
-        let operation = self.operation(
-            sql,
-            None,
-            &authorization.facts,
-            &authorization.decision,
-            authorization.approval_outcome,
-            authorization.preview_state,
-        );
-        self.prepare_governed_read(&operation).await?;
-        let start = Instant::now();
-        let result = self
-            .inner
-            .query_params(sql, params)
-            .await
-            .map(|value| self.mask_result(value));
-        let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
-        self.audit_read_result(&operation, start, &result, rows).await?;
-        result
-    }
-
-    async fn execute(&self, sql: &str) -> Result<ExecResult, DriverError> {
-        let authorization = self.authorize(sql, false).await?;
-        self.execute_write(sql, None, authorization, |inner| inner.execute(sql))
-            .await
-    }
-
-    async fn execute_params(&self, sql: &str, params: &[Value]) -> Result<ExecResult, DriverError> {
-        let authorization = self.authorize(sql, true).await?;
-        self.execute_write(sql, None, authorization, |inner| inner.execute_params(sql, params))
-            .await
-    }
-
-    async fn execute_in_transaction(&self, statements: &[(String, Vec<Value>)]) -> Result<Vec<u64>, DriverError> {
-        let combined = statements
-            .iter()
-            .map(|(sql, _)| sql.trim().trim_end_matches(';'))
-            .collect::<Vec<_>>()
-            .join(";\n");
-        let authorization = self.authorize(&combined, true).await?;
-        self.require_governed_write_available()?;
-        let batch_id = Uuid::new_v4();
-        let operation = self.operation(
-            &combined,
-            Some(batch_id),
-            &authorization.facts,
-            &authorization.decision,
-            authorization.approval_outcome,
-            authorization.preview_state,
-        );
-        self.handle_intent_failure(self.record_intent(&operation).await)?;
-        let mut pending_write = self.ctx.audit_state.pending_write();
-        let start = Instant::now();
-        let result = self.inner.execute_in_transaction(statements).await;
-        let rows = result.as_ref().ok().map(|values| values.iter().sum());
-        self.audit_transaction_result(&operation, start, &result, rows).await?;
-        pending_write.disarm();
-        result
-    }
-
-    async fn fetch_indexes(&self, schema: Option<&str>, table: &str) -> Result<Vec<IndexInfo>, DriverError> {
-        let target = schema.map_or_else(|| table.to_string(), |schema| format!("{schema}.{table}"));
-        let operation = self.metadata_operation("FETCH INDEXES", vec![target]);
-        self.prepare_governed_read(&operation).await?;
-        let start = Instant::now();
-        let result = self.inner.fetch_indexes(schema, table).await;
-        let rows = result.as_ref().ok().map(|indexes| indexes.len() as u64);
-        self.audit_read_result(&operation, start, &result, rows).await?;
-        result
-    }
-
-    async fn fetch_foreign_keys(&self, schema: Option<&str>, table: &str) -> Result<Vec<ForeignKeyInfo>, DriverError> {
-        let target = schema.map_or_else(|| table.to_string(), |schema| format!("{schema}.{table}"));
-        let operation = self.metadata_operation("FETCH FOREIGN KEYS", vec![target]);
-        self.prepare_governed_read(&operation).await?;
-        let start = Instant::now();
-        let result = self.inner.fetch_foreign_keys(schema, table).await;
-        let rows = result.as_ref().ok().map(|keys| keys.len() as u64);
-        self.audit_read_result(&operation, start, &result, rows).await?;
-        result
-    }
-
-    async fn begin(&self) -> Result<Box<dyn Transaction>, DriverError> {
-        let inner = self.inner.begin().await?;
-        Ok(Box::new(PolicyTransaction {
-            guard: self.clone(),
-            inner,
-            batch_id: Uuid::new_v4(),
-        }))
-    }
-
-    async fn server_version(&self) -> Result<Option<String>, DriverError> {
-        let operation = self.metadata_operation("SERVER VERSION", Vec::new());
-        self.prepare_governed_read(&operation).await?;
-        let start = Instant::now();
-        let result = self.inner.server_version().await;
-        self.audit_read_result(&operation, start, &result, None).await?;
-        result
-    }
-
-    async fn ping(&self) -> Result<(), DriverError> {
-        self.inner.ping().await
-    }
-
-    async fn close(self: Box<Self>) -> Result<(), DriverError> {
-        Ok(())
-    }
-}
-
-impl PolicyGuard {
-    async fn execute_write<'a, F, Fut>(
-        &'a self,
-        sql: &'a str,
-        batch_id: Option<Uuid>,
-        authorization: Authorization,
-        execute: F,
-    ) -> Result<ExecResult, DriverError>
-    where
-        F: FnOnce(&'a Arc<dyn Connection>) -> Fut,
-        Fut: std::future::Future<Output = Result<ExecResult, DriverError>>,
-    {
-        self.require_governed_write_available()?;
-        let operation = self.operation(
-            sql,
-            batch_id,
-            &authorization.facts,
-            &authorization.decision,
-            authorization.approval_outcome,
-            authorization.preview_state,
-        );
-        self.handle_intent_failure(self.record_intent(&operation).await)?;
-        let mut pending_write = self.ctx.audit_state.pending_write();
-        let start = Instant::now();
-        let result = execute(&self.inner).await;
-        let rows = result.as_ref().ok().map(|value| value.rows_affected);
-        self.audit_write_result(&operation, start, &result, rows).await?;
-        pending_write.disarm();
-        result
-    }
-
-    async fn execute_query_write<'a, F, Fut>(
-        &'a self,
-        sql: &'a str,
-        batch_id: Option<Uuid>,
-        authorization: Authorization,
-        execute: F,
-    ) -> Result<QueryResult, DriverError>
-    where
-        F: FnOnce(&'a Arc<dyn Connection>) -> Fut,
-        Fut: std::future::Future<Output = Result<QueryResult, DriverError>>,
-    {
-        self.require_governed_write_available()?;
-        let operation = self.operation(
-            sql,
-            batch_id,
-            &authorization.facts,
-            &authorization.decision,
-            authorization.approval_outcome,
-            authorization.preview_state,
-        );
-        self.handle_intent_failure(self.record_intent(&operation).await)?;
-        let mut pending_write = self.ctx.audit_state.pending_write();
-        let start = Instant::now();
-        let result = execute(&self.inner).await.map(|value| self.mask_result(value));
-        let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
-        self.audit_write_result(&operation, start, &result, rows).await?;
-        pending_write.disarm();
-        result
-    }
-}
-
-#[async_trait]
-impl Transaction for PolicyTransaction {
-    async fn query(&mut self, sql: &str) -> Result<QueryResult, DriverError> {
-        let authorization = self.guard.authorize(sql, false).await?;
-        if authorization.facts.writes {
-            self.guard.require_governed_write_available()?;
-            let operation = self.guard.operation(
-                sql,
-                Some(self.batch_id),
-                &authorization.facts,
-                &authorization.decision,
-                authorization.approval_outcome,
-                authorization.preview_state,
-            );
-            self.guard
-                .handle_intent_failure(self.guard.record_intent(&operation).await)?;
-            let mut pending_write = self.guard.ctx.audit_state.pending_write();
-            let start = Instant::now();
-            let result = self.inner.query(sql).await.map(|value| self.guard.mask_result(value));
-            let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
-            self.guard
-                .audit_transaction_result(&operation, start, &result, rows)
-                .await?;
-            pending_write.disarm();
-            return result;
-        }
-        let operation = self.guard.operation(
-            sql,
-            Some(self.batch_id),
-            &authorization.facts,
-            &authorization.decision,
-            authorization.approval_outcome,
-            authorization.preview_state,
-        );
-        self.guard.prepare_governed_read(&operation).await?;
-        let start = Instant::now();
-        let result = self.inner.query(sql).await.map(|value| self.guard.mask_result(value));
-        let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
-        self.guard
-            .audit_transaction_result(&operation, start, &result, rows)
-            .await?;
-        result
-    }
-
-    async fn query_params(&mut self, sql: &str, params: &[Value]) -> Result<QueryResult, DriverError> {
-        let authorization = self.guard.authorize(sql, true).await?;
-        if authorization.facts.writes {
-            self.guard.require_governed_write_available()?;
-            let operation = self.guard.operation(
-                sql,
-                Some(self.batch_id),
-                &authorization.facts,
-                &authorization.decision,
-                authorization.approval_outcome,
-                authorization.preview_state,
-            );
-            self.guard
-                .handle_intent_failure(self.guard.record_intent(&operation).await)?;
-            let mut pending_write = self.guard.ctx.audit_state.pending_write();
-            let start = Instant::now();
-            let result = self
-                .inner
-                .query_params(sql, params)
-                .await
-                .map(|value| self.guard.mask_result(value));
-            let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
-            self.guard
-                .audit_transaction_result(&operation, start, &result, rows)
-                .await?;
-            pending_write.disarm();
-            return result;
-        }
-        let operation = self.guard.operation(
-            sql,
-            Some(self.batch_id),
-            &authorization.facts,
-            &authorization.decision,
-            authorization.approval_outcome,
-            authorization.preview_state,
-        );
-        self.guard.prepare_governed_read(&operation).await?;
-        let start = Instant::now();
-        let result = self
-            .inner
-            .query_params(sql, params)
-            .await
-            .map(|value| self.guard.mask_result(value));
-        let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
-        self.guard
-            .audit_transaction_result(&operation, start, &result, rows)
-            .await?;
-        result
-    }
-
-    async fn execute(&mut self, sql: &str) -> Result<ExecResult, DriverError> {
-        let authorization = self.guard.authorize(sql, false).await?;
-        self.guard.require_governed_write_available()?;
-        let operation = self.guard.operation(
-            sql,
-            Some(self.batch_id),
-            &authorization.facts,
-            &authorization.decision,
-            authorization.approval_outcome,
-            authorization.preview_state,
-        );
-        self.guard
-            .handle_intent_failure(self.guard.record_intent(&operation).await)?;
-        let mut pending_write = self.guard.ctx.audit_state.pending_write();
-        let start = Instant::now();
-        let result = self.inner.execute(sql).await;
-        let rows = result.as_ref().ok().map(|value| value.rows_affected);
-        self.guard
-            .audit_transaction_result(&operation, start, &result, rows)
-            .await?;
-        pending_write.disarm();
-        result
-    }
-
-    async fn execute_params(&mut self, sql: &str, params: &[Value]) -> Result<ExecResult, DriverError> {
-        let authorization = self.guard.authorize(sql, true).await?;
-        self.guard.require_governed_write_available()?;
-        let operation = self.guard.operation(
-            sql,
-            Some(self.batch_id),
-            &authorization.facts,
-            &authorization.decision,
-            authorization.approval_outcome,
-            authorization.preview_state,
-        );
-        self.guard
-            .handle_intent_failure(self.guard.record_intent(&operation).await)?;
-        let mut pending_write = self.guard.ctx.audit_state.pending_write();
-        let start = Instant::now();
-        let result = self.inner.execute_params(sql, params).await;
-        let rows = result.as_ref().ok().map(|value| value.rows_affected);
-        self.guard
-            .audit_transaction_result(&operation, start, &result, rows)
-            .await?;
-        pending_write.disarm();
-        result
-    }
-
-    async fn commit(self: Box<Self>) -> Result<(), DriverError> {
-        self.guard.require_governed_write_available()?;
-        let operation = PolicyGuard::commit_operation(self.batch_id);
-        self.guard.record_intent(&operation).await.map_err(|error| {
-            DriverError::PolicyDenied(format!(
-                "commit denied because audit intent could not be persisted: {error}"
-            ))
-        })?;
-        let mut pending_write = self.guard.ctx.audit_state.pending_write();
-        let start = Instant::now();
-        let result = self.inner.commit().await;
-        let (status, transaction_outcome, category) = match &result {
-            Ok(()) => (AuditTerminalStatus::Succeeded, AuditTransactionOutcome::Committed, None),
-            Err(error) if is_ambiguous_post_dispatch(error) => {
-                self.guard.ctx.audit_state.disable_governed_writes();
-                (
-                    AuditTerminalStatus::Unknown,
-                    AuditTransactionOutcome::Unknown,
-                    Some(error_category(error)),
-                )
-            }
-            Err(error) => (
-                AuditTerminalStatus::Failed,
-                AuditTransactionOutcome::Failed,
-                Some(error_category(error)),
-            ),
-        };
-        let audit_result = self
-            .guard
-            .record_outcome(
-                &operation,
-                AuditOutcome {
-                    terminal_status: status,
-                    transaction_outcome,
-                    rows_affected: None,
-                    error_category: category,
-                    duration_ms: start.elapsed().as_millis() as u64,
-                },
-            )
-            .await;
-        self.guard.handle_write_outcome_failure(audit_result)?;
-        pending_write.disarm();
-        result
-    }
-
-    async fn rollback(self: Box<Self>) -> Result<(), DriverError> {
-        let operation = AuditOperation {
-            operation_id: Uuid::new_v4(),
-            batch_id: Some(self.batch_id),
-            sql: "ROLLBACK",
-            class: AuditOperationClass::TransactionRollback,
-            targets: Vec::new(),
-            decision_rule: "transaction_rollback".into(),
-            approval_outcome: AuditApprovalOutcome::NotRequired,
-            preview_state: AuditPreviewState::NotRequested,
-        };
-        self.guard.record_intent(&operation).await.map_err(|error| {
-            DriverError::PolicyDenied(format!(
-                "rollback denied because audit intent could not be persisted: {error}"
-            ))
-        })?;
-        let mut pending_write = self.guard.ctx.audit_state.pending_write();
-        let start = Instant::now();
-        let result = self.inner.rollback().await;
-        let (status, transaction_outcome, category) = match &result {
-            Ok(()) => (
-                AuditTerminalStatus::Succeeded,
-                AuditTransactionOutcome::RolledBack,
-                None,
-            ),
-            Err(error) if is_ambiguous_post_dispatch(error) => {
-                self.guard.ctx.audit_state.disable_governed_writes();
-                (
-                    AuditTerminalStatus::Unknown,
-                    AuditTransactionOutcome::Unknown,
-                    Some(error_category(error)),
-                )
-            }
-            Err(error) => (
-                AuditTerminalStatus::Failed,
-                AuditTransactionOutcome::Failed,
-                Some(error_category(error)),
-            ),
-        };
-        let audit_result = self
-            .guard
-            .record_outcome(
-                &operation,
-                AuditOutcome {
-                    terminal_status: status,
-                    transaction_outcome,
-                    rows_affected: None,
-                    error_category: category,
-                    duration_ms: start.elapsed().as_millis() as u64,
-                },
-            )
-            .await;
-        self.guard.handle_write_outcome_failure(audit_result)?;
-        pending_write.disarm();
-        result
-    }
-}
+mod connection;
 
 #[cfg(test)]
 #[path = "guard_tests.rs"]

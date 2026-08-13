@@ -6347,6 +6347,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 
@@ -6454,6 +6455,7 @@ dependencies = [
  "testcontainers",
  "testcontainers-modules",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 

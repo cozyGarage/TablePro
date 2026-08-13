@@ -1,6 +1,6 @@
 # TablePro Linux roadmap
 
-Last audited: 2026-08-13
+Last audited: 2026-08-14
 
 The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Swift parity backlog. This file is the concise Linux status view.
 
@@ -22,7 +22,7 @@ Status terms:
 | PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse | Implemented | Stable driver label; release matrix is incomplete |
 | Redis, MongoDB, DuckDB, Oracle | Implemented | Experimental; DuckDB/Oracle require Cargo/native features |
 | Browse/edit/filter/sort/pagination | Implemented | Keyset helper exists; large-result behavior needs release tests |
-| SQL editor and multiple result tabs | Implemented | Client timeout/cancel UI exists; server cancellation is unverified |
+| SQL editor and multiple result tabs | Integrated | PostgreSQL timeout and cancel stop the server query and wait for terminal audit state |
 | Structure editor | Implemented | Tables, columns, indexes, and foreign keys |
 | Saved connections and libsecret | Implemented | Keyring failure UX needs hardening |
 | SSH and jump chains | Implemented | Jump chains are JSON-only in the current GTK form |
@@ -73,12 +73,12 @@ Phase 1 is implemented, security-reviewed, and locally verified. Phase 4 still o
 - [x] Refuse agent service when audit storage is unavailable or unresolved writes exist
 - [x] Persist unresolved write state across restarts and concurrent processes
 
-Phase 2 is implemented, security-reviewed, and locally verified. Phase 3 still owns PostgreSQL server cancellation and real-driver terminal outcome proof.
+Phase 2 is implemented, security-reviewed, and locally verified. PostgreSQL cancellation and terminal outcomes are now verified in Phase 3.
 
 ### 3 — PostgreSQL release safety
 
 - [ ] Verify direct and SSH `VerifyFull`
-- [ ] Implement server-side cancellation
+- [x] Implement and verify server-side cancellation, parameterized cancellation, rollback, and pool reuse
 - [ ] Verify rollback, activity, locks, reconnect, and SSH reconnect
 - [ ] Add deterministic PostgreSQL release fixture
 
@@ -125,4 +125,4 @@ Keep the macOS tree as the parity reference until useful behavior, tests, docume
 
 ## Next implementation target
 
-Begin Phase 3 with the deterministic PostgreSQL TLS, SSH, cancellation, rollback, lock, and reconnect fixture. Production-write and agent-write workflows are not release-trusted until Phases 1–4 pass their real-driver and GTK tests.
+Continue Phase 3 with the deterministic PostgreSQL TLS, SSH, lock, and reconnect fixture. Production-write and agent-write workflows are not release-trusted until Phases 1–4 pass their real-driver and GTK tests.

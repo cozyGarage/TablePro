@@ -45,6 +45,10 @@ struct BlockingWriteConn {
 
 struct AmbiguousWriteConn;
 
+struct ControlledWriteConn {
+    outcome_unknown: bool,
+}
+
 struct TransactionQueryErrorConn;
 
 struct TransactionQueryErrorTx;
@@ -292,6 +296,58 @@ impl Connection for BlockingWriteConn {
 
     async fn execute_in_transaction(&self, _: &[(String, Vec<Value>)]) -> Result<Vec<u64>, DriverError> {
         self.execute("").await.map(|result| vec![result.rows_affected])
+    }
+
+    async fn begin(&self) -> Result<Box<dyn Transaction>, DriverError> {
+        Err(DriverError::Unsupported("transaction".into()))
+    }
+
+    async fn ping(&self) -> Result<(), DriverError> {
+        Ok(())
+    }
+
+    async fn close(self: Box<Self>) -> Result<(), DriverError> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Connection for ControlledWriteConn {
+    async fn list_tables(&self) -> Result<Vec<TableInfo>, DriverError> {
+        Ok(vec![])
+    }
+
+    async fn fetch_columns(&self, _: Option<&str>, _: &str) -> Result<Vec<ColumnInfo>, DriverError> {
+        Ok(vec![])
+    }
+
+    async fn fetch_rows(&self, _: Option<&str>, _: &str, _: u64, _: u64) -> Result<QueryResult, DriverError> {
+        Ok(empty_result())
+    }
+
+    async fn query(&self, _: &str) -> Result<QueryResult, DriverError> {
+        Ok(empty_result())
+    }
+
+    async fn execute(&self, _: &str) -> Result<ExecResult, DriverError> {
+        Ok(ExecResult { rows_affected: 1 })
+    }
+
+    async fn execute_controlled(&self, _: &str, _: &OperationControl) -> Result<ExecResult, DriverError> {
+        if self.outcome_unknown {
+            return Err(DriverError::OperationOutcomeUnknown {
+                source: Box::new(DriverError::TimedOut),
+            });
+        }
+        Err(DriverError::TimedOut)
+    }
+
+    async fn execute_params(&self, _: &str, _: &[Value]) -> Result<ExecResult, DriverError> {
+        Ok(ExecResult { rows_affected: 1 })
+    }
+
+    async fn execute_in_transaction(&self, _: &[(String, Vec<Value>)]) -> Result<Vec<u64>, DriverError> {
+        Ok(vec![1])
     }
 
     async fn begin(&self) -> Result<Box<dyn Transaction>, DriverError> {
@@ -698,6 +754,66 @@ async fn interactive_transaction_execute_query_error_records_unknown_and_poisons
     assert_eq!(outcome.terminal_status, AuditTerminalStatus::Unknown);
     assert_eq!(outcome.transaction_outcome, AuditTransactionOutcome::Unknown);
     assert_eq!(outcome.error_category, Some(AuditErrorCategory::Query));
+}
+
+#[tokio::test]
+async fn confirmed_controlled_timeout_records_timeout_without_poisoning_state() {
+    let state = Arc::new(AuditState::new());
+    let audit = Arc::new(SequenceAuditSink::new(vec![]));
+    let guard = PolicyGuard::new(
+        Arc::new(ControlledWriteConn { outcome_unknown: false }),
+        context(
+            Principal::human_gui(),
+            Environment::Prod,
+            PolicyConfig::default(),
+            Arc::new(AutoApproveSink),
+            audit.clone(),
+            state.clone(),
+        ),
+    );
+    let control = OperationControl::new(Default::default(), None);
+
+    let error = guard
+        .execute_controlled("INSERT INTO jobs(id) VALUES (1)", &control)
+        .await
+        .expect_err("confirmed timeout must surface");
+
+    assert!(matches!(error, DriverError::TimedOut));
+    assert!(!state.governed_writes_disabled());
+    let events = audit.events.lock().expect("event lock");
+    let outcome = events.last().expect("outcome event");
+    assert_eq!(outcome.terminal_status, AuditTerminalStatus::TimedOut);
+    assert_eq!(outcome.error_category, Some(AuditErrorCategory::Timeout));
+}
+
+#[tokio::test]
+async fn controlled_unknown_outcome_records_unknown_and_poisons_state() {
+    let state = Arc::new(AuditState::new());
+    let audit = Arc::new(SequenceAuditSink::new(vec![]));
+    let guard = PolicyGuard::new(
+        Arc::new(ControlledWriteConn { outcome_unknown: true }),
+        context(
+            Principal::human_gui(),
+            Environment::Prod,
+            PolicyConfig::default(),
+            Arc::new(AutoApproveSink),
+            audit.clone(),
+            state.clone(),
+        ),
+    );
+    let control = OperationControl::new(Default::default(), None);
+
+    let error = guard
+        .execute_controlled("INSERT INTO jobs(id) VALUES (1)", &control)
+        .await
+        .expect_err("unknown outcome must surface");
+
+    assert!(matches!(error, DriverError::OperationOutcomeUnknown { .. }));
+    assert!(state.governed_writes_disabled());
+    let events = audit.events.lock().expect("event lock");
+    let outcome = events.last().expect("outcome event");
+    assert_eq!(outcome.terminal_status, AuditTerminalStatus::Unknown);
+    assert_eq!(outcome.error_category, Some(AuditErrorCategory::Unknown));
 }
 
 #[tokio::test]

@@ -1,9 +1,11 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use tablepro_core::{Connection, ExecResult, QueryResult, TableInfo};
+use tablepro_core::{Connection, ExecResult, OperationControl, QueryResult, TableInfo};
 use tablepro_policy::Principal;
 use tablepro_storage::SavedConnection;
+use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::auth::{McpScope, authorize_scopes};
@@ -109,11 +111,8 @@ impl McpBridge {
         let sql = sql.to_string();
         self.with_connection(token, connection_id, move |conn| {
             Box::pin(async move {
-                let fut = conn.query(&sql);
-                let result = tokio::time::timeout(std::time::Duration::from_secs(timeout), fut)
-                    .await
-                    .map_err(|_| "query timed out".to_string())?
-                    .map_err(|e| e.to_string())?;
+                let control = operation_control(timeout);
+                let result = conn.query_controlled(&sql, &control).await.map_err(|e| e.to_string())?;
                 let mut result = result;
                 if result.rows.len() as u64 > max_rows {
                     result.rows.truncate(max_rows as usize);
@@ -137,24 +136,20 @@ impl McpBridge {
         let sql = sql.to_string();
         self.with_connection(token, connection_id, move |conn| {
             Box::pin(async move {
+                let control = operation_control(timeout);
                 if preview {
                     let mut tx = conn.begin().await.map_err(|e| e.to_string())?;
-                    let result = tokio::time::timeout(std::time::Duration::from_secs(timeout), tx.execute(&sql))
-                        .await
-                        .map_err(|_| "query timed out".to_string())?
-                        .map_err(|e| e.to_string())?;
-                    // Leave open for caller to commit via separate path —
-                    // for the first cut we roll back after reporting.
-                    let rows = result.rows_affected;
+                    let result = tx.execute_controlled(&sql, &control).await;
                     tx.rollback().await.map_err(|e| e.to_string())?;
+                    let result = result.map_err(|e| e.to_string())?;
                     Ok(WriteOutcome::Preview {
-                        rows_affected: rows,
+                        rows_affected: result.rows_affected,
                         rolled_back: true,
                     })
                 } else {
-                    let result = tokio::time::timeout(std::time::Duration::from_secs(timeout), conn.execute(&sql))
+                    let result = conn
+                        .execute_controlled(&sql, &control)
                         .await
-                        .map_err(|_| "query timed out".to_string())?
                         .map_err(|e| e.to_string())?;
                     Ok(WriteOutcome::Committed {
                         rows_affected: result.rows_affected,
@@ -182,6 +177,13 @@ impl McpBridge {
 pub enum WriteOutcome {
     Preview { rows_affected: u64, rolled_back: bool },
     Committed { rows_affected: u64 },
+}
+
+fn operation_control(timeout_secs: u64) -> OperationControl {
+    OperationControl::new(
+        CancellationToken::new(),
+        Some(Instant::now() + Duration::from_secs(timeout_secs)),
+    )
 }
 
 fn sql_looks_like_write(sql: &str) -> bool {

@@ -2,14 +2,15 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use secrecy::ExposeSecret;
+use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgRow};
-use sqlx::{Column, Pool, Postgres, Row, TypeInfo};
+use sqlx::{Column, Connection as SqlxConnection, Pool, Postgres, Row, TypeInfo};
 
 use futures::stream::StreamExt;
 
 use tablepro_core::{
     ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, ForeignKeyInfo, IndexInfo,
-    MAX_QUERY_ROWS, QueryResult, TableInfo, Value,
+    MAX_QUERY_ROWS, OperationControl, QueryResult, TableInfo, Value,
 };
 
 pub struct PgDriver;
@@ -50,19 +51,40 @@ impl DatabaseDriver for PgDriver {
         if let Some(path) = &opts.tls.root_cert {
             pg_opts = pg_opts.ssl_root_cert(path);
         }
+        let cancellation_options = pg_opts.clone();
         let pool = PgPoolOptions::new()
             .max_connections(4)
             .acquire_timeout(Duration::from_secs(5))
             .connect_with(pg_opts)
             .await
             .map_err(map_sqlx_error)?;
-        Ok(Box::new(PgConnection { pool }))
+        let cancellation_pool = PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(5))
+            .connect_with(cancellation_options)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(Box::new(PgConnection {
+            pool,
+            cancellation_pool,
+        }))
     }
 }
 
 struct PgConnection {
     pool: Pool<Postgres>,
+    cancellation_pool: Pool<Postgres>,
 }
+
+#[derive(Clone, Copy)]
+enum Interruption {
+    Cancelled,
+    TimedOut,
+}
+
+const CONTROL_SETUP_TIMEOUT: Duration = Duration::from_secs(2);
+const CANCELLATION_GRACE: Duration = Duration::from_secs(5);
+const CANCELLATION_DISPATCH_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[async_trait]
 impl Connection for PgConnection {
@@ -182,48 +204,33 @@ impl Connection for PgConnection {
         stream_into_result(&self.pool, sql, MAX_QUERY_ROWS).await
     }
 
+    async fn query_controlled(&self, sql: &str, control: &OperationControl) -> Result<QueryResult, DriverError> {
+        let mut connection = acquire_controlled(&self.pool, control).await?;
+        let backend_pid = backend_pid_controlled(&mut connection, control).await?;
+        let (connection, result) =
+            controlled_query(connection, &self.cancellation_pool, backend_pid, sql, &[], control).await;
+        drop(connection);
+        result
+    }
+
     async fn query_params(&self, sql: &str, params: &[Value]) -> Result<QueryResult, DriverError> {
-        let q = bind_pg_params(sqlx::query(sql), params);
-        let mut stream = q.fetch(&self.pool);
-        let mut collected: Vec<PgRow> = Vec::new();
-        let mut truncated = false;
-        while let Some(row_result) = stream.next().await {
-            let row = row_result.map_err(map_sqlx_error)?;
-            if collected.len() >= MAX_QUERY_ROWS {
-                truncated = true;
-                break;
-            }
-            collected.push(row);
-        }
-        if collected.is_empty() {
-            return Ok(QueryResult {
-                columns: Vec::new(),
-                rows: Vec::new(),
-                truncated,
-            });
-        }
-        let columns: Vec<ColumnInfo> = collected[0]
-            .columns()
-            .iter()
-            .map(|c| ColumnInfo {
-                name: c.name().to_string(),
-                data_type: c.type_info().name().to_string(),
-                nullable: true,
-                primary_key: false,
-                is_auto_increment: false,
-                default_value: None,
-                is_generated: false,
-            })
-            .collect();
-        let data: Vec<Vec<Value>> = collected
-            .iter()
-            .map(|r| (0..columns.len()).map(|i| extract_value(r, i)).collect())
-            .collect();
-        Ok(QueryResult {
-            columns,
-            rows: data,
-            truncated,
-        })
+        let query = bind_pg_params(sqlx::query(sql), params);
+        let mut stream = query.fetch(&self.pool);
+        collect_query_rows(&mut stream, MAX_QUERY_ROWS).await
+    }
+
+    async fn query_params_controlled(
+        &self,
+        sql: &str,
+        params: &[Value],
+        control: &OperationControl,
+    ) -> Result<QueryResult, DriverError> {
+        let mut connection = acquire_controlled(&self.pool, control).await?;
+        let backend_pid = backend_pid_controlled(&mut connection, control).await?;
+        let (connection, result) =
+            controlled_query(connection, &self.cancellation_pool, backend_pid, sql, params, control).await;
+        drop(connection);
+        result
     }
 
     async fn execute(&self, sql: &str) -> Result<ExecResult, DriverError> {
@@ -233,12 +240,35 @@ impl Connection for PgConnection {
         })
     }
 
+    async fn execute_controlled(&self, sql: &str, control: &OperationControl) -> Result<ExecResult, DriverError> {
+        let mut connection = acquire_controlled(&self.pool, control).await?;
+        let backend_pid = backend_pid_controlled(&mut connection, control).await?;
+        let (connection, result) =
+            controlled_execute(connection, &self.cancellation_pool, backend_pid, sql, &[], control).await;
+        drop(connection);
+        result
+    }
+
     async fn execute_params(&self, sql: &str, params: &[Value]) -> Result<ExecResult, DriverError> {
-        let q = bind_pg_params(sqlx::query(sql), params);
-        let res = q.execute(&self.pool).await.map_err(map_sqlx_error)?;
+        let query = bind_pg_params(sqlx::query(sql), params);
+        let result = query.execute(&self.pool).await.map_err(map_sqlx_error)?;
         Ok(ExecResult {
-            rows_affected: res.rows_affected(),
+            rows_affected: result.rows_affected(),
         })
+    }
+
+    async fn execute_params_controlled(
+        &self,
+        sql: &str,
+        params: &[Value],
+        control: &OperationControl,
+    ) -> Result<ExecResult, DriverError> {
+        let mut connection = acquire_controlled(&self.pool, control).await?;
+        let backend_pid = backend_pid_controlled(&mut connection, control).await?;
+        let (connection, result) =
+            controlled_execute(connection, &self.cancellation_pool, backend_pid, sql, params, control).await;
+        drop(connection);
+        result
     }
 
     async fn execute_in_transaction(&self, statements: &[(String, Vec<Value>)]) -> Result<Vec<u64>, DriverError> {
@@ -359,8 +389,22 @@ impl Connection for PgConnection {
     }
 
     async fn begin(&self) -> Result<Box<dyn tablepro_core::Transaction>, DriverError> {
-        let tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        Ok(Box::new(PgTransaction { tx: Some(tx) }))
+        let mut connection = tokio::time::timeout(CONTROL_SETUP_TIMEOUT, self.pool.acquire())
+            .await
+            .map_err(|_| DriverError::TimedOut)?
+            .map_err(map_sqlx_error)?;
+        let backend_pid = tokio::time::timeout(CONTROL_SETUP_TIMEOUT, backend_pid(&mut connection))
+            .await
+            .map_err(|_| DriverError::TimedOut)??;
+        sqlx::query("BEGIN")
+            .execute(&mut *connection)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(Box::new(PgTransaction {
+            connection: Some(connection),
+            cancellation_pool: self.cancellation_pool.clone(),
+            backend_pid,
+        }))
     }
 
     async fn server_version(&self) -> Result<Option<String>, DriverError> {
@@ -374,59 +418,365 @@ impl Connection for PgConnection {
 
     async fn close(self: Box<Self>) -> Result<(), DriverError> {
         self.pool.close().await;
+        self.cancellation_pool.close().await;
         Ok(())
     }
 }
 
 struct PgTransaction {
-    tx: Option<sqlx::Transaction<'static, Postgres>>,
+    connection: Option<PoolConnection<Postgres>>,
+    cancellation_pool: Pool<Postgres>,
+    backend_pid: i32,
+}
+
+impl Drop for PgTransaction {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.as_mut() {
+            connection.close_on_drop();
+        }
+    }
 }
 
 #[async_trait]
 impl tablepro_core::Transaction for PgTransaction {
     async fn query(&mut self, sql: &str) -> Result<QueryResult, DriverError> {
-        let tx = self
-            .tx
-            .as_mut()
-            .ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
-        stream_into_result_tx(tx, sql, MAX_QUERY_ROWS).await
+        let connection = self.connection_mut()?;
+        query_connection(connection, sql, &[]).await
+    }
+
+    async fn query_controlled(&mut self, sql: &str, control: &OperationControl) -> Result<QueryResult, DriverError> {
+        self.query_params_controlled(sql, &[], control).await
+    }
+
+    async fn query_params(&mut self, sql: &str, params: &[Value]) -> Result<QueryResult, DriverError> {
+        let connection = self.connection_mut()?;
+        query_connection(connection, sql, params).await
+    }
+
+    async fn query_params_controlled(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+        control: &OperationControl,
+    ) -> Result<QueryResult, DriverError> {
+        check_pre_dispatch(control)?;
+        let connection = self.take_connection()?;
+        let (connection, result) = controlled_query(
+            connection,
+            &self.cancellation_pool,
+            self.backend_pid,
+            sql,
+            params,
+            control,
+        )
+        .await;
+        self.connection = connection;
+        result
     }
 
     async fn execute(&mut self, sql: &str) -> Result<ExecResult, DriverError> {
-        let tx = self
-            .tx
-            .as_mut()
-            .ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
-        let res = sqlx::query(sql).execute(&mut **tx).await.map_err(map_sqlx_error)?;
-        Ok(ExecResult {
-            rows_affected: res.rows_affected(),
-        })
+        let connection = self.connection_mut()?;
+        execute_connection(connection, sql, &[]).await
+    }
+
+    async fn execute_controlled(&mut self, sql: &str, control: &OperationControl) -> Result<ExecResult, DriverError> {
+        self.execute_params_controlled(sql, &[], control).await
+    }
+
+    async fn execute_params(&mut self, sql: &str, params: &[Value]) -> Result<ExecResult, DriverError> {
+        let connection = self.connection_mut()?;
+        execute_connection(connection, sql, params).await
+    }
+
+    async fn execute_params_controlled(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+        control: &OperationControl,
+    ) -> Result<ExecResult, DriverError> {
+        check_pre_dispatch(control)?;
+        let connection = self.take_connection()?;
+        let (connection, result) = controlled_execute(
+            connection,
+            &self.cancellation_pool,
+            self.backend_pid,
+            sql,
+            params,
+            control,
+        )
+        .await;
+        self.connection = connection;
+        result
     }
 
     async fn commit(mut self: Box<Self>) -> Result<(), DriverError> {
-        let tx = self
-            .tx
-            .take()
-            .ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
-        tx.commit().await.map_err(map_sqlx_error)
+        let connection = self.connection_mut()?;
+        sqlx::query("COMMIT")
+            .execute(&mut **connection)
+            .await
+            .map_err(map_sqlx_error)?;
+        let _ = self.take_connection()?;
+        Ok(())
     }
 
     async fn rollback(mut self: Box<Self>) -> Result<(), DriverError> {
-        let tx = self
-            .tx
-            .take()
-            .ok_or_else(|| DriverError::Internal("transaction closed".into()))?;
-        tx.rollback().await.map_err(map_sqlx_error)
+        let connection = self.connection_mut()?;
+        sqlx::query("ROLLBACK")
+            .execute(&mut **connection)
+            .await
+            .map_err(map_sqlx_error)?;
+        let _ = self.take_connection()?;
+        Ok(())
     }
 }
 
-async fn stream_into_result_tx(
-    tx: &mut sqlx::Transaction<'static, Postgres>,
+impl PgTransaction {
+    fn connection_mut(&mut self) -> Result<&mut PoolConnection<Postgres>, DriverError> {
+        self.connection
+            .as_mut()
+            .ok_or_else(|| DriverError::Internal("transaction is unusable".into()))
+    }
+
+    fn take_connection(&mut self) -> Result<PoolConnection<Postgres>, DriverError> {
+        self.connection
+            .take()
+            .ok_or_else(|| DriverError::Internal("transaction is unusable".into()))
+    }
+}
+
+async fn acquire_controlled(
+    pool: &Pool<Postgres>,
+    control: &OperationControl,
+) -> Result<PoolConnection<Postgres>, DriverError> {
+    run_controlled_setup(pool.acquire(), control)
+        .await?
+        .map_err(map_sqlx_error)
+}
+
+async fn backend_pid_controlled(
+    connection: &mut PoolConnection<Postgres>,
+    control: &OperationControl,
+) -> Result<i32, DriverError> {
+    run_controlled_setup(backend_pid(connection), control).await?
+}
+
+async fn run_controlled_setup<T, F>(operation: F, control: &OperationControl) -> Result<T, DriverError>
+where
+    F: std::future::Future<Output = T>,
+{
+    check_pre_dispatch(control)?;
+    let setup_deadline = control
+        .deadline()
+        .map(|deadline| deadline.min(tokio::time::Instant::now() + CONTROL_SETUP_TIMEOUT))
+        .unwrap_or_else(|| tokio::time::Instant::now() + CONTROL_SETUP_TIMEOUT);
+    tokio::select! {
+        biased;
+        _ = control.cancellation_token().cancelled() => Err(DriverError::Cancelled),
+        _ = tokio::time::sleep_until(setup_deadline) => Err(DriverError::TimedOut),
+        result = operation => Ok(result),
+    }
+}
+
+fn check_pre_dispatch(control: &OperationControl) -> Result<(), DriverError> {
+    if control.cancellation_token().is_cancelled() {
+        return Err(DriverError::Cancelled);
+    }
+    if control
+        .deadline()
+        .is_some_and(|deadline| deadline <= tokio::time::Instant::now())
+    {
+        return Err(DriverError::TimedOut);
+    }
+    Ok(())
+}
+
+async fn backend_pid(connection: &mut PoolConnection<Postgres>) -> Result<i32, DriverError> {
+    sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut **connection)
+        .await
+        .map_err(map_sqlx_error)
+}
+
+async fn controlled_query(
+    mut connection: PoolConnection<Postgres>,
+    cancellation_pool: &Pool<Postgres>,
+    backend_pid: i32,
     sql: &str,
-    limit: usize,
+    params: &[Value],
+    control: &OperationControl,
+) -> (Option<PoolConnection<Postgres>>, Result<QueryResult, DriverError>) {
+    if let Err(error) = check_pre_dispatch(control) {
+        return (Some(connection), Err(error));
+    }
+    let mut operation = Box::pin(query_connection(&mut connection, sql, params));
+    let interruption = match tokio::select! {
+        biased;
+        result = &mut operation => Ok(result),
+        _ = control.cancellation_token().cancelled() => Err(Interruption::Cancelled),
+        _ = wait_for_deadline(control.deadline()) => Err(Interruption::TimedOut),
+    } {
+        Ok(result) => {
+            drop(operation);
+            return (Some(connection), result);
+        }
+        Err(interruption) => interruption,
+    };
+    let result = finish_interrupted_operation(&mut operation, cancellation_pool, backend_pid, interruption).await;
+    drop(operation);
+    finish_connection(connection, result).await
+}
+
+async fn controlled_execute(
+    mut connection: PoolConnection<Postgres>,
+    cancellation_pool: &Pool<Postgres>,
+    backend_pid: i32,
+    sql: &str,
+    params: &[Value],
+    control: &OperationControl,
+) -> (Option<PoolConnection<Postgres>>, Result<ExecResult, DriverError>) {
+    if let Err(error) = check_pre_dispatch(control) {
+        return (Some(connection), Err(error));
+    }
+    let mut operation = Box::pin(execute_connection(&mut connection, sql, params));
+    let interruption = match tokio::select! {
+        biased;
+        result = &mut operation => Ok(result),
+        _ = control.cancellation_token().cancelled() => Err(Interruption::Cancelled),
+        _ = wait_for_deadline(control.deadline()) => Err(Interruption::TimedOut),
+    } {
+        Ok(result) => {
+            drop(operation);
+            return (Some(connection), result);
+        }
+        Err(interruption) => interruption,
+    };
+    let result = finish_interrupted_operation(&mut operation, cancellation_pool, backend_pid, interruption).await;
+    drop(operation);
+    finish_connection(connection, result).await
+}
+
+async fn finish_interrupted_operation<T, F>(
+    operation: &mut std::pin::Pin<Box<F>>,
+    cancellation_pool: &Pool<Postgres>,
+    backend_pid: i32,
+    interruption: Interruption,
+) -> Result<T, DriverError>
+where
+    F: std::future::Future<Output = Result<T, DriverError>>,
+{
+    let mut dispatch = Box::pin(tokio::time::timeout(
+        CANCELLATION_DISPATCH_TIMEOUT,
+        request_cancellation(cancellation_pool, backend_pid),
+    ));
+    tokio::select! {
+        result = &mut *operation => return classify_interrupted_result(result, interruption),
+        _ = &mut dispatch => {}
+    }
+    match tokio::time::timeout(CANCELLATION_GRACE, &mut *operation).await {
+        Ok(result) => classify_interrupted_result(result, interruption),
+        Err(_) => Err(unknown_interruption(interruption)),
+    }
+}
+
+async fn finish_connection<T>(
+    connection: PoolConnection<Postgres>,
+    result: Result<T, DriverError>,
+) -> (Option<PoolConnection<Postgres>>, Result<T, DriverError>) {
+    if is_unconfirmed_interruption(&result) {
+        let raw_connection = connection.detach();
+        let _ = raw_connection.close_hard().await;
+        return (None, result);
+    }
+    (Some(connection), result)
+}
+
+fn is_unconfirmed_interruption<T>(result: &Result<T, DriverError>) -> bool {
+    matches!(result, Err(DriverError::OperationOutcomeUnknown { .. }))
+}
+
+async fn request_cancellation(pool: &Pool<Postgres>, backend_pid: i32) -> Result<(), DriverError> {
+    let cancelled: bool = sqlx::query_scalar("SELECT pg_cancel_backend($1)")
+        .bind(backend_pid)
+        .fetch_one(pool)
+        .await
+        .map_err(map_sqlx_error)?;
+    if cancelled {
+        Ok(())
+    } else {
+        Err(DriverError::Internal(
+            "PostgreSQL rejected the cancellation request".into(),
+        ))
+    }
+}
+
+async fn wait_for_deadline(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
+fn classify_interrupted_result<T>(
+    result: Result<T, DriverError>,
+    interruption: Interruption,
+) -> Result<T, DriverError> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(DriverError::Query {
+            sqlstate: Some(sqlstate),
+            ..
+        }) if sqlstate == "57014" => Err(interruption_error(interruption)),
+        Err(error) => Err(DriverError::OperationOutcomeUnknown {
+            source: Box::new(error),
+        }),
+    }
+}
+
+fn interruption_error(interruption: Interruption) -> DriverError {
+    match interruption {
+        Interruption::Cancelled => DriverError::Cancelled,
+        Interruption::TimedOut => DriverError::TimedOut,
+    }
+}
+
+fn unknown_interruption(interruption: Interruption) -> DriverError {
+    DriverError::OperationOutcomeUnknown {
+        source: Box::new(interruption_error(interruption)),
+    }
+}
+
+async fn query_connection(
+    connection: &mut PoolConnection<Postgres>,
+    sql: &str,
+    params: &[Value],
 ) -> Result<QueryResult, DriverError> {
-    let mut stream = sqlx::query(sql).fetch(&mut **tx);
-    let mut collected: Vec<PgRow> = Vec::new();
+    let query = bind_pg_params(sqlx::query(sql), params);
+    let mut stream = query.fetch(&mut **connection);
+    collect_query_rows(&mut stream, MAX_QUERY_ROWS).await
+}
+
+async fn execute_connection(
+    connection: &mut PoolConnection<Postgres>,
+    sql: &str,
+    params: &[Value],
+) -> Result<ExecResult, DriverError> {
+    let query = bind_pg_params(sqlx::query(sql), params);
+    let result = query.execute(&mut **connection).await.map_err(map_sqlx_error)?;
+    Ok(ExecResult {
+        rows_affected: result.rows_affected(),
+    })
+}
+
+async fn stream_into_result(pool: &Pool<Postgres>, sql: &str, limit: usize) -> Result<QueryResult, DriverError> {
+    let mut stream = sqlx::query(sql).fetch(pool);
+    collect_query_rows(&mut stream, limit).await
+}
+
+async fn collect_query_rows<'a, S>(stream: &mut S, limit: usize) -> Result<QueryResult, DriverError>
+where
+    S: futures::Stream<Item = Result<PgRow, sqlx::Error>> + Unpin + 'a,
+{
+    let mut collected = Vec::new();
     let mut truncated = false;
     while let Some(row_result) = stream.next().await {
         let row = row_result.map_err(map_sqlx_error)?;
@@ -446,9 +796,9 @@ async fn stream_into_result_tx(
     let columns = collected[0]
         .columns()
         .iter()
-        .map(|c| ColumnInfo {
-            name: c.name().to_string(),
-            data_type: c.type_info().name().to_string(),
+        .map(|column| ColumnInfo {
+            name: column.name().to_string(),
+            data_type: column.type_info().name().to_string(),
             nullable: true,
             primary_key: false,
             is_auto_increment: false,
@@ -458,54 +808,11 @@ async fn stream_into_result_tx(
         .collect::<Vec<_>>();
     let rows = collected
         .iter()
-        .map(|r| (0..columns.len()).map(|i| extract_value(r, i)).collect::<Vec<_>>())
+        .map(|row| (0..columns.len()).map(|index| extract_value(row, index)).collect())
         .collect();
     Ok(QueryResult {
         columns,
         rows,
-        truncated,
-    })
-}
-
-async fn stream_into_result(pool: &Pool<Postgres>, sql: &str, limit: usize) -> Result<QueryResult, DriverError> {
-    let mut stream = sqlx::query(sql).fetch(pool);
-    let mut collected: Vec<PgRow> = Vec::new();
-    let mut truncated = false;
-    while let Some(row_result) = stream.next().await {
-        let row = row_result.map_err(map_sqlx_error)?;
-        if collected.len() >= limit {
-            truncated = true;
-            break;
-        }
-        collected.push(row);
-    }
-    if collected.is_empty() {
-        return Ok(QueryResult {
-            columns: Vec::new(),
-            rows: Vec::new(),
-            truncated,
-        });
-    }
-    let columns: Vec<ColumnInfo> = collected[0]
-        .columns()
-        .iter()
-        .map(|c| ColumnInfo {
-            name: c.name().to_string(),
-            data_type: c.type_info().name().to_string(),
-            nullable: true,
-            primary_key: false,
-            is_auto_increment: false,
-            default_value: None,
-            is_generated: false,
-        })
-        .collect();
-    let data: Vec<Vec<Value>> = collected
-        .iter()
-        .map(|r| (0..columns.len()).map(|i| extract_value(r, i)).collect())
-        .collect();
-    Ok(QueryResult {
-        columns,
-        rows: data,
         truncated,
     })
 }

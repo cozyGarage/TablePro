@@ -230,7 +230,7 @@ Tests to add:
 - [x] Timed-out or dropped mutation futures leave durable intent and block later governed writes.
 - [x] Unresolved writes remain blocked across process restarts and concurrent GUI/daemon processes.
 - [x] Verified Phase 1 journals rotate intact before the new event schema starts.
-- [ ] Phase 3 proves server cancellation and terminal cancellation outcomes against PostgreSQL.
+- [x] Phase 3 proves server cancellation and terminal cancellation outcomes against PostgreSQL.
 
 ---
 
@@ -238,11 +238,11 @@ Tests to add:
 
 ## Status
 
-Not started. Release blocker for the primary persona.
+In progress. The cancellable driver contract, PostgreSQL server cancellation, terminal audit outcomes, parameterized operations, interactive rollback, and post-cancel pool reuse are implemented and verified against PostgreSQL 16. The deterministic TLS, SSH, lock, and reconnect fixture remains a release blocker.
 
 ## Driver contract
 
-Add a cancellable-operation contract to the driver boundary. PostgreSQL must retain a server cancellation handle, request cancellation on timeout/user action, confirm the query leaves `pg_stat_activity`, and discard an untrustworthy protocol connection.
+The driver boundary now accepts cancellation tokens and deadlines. PostgreSQL holds the exact physical session for each controlled operation, requests server cancellation through a dedicated pool, accepts only SQLSTATE `57014` as confirmation, and hard-closes sessions whose outcomes cannot be confirmed. GTK and MCP wait for terminal driver results instead of dropping operation futures.
 
 ## Deterministic fixture
 
@@ -259,8 +259,9 @@ Required scenarios:
 - Direct `VerifyFull`, wrong hostname, and unknown CA
 - `VerifyFull` through SSH using the original database hostname
 - Read-only data-changing CTE denial
-- Server-confirmed timeout and cancellation
-- Batch and interactive rollback
+- [x] Server-confirmed timeout and cancellation
+- [x] Interactive rollback after cancellation
+- [ ] Batch rollback in the release fixture
 - Activity and blocking-lock queries
 - Direct and SSH reconnect
 

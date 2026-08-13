@@ -48,6 +48,7 @@
 - Policy evaluation takes the resolved connection EnvPolicy once; connection overrides no longer re-run evaluate
 - Connect dialog TLS control is a mode picker (Disabled / Prefer / Require / Verify CA / Verify Full), defaulting to Verify Full for network drivers
 - Local and development human writes require audit by default; best-effort unaudited writes require an explicit policy setting
+- PostgreSQL query timeout and cancellation now wait within bounded deadlines for server confirmation before returning to GTK or MCP callers
 
 ### Fixed
 
@@ -62,6 +63,7 @@
 - Mixed SQL batches retain DDL and unscoped UPDATE or DELETE restrictions regardless of statement order
 - The agent daemon requires at least one existing saved connection when issuing a token
 - Verified legacy audit journals rotate intact when upgrading to durable intent and outcome records
+- PostgreSQL cancellation now stops the server query, records a terminal audit outcome, supports parameterized operations and transaction rollback, and discards sessions with unknown outcomes
 
 ### Removed
 
