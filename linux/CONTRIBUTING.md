@@ -1,93 +1,94 @@
 # Contributing to TablePro Linux
 
-This file governs the Linux subproject only. The repository-level [CLAUDE.md](../CLAUDE.md) covers cross-cutting rules (no comments in source, security first, root-cause fixes, etc.) — those apply here too.
+This repository is a Linux-only Rust and GTK project. The Cargo workspace starts in `linux/`, so run development commands from that directory.
 
-## Branch model (fork)
+## Development environment
 
-On community forks that track Linux work, keep only two long-lived branches:
+Install the native packages listed in [README.md](README.md). Rust 1.93 is the minimum supported version and is pinned in `rust-toolchain.toml`. Arch may also provide a newer `/usr/bin/cargo`; see [docs/toolchains.md](docs/toolchains.md) when comparing toolchain results.
 
-| Branch | Role |
-|---|---|
-| `main` | Mirror of `TableProApp/TablePro` `main` (macOS + shared docs). Rarely edited here. |
-| `linux` | Day-to-day Linux development. Occasional PRs go upstream from this branch. |
-
-Do not leave `feat/*` branches on the fork remote after their work lands on `linux`. Sync upstream often:
-
-```bash
-git fetch origin
-git checkout main && git reset --hard origin/main && git push fork main
-git checkout linux && git merge origin/main
-```
-
-## Dev environment
-
-System packages — see [README.md](README.md) for distro-specific commands. After they are installed, work happens entirely from the `linux/` directory.
-
-Rust 1.93 is the MSRV. Arch's direct `/usr/bin/cargo` follows the distro release rather than the repository override; see [docs/toolchains.md](docs/toolchains.md) before interpreting a local compiler result.
-
-Prefer the cheap gates before a full GTK link or `.deb` package:
+Use the fast checks while iterating:
 
 ```bash
 cd linux
-./scripts/preflight.sh         # fmt + clippy + lib tests, no GTK app
-./scripts/ci-local.sh          # full workspace unit tests (includes GTK)
-./scripts/ci-local.sh integration  # docker driver suites
-cargo run -p tablepro-app      # run from the tree while iterating
-./scripts/build-deb.sh         # only when you need an installable package
+./scripts/preflight.sh
+./scripts/ci-local.sh
+./scripts/ci-local.sh integration
+cargo run -p tablepro-app
 ```
+
+`preflight.sh` checks non-GTK crates. `ci-local.sh` checks the full default workspace, including the GTK binary tests. Integration mode requires Docker or a compatible Podman socket.
 
 ## Code style
 
-| Tool | Config | Notes |
+| Tool | Configuration | Rule |
 |---|---|---|
-| `rustfmt` | `rustfmt.toml` at workspace root | Run before commit. Pre-commit hook enforces it. |
-| `clippy` | `clippy.toml` at workspace root | All workspace crates pass with `-D warnings`. New lints are negotiated per PR. |
-| Edition | 2024 | Set per workspace. Do not override per crate. |
-| MSRV | 1.93 | Pinned in `rust-toolchain.toml`. Bumped only with discussion. |
+| `rustfmt` | `rustfmt.toml` | Run before each pull request |
+| `clippy` | `clippy.toml` | Workspace targets pass with `-D warnings` |
+| Rust edition | Workspace manifest | Edition 2024 |
+| MSRV | `rust-toolchain.toml` | Rust 1.93 |
 
-Conventions, beyond what `rustfmt` decides:
+Keep code focused and readable:
 
-- **No comments unless they explain a hidden constraint or invariant.** Code must be self-documenting through naming. Inherited from CLAUDE.md.
-- **No `unwrap()` or `expect()` in production paths.** Tests and `OnceLock::get_or_init` initialisers are the only acceptable callers.
-- **No `panic!`, `todo!`, `unimplemented!` in merged code.** Stub a real `Err` variant instead.
-- **One public type per module file** when the type's surface is non-trivial. Internal helpers stay private.
-- **Errors cross crate boundaries as `thiserror` enums.** Inside a crate, `anyhow::Result` is fine. See [docs/error-handling.md](docs/error-handling.md).
+- Prefer small functions and early returns.
+- Do not use `unwrap()` or `expect()` in production paths.
+- Do not leave `panic!`, `todo!`, or `unimplemented!` in production paths.
+- Keep public crate boundaries typed with `thiserror` errors.
+- Add tests for behavior changes.
+- Keep GTK objects on the GLib main context. Run database and service work through the existing Relm4 and Tokio bridge.
+- Add comments only when they explain a constraint that names and types cannot express.
 
-## Adding a database driver
+## Database drivers
 
-This is the most common substantive change. Follow [docs/adding-drivers.md](docs/adding-drivers.md) end to end. It is short and the steps are mechanical. Skipping a step (most often the registry registration) breaks the app silently.
+Follow [docs/adding-drivers.md](docs/adding-drivers.md). Drivers are statically registered by the application. A driver change should include focused unit tests and a real-engine integration test when the behavior depends on the server.
 
-## Commits
+## Storage changes
 
-Conventional Commits, single line, no body. Same rule as the macOS app:
+Read [docs/storage.md](docs/storage.md) before changing persisted data. Do not put passwords, SSH secrets, or MCP secrets in JSON. Preserve existing files or add an explicit migration when a stored shape changes.
 
+## GTK changes
+
+Keep UI state in Relm4 components and move testable rules into pure Rust services. Add unit tests for extracted logic. Safety-sensitive GTK flows need targeted tests when they can run deterministically. The current release blockers are listed in [docs/production-audit.md](docs/production-audit.md).
+
+Include before and after screenshots for visible changes. Test both light and dark themes when colors or contrast change.
+
+## Packaging
+
+AUR and Omarchy are the first packaging target. Test the recipe in `packaging/aur/PKGBUILD` when a change affects installed files, native dependencies, desktop integration, or launch behavior. Flatpak work is later and must not define the current release requirements.
+
+## Commits and pull requests
+
+Use a single-line Conventional Commit message:
+
+```text
+feat(drivers): add ClickHouse metadata query
+fix(app): stop duplicate sidebar fetches
+refactor(core): split connection control logic
+docs(testing): document PostgreSQL cancellation fixture
 ```
-feat(drivers): add ClickHouse driver via clickhouse-arrow
-fix(app): debounce sidebar selection to avoid duplicate fetches
-refactor(core): split DatabaseDriver into Driver + Connection traits
-docs(adding-drivers): clarify TLS configuration step
+
+A pull request should include:
+
+1. A short summary of the problem and the chosen fix.
+2. A test plan with the exact commands run.
+3. Screenshots for visible GTK changes.
+4. Any remaining release or migration risk.
+
+Run these before requesting review:
+
+```bash
+./scripts/preflight.sh
+./scripts/ci-local.sh
 ```
 
-## Pull requests
+Run `./scripts/ci-local.sh integration` for driver behavior that needs a real server.
 
-1. For Linux work on a fork: commit on `linux` (or a short-lived local branch that you merge into `linux` before opening the upstream PR). Upstream PRs target `TableProApp/TablePro`'s `linux` branch when that is the integration branch.
-2. PR title is the conventional commit message you intend to land.
-3. PR description has two sections: **Summary** (what and why, 2–4 bullets) and **Test plan** (checkbox list).
-4. Run `./scripts/preflight.sh` before every push. Run `./scripts/ci-local.sh` before packaging or opening an upstream PR. CI runs preflight, then GTK checks, then driver integration.
-5. When reconciling upstream Linux work, add an entry to [docs/upstream-sync.md](docs/upstream-sync.md) in the same commit.
-6. UI changes must include before / after screenshots in the PR description, taken at HiDPI on both light and dark themes.
+## Optional reference review
 
-## What does not belong here
+Other TablePro implementations may be inspected as product or security references. Do not merge their source trees into this repository. Record a manual Linux port only when the review changes behavior here, following [docs/upstream-sync.md](docs/upstream-sync.md).
 
-- Documentation for end users (installation, FAQ, screenshots for the marketing site) lives in the repository-level `docs/` Mintlify project.
-- Cross-platform decisions (release cadence, branding, pricing) are not made in this subproject.
-- macOS plugin work — that lives in `apps/macos/Plugins/` (post Phase B restructure) or the current `Plugins/` directory.
+## Where to start
 
-## Where to start as a contributor
-
-In rough order of impact:
-
-1. Read [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/decisions/](docs/decisions/). 20 minutes, fixes most "why is it shaped like this" questions.
-2. Pick an issue tagged `good-first-issue` or `driver:<engine>`.
-3. If adding a driver, copy the most recently merged driver crate as a template. Do not copy the spike code.
-4. Open the PR small. We prefer five small PRs over one big one.
+1. Read [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/decisions/](docs/decisions/).
+2. Pick a small issue with a clear test path.
+3. For a new driver, use a current Rust driver crate as the structural reference.
+4. Keep pull requests narrow enough to review and verify in one pass.

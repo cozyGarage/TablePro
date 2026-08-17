@@ -1,3 +1,9 @@
+# External planning reference
+
+This file preserves an external review that helped shape the Linux plan. It is advisory and contains historical repository assumptions. `PLAN.md`, `linux/ROADMAP.md`, current code, and current test evidence are authoritative. Do not copy external architecture or source without checking the Linux crate, policy, audit, and GTK boundaries.
+
+Useful recommendations already reflected in the active plan include schema-aware completion, SQL favorites, file workflows, connection organization, true result streaming, measured release optimization, PostgreSQL TLS over SSH verification, targeted GTK safety tests, and AUR-first packaging.
+
 ## Executive Summary
 
 The goal is to build a lightweight, native Linux database client matching the visual polish of **TablePro** and the backend stability of **Tablio/Beekeeper Studio**, using **Rust** for the engine and **GTK4/Libadwaita** for a 100% native Linux GUI. Instead of writing database drivers from scratch, the strategy relies on extracting open-source connection logic from **Tablio (MIT)** to accelerate development.

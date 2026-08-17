@@ -1,52 +1,43 @@
-# Auto detect text files and perform LF normalization
-* text=auto
-# Swift files
-*.swift text diff=swift
-# Xcode project files
-*.pbxproj binary merge=union
-*.storyboard binary
-*.xib binary
-*.xcassets binary
-*.xcdatamodeld binary
-# Assets
+* text=auto eol=lf
+
+*.rs text diff=rust
+*.toml text
+*.lock text
+*.md text
+*.sh text eol=lf
+*.sql text
+*.json text
+*.yml text
+*.yaml text
+*.desktop text
+*.metainfo.xml text
+*.po text
+*.pot text
+
 *.png binary
 *.jpg binary
 *.jpeg binary
 *.gif binary
+*.webp binary
 *.ico binary
-*.icns binary
+*.svg text
 *.pdf binary
-# Fonts
 *.ttf binary
 *.otf binary
 *.woff binary
 *.woff2 binary
-# Audio
 *.mp3 binary
 *.wav binary
-*.aiff binary
-*.m4a binary
-# Video
 *.mp4 binary
-*.mov binary
-# Archives
+*.webm binary
 *.zip binary
-*.tar.gz binary
-# Markdown - force LF
-*.md text eol=lf
-# Shell scripts - force LF
-*.sh text eol=lf
-# Swift source - force LF
-*.swift text eol=lf
-# Configuration files
-*.json text eol=lf
-*.yml text eol=lf
-*.yaml text eol=lf
-*.plist text eol=lf
+*.tar binary
+*.gz binary
+*.xz binary
+*.deb binary
+*.rpm binary
+*.AppImage binary
+*.flatpak binary
 
-# Vendored C headers (database driver bridges, tree-sitter grammars)
-Plugins/*/C*/include/** linguist-vendored
-TablePro/Core/SSH/CLibSSH2/** linguist-vendored
-LocalPackages/CodeEditLanguages/Sources/TreeSitterGrammars/** linguist-vendored
-
+linux/po/*.po linguist-generated=true
 .github/workflows/*.lock.yml linguist-generated=true merge=ours

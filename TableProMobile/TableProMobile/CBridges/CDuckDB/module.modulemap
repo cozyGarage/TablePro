@@ -1,4 +1,0 @@
-module CDuckDB [system] {
-    header "CDuckDB.h"
-    export *
-}

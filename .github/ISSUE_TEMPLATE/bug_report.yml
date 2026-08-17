@@ -1,12 +1,17 @@
 name: Bug Report
-description: Report a bug or unexpected behavior
-labels: ["bug"]
+description: Report a problem in the Linux application
+labels: ["bug", "linux"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Remove passwords, tokens, connection strings, SQL values, and private data from screenshots and logs.
+
   - type: textarea
     id: description
     attributes:
       label: What happened?
-      description: A clear description of the bug.
+      description: Describe the problem and its effect.
       placeholder: "When I do X, Y happens instead of Z."
     validations:
       required: true
@@ -15,60 +20,93 @@ body:
     id: steps
     attributes:
       label: Steps to reproduce
-      description: Minimal steps to reproduce the issue.
+      description: Give the smallest repeatable sequence.
       placeholder: |
-        1. Open a MySQL connection
+        1. Open a PostgreSQL connection
         2. Run a SELECT query
-        3. Click on a cell to edit
-        4. ...
+        3. Edit a cell
+        4. Save the change
     validations:
-      required: false
+      required: true
 
   - type: textarea
     id: expected
     attributes:
       label: Expected behavior
-      description: What did you expect to happen?
+      description: What should have happened?
     validations:
-      required: false
+      required: true
 
   - type: dropdown
     id: database
     attributes:
       label: Database type
       options:
-        - MySQL / MariaDB
         - PostgreSQL
+        - MySQL / MariaDB
         - SQLite
-        - SQL Server
-        - MongoDB
-        - Redis
+        - Microsoft SQL Server
         - ClickHouse
-        - Oracle
+        - Redis
+        - MongoDB
+        - DuckDB
+        - Oracle Database
         - N/A
     validations:
-      required: false
+      required: true
 
   - type: input
-    id: version
+    id: database_version
     attributes:
-      label: TablePro version
-      placeholder: "0.16.0"
+      label: Database version
+      placeholder: "PostgreSQL 17.4"
     validations:
       required: false
 
   - type: input
-    id: macos
+    id: tablepro_version
     attributes:
-      label: macOS version & chip
-      placeholder: "macOS 15.3 / Apple Silicon"
+      label: TablePro version or commit
+      placeholder: "0.1.0 or commit SHA"
+    validations:
+      required: true
+
+  - type: input
+    id: linux
+    attributes:
+      label: Linux distribution and version
+      placeholder: "Fedora 42"
+    validations:
+      required: true
+
+  - type: input
+    id: desktop
+    attributes:
+      label: Desktop session and display protocol
+      placeholder: "GNOME 48 on Wayland"
+    validations:
+      required: true
+
+  - type: input
+    id: install_method
+    attributes:
+      label: Install or run method
+      placeholder: "cargo run, Flatpak, deb, or other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs and screenshots
+      description: Add relevant tracing output, screenshots, or recordings after removing secrets and private data.
     validations:
       required: false
 
   - type: textarea
-    id: context
+    id: policy_context
     attributes:
-      label: Screenshots / Logs
-      description: If applicable, add screenshots, screen recordings, or crash logs.
+      label: Policy, audit, or MCP context
+      description: If relevant, state whether the request came from the GUI, MCP, or tablepro-agentd and describe the policy result. Do not include tokens.
     validations:
       required: false

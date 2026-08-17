@@ -1,123 +1,134 @@
 # Contributing to TablePro
 
-## Setup
+TablePro is a Linux-only Rust project. Current development happens on the `linux` branch, and pull requests should target that branch.
 
-Requirements: macOS 14.0+, Xcode 15+. Optional: SwiftLint, SwiftFormat, GitHub CLI (`gh`).
+Every shipped feature must remain available without an account, license key, subscription, paid tier, or remote entitlement check.
 
-Fork the repo on GitHub, then:
+## Development setup
 
-```bash
-git clone https://github.com/<your-fork>/TablePro.git && cd TablePro
-scripts/download-libs.sh
-touch Secrets.xcconfig
-brew install swiftlint swiftformat
-```
-
-### Building with a personal Apple team
-
-To Debug-build under your own team, open `TablePro.xcodeproj`, select the `TablePro` target, then **Signing & Capabilities → Debug** sub-tab:
-
-1. **Team**: pick your personal team. If another target fails to sign later, repeat there.
-2. **Bundle Identifier**: change `com.TablePro` to something unique (e.g. `com.<yourhandle>.TablePro`).
-3. **Code Signing Entitlements** (Build Settings tab): switch Debug to `TablePro/TablePro.Debug.entitlements`. It ships in the repo and drops iCloud, which free teams don't support. Sync auto-disables at runtime.
-
-Don't commit the resulting `pbxproj` changes. They break official Release signing. Skip them locally:
+The workspace requires Rust 1.93. Install GTK4 4.14+, libadwaita 1.6+, GtkSourceView 5.12+, OpenSSL, Secret Service, Kerberos, Clang, `pkg-config`, and standard build tools. Distro-specific package commands are in [`linux/README.md`](linux/README.md).
 
 ```bash
-git update-index --skip-worktree TablePro.xcodeproj/project.pbxproj
+git clone https://github.com/<your-name>/TablePro.git
+cd TablePro
+git checkout linux
+rustc --version
+pkg-config --modversion gtk4 libadwaita-1 gtksourceview-5
+cargo run --manifest-path linux/Cargo.toml -p tablepro-app
 ```
 
-To verify: save a connection password, relaunch, reopen. The password should still be there.
+Use a short-lived local branch when useful, then open the pull request against `linux`.
 
-Build:
+## Project layout
+
+```text
+linux/crates/app             GTK4/libadwaita app and Relm4 components
+linux/crates/core            Domain types and driver contracts
+linux/crates/drivers         Static database driver crates
+linux/crates/policy          Classification, approvals, masking, and audit types
+linux/crates/mcp             MCP authentication, allowlists, rate limits, and tools
+linux/crates/agentd          Headless MCP process
+linux/crates/storage         Secret Service, saved state, history, and audit journal
+linux/crates/ssh             SSH tunnels
+linux/docs                   Architecture, testing, and driver documentation
+linux/packaging              Linux packaging files
+```
+
+Read [`linux/ARCHITECTURE.md`](linux/ARCHITECTURE.md) before changing crate boundaries, policy enforcement, connection ownership, or async execution.
+
+## Code style
+
+`linux/rustfmt.toml` and `linux/clippy.toml` define formatting and lint settings.
+
+- Use Rust edition 2024 and Rust 1.93.
+- Keep lines at or below 120 characters where practical.
+- Do not add comments. Use names, types, functions, and tests to express intent.
+- Prefer small functions and early returns.
+- Do not use `unwrap`, `expect`, `panic!`, `todo!`, or `unimplemented!` in production paths.
+- Use typed errors at crate boundaries.
+- Use `tracing` for app logs. Do not use print macros for logging.
+- Never log credentials, tokens, SQL parameters, connection strings, or unmasked query results.
+- Keep GTK widget access on the glib main context. Move database and blocking work off the UI thread.
+
+## Security and MCP changes
+
+All database consumers must use a policy-gated connection. MCP requests require a valid token, the required scope, an allowed connection, and a passing policy decision. Do not bypass those checks for preview, retry, transaction, or batch paths.
+
+Changes to policy, MCP, approvals, masking, or audit behavior need tests for both allowed and denied paths. Include timeout, cancellation, and terminal audit outcomes when affected. Keep secrets in Secret Service through `tablepro-storage`.
+
+New dependencies need an advisory, source, and license review through `linux/deny.toml`.
+
+## Database drivers
+
+Drivers are static crates under `linux/crates/drivers/`. A new driver must:
+
+1. Implement the contracts from `tablepro-core`.
+2. Stay independent of GTK, Relm4, MCP, policy, and other drivers.
+3. Register in the app and agent composition roots.
+4. Include unit tests and real-engine integration tests.
+5. Document maturity and known limits.
+6. Add a user-facing entry to `linux/CHANGELOG.md`.
+
+See [`linux/docs/adding-drivers.md`](linux/docs/adding-drivers.md).
+
+## Tests
+
+Every testable behavior change needs a test. Put pure unit tests near the code and integration tests in the crate's `tests/` directory. Use `tempfile` for filesystem tests and testcontainers for database drivers.
+
+For GTK-only changes, include manual test steps and light and dark screenshots in the pull request. Move business logic out of widgets when it can be tested as Rust code.
+
+Run from the repository root:
 
 ```bash
-xcodebuild -project TablePro.xcodeproj -scheme TablePro -configuration Debug build -skipPackagePluginValidation
+bash linux/scripts/check-file-size.sh
+cargo fmt --manifest-path linux/Cargo.toml --all -- --check
+cargo clippy --manifest-path linux/Cargo.toml --workspace --exclude tablepro-driver-duckdb --all-targets -- -D warnings
+cargo test --manifest-path linux/Cargo.toml --workspace --exclude tablepro-driver-duckdb --lib --bins
+cargo test --manifest-path linux/Cargo.toml -p tablepro-mcp --test enforce_policy
+cargo test --manifest-path linux/Cargo.toml -p tablepro-mcp --test timeout_audit
+cargo deny check --manifest-path linux/Cargo.toml
 ```
 
-Tests:
+Driver integration tests require Docker or a compatible Podman socket. See [`linux/docs/testing.md`](linux/docs/testing.md).
 
-```bash
-xcodebuild -project TablePro.xcodeproj -scheme TablePro test -skipPackagePluginValidation
-```
+## File size
 
-## Code Style
+`linux/scripts/check-file-size.sh` enforces the Rust file-size guard. New files should stay at or below 1,200 lines. Unlisted files above 1,800 lines fail. Files in `linux/file-size-baselines.txt` cannot grow beyond their listed ceiling. Split by responsibility instead of raising a baseline.
 
-`.swiftlint.yml` and `.swiftformat` are the source of truth. The short version:
+## Changelog
 
-- 4-space indent, 120-char lines
-- Explicit access control (`private`, `internal`, `public`)
-- No force unwraps (`!`) or force casts (`as!`)
-- `String(localized:)` for user-facing strings
-- OSLog only, no `print()`
+Update [`linux/CHANGELOG.md`](linux/CHANGELOG.md) under `[Unreleased]` for user-facing changes. Follow Keep a Changelog 1.1.0 and use `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, or `Security`.
 
-Before committing:
-
-```bash
-swiftlint lint --strict
-swiftformat .
-```
+Each entry must be one line and describe user impact. Documentation-only changes do not need an entry. Do not add a `Fixed` entry for a defect introduced and corrected before release.
 
 ## Commits
 
-[Conventional Commits](https://www.conventionalcommits.org/), single line, no body.
+Use Conventional Commits 1.0.0. Commit subjects are one line with no body.
 
-```
-feat: add CSV export for query results
-fix: prevent crash on empty query result
-docs: update keyboard shortcuts page
-```
-
-## Branch Naming
-
-Branch off `main`:
-
-- `feat/add-cassandra-support`
-- `fix/query-editor-crash`
-- `docs/update-keyboard-shortcuts`
-
-## Pull Requests
-
-One logical change per PR. Make sure tests pass and lint is clean.
-
-Checklist:
-
-- [ ] Tests added or updated
-- [ ] `CHANGELOG.md` updated under `[Unreleased]` (skip for unreleased-only fixes)
-- [ ] Docs updated in `docs/` if the change affects user-facing behavior
-- [ ] User-facing strings localized
-- [ ] No SwiftLint/SwiftFormat violations
-
-## Project Layout
-
-```
-TablePro/              App source (Core/, Views/, Models/, ViewModels/, Extensions/, Theme/)
-Plugins/               .tableplugin bundles + TableProPluginKit framework
-Libs/                  Pre-built static libraries (downloaded via script, not in git)
-TableProTests/         Tests
-docs/                  Mintlify docs site
-scripts/               Build and release scripts
+```text
+feat(app): add query tab restore
+fix(driver-postgres): cancel timed-out connections
+security(mcp): enforce connection allowlists
+refactor(core): split query result conversion
 ```
 
-## Adding a Database Driver
+Keep one logical change per commit. Public API changes must update all callers and tests in the same commit.
 
-Drivers are `.tableplugin` bundles loaded at runtime. Create a new bundle under `Plugins/`, implement `DriverPlugin` + `PluginDatabaseDriver` from `TableProPluginKit`, and add the target to the Xcode project.
+## Pull requests
 
-Full guide: [docs/development/plugin-registry](https://docs.tablepro.app/development/plugin-registry)
+- Target the `linux` branch.
+- Explain what changed and why.
+- List the commands and manual checks you ran.
+- Add or update tests.
+- Update `linux/CHANGELOG.md` for user-facing changes.
+- Update documentation when behavior or setup changes.
+- Include light and dark screenshots for UI changes.
+- State any validation you could not run and why.
 
-## Reporting Bugs
+## Reporting bugs
 
-Open a [GitHub issue](https://github.com/TableProApp/TablePro/issues) with:
-
-- macOS version
-- TablePro version
-- Reproduction steps
-- Database type and version (for database-specific bugs)
-
-## CLA
-
-Sign the Contributor License Agreement on your first PR. The CLA bot walks you through it. One-time thing.
+Open a [bug report](https://github.com/TableProApp/TablePro/issues/new?template=bug_report.yml) with the TablePro version, Linux distribution, desktop session, reproduction steps, database type and version, and redacted logs.
 
 ## License
 
-Contributions are licensed under [AGPLv3](LICENSE).
+Contributions are licensed under [AGPL-3.0-or-later](LICENSE).

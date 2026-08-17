@@ -20,7 +20,7 @@ Each step is small. The whole task takes between half a day (PG-shaped engines) 
 | PostgreSQL | `sqlx` with `runtime-tokio` + `tls-rustls` + `postgres` | Fully async, prepared statements, streaming. |
 | MySQL / MariaDB | `sqlx` with `mysql` feature | Same shape as PostgreSQL. |
 | SQLite | `sqlx` with `sqlite` feature | File-based, no network. |
-| MSSQL | `tiberius` | Pure Rust TDS. Watch governance — `praxiomlabs/rust-mssql-driver` is a credible alternative. |
+| MSSQL | `tiberius` | Pure Rust TDS. Watch governance. `praxiomlabs/rust-mssql-driver` is a credible alternative. |
 | Oracle | `oracle` (rust-oracle, kubo) | Wraps ODPI-C. Requires Oracle Instant Client on the build host. |
 | ClickHouse | official `clickhouse` crate | HTTP interface (8123). Dynamic results streamed via `FORMAT JSONCompactEachRowWithNamesAndTypes`. |
 | Redis | `fred` | Modern tokio rewrite of redis-rs. |
@@ -194,9 +194,9 @@ Update `crates/app/Cargo.toml` to depend on the new driver crate. **This step is
 
 Two test layers, both required for merge:
 
-**Unit tests** — in `src/lib.rs` `#[cfg(test)]` module. Exercise pure logic: SQL builders, type mappers, error mapping. Do not require a running database.
+**Unit tests** belong in the `src/lib.rs` `#[cfg(test)]` module. Exercise pure logic: SQL builders, type mappers, error mapping. Do not require a running database.
 
-**Integration tests** — in `tests/integration.rs`. Use [testcontainers-rs](https://crates.io/crates/testcontainers) to spin up a real instance:
+**Integration tests** belong in `tests/integration.rs`. Use [testcontainers-rs](https://crates.io/crates/testcontainers) to spin up a real instance:
 
 ```rust
 use testcontainers::clients::Cli;

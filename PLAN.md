@@ -1,24 +1,23 @@
 # TablePro Linux development plan
 
-Last audited: 2026-08-12
+Last audited: 2026-08-17
 
 This plan is the source of truth for the Linux application. It separates:
 
 1. Implemented code from release-verified behavior
-2. Linux safety and reliability from macOS feature parity
-3. Features useful to a Platform Engineer, DBA, or Data Engineer from macOS-only product features
-4. Repository cleanup from product development
+2. Safety and reliability from feature breadth
+3. Features useful to a Platform Engineer, DBA, or Data Engineer from deferred product work
+4. Repository maintenance from product development
 
-The Linux application is a native Rust/GTK product. It does not share source with the Swift application, and it does not need the Swift plugin ABI, Apple sync services, licensing, or team-account features.
+The application is a Linux-only native Rust and GTK product. Database drivers are static workspace crates. Every shipped feature remains available without an account, license key, subscription, paid tier, or remote entitlement check.
 
 ## Current baseline
 
 Audited branch state:
 
-- Phase 0 verification HEAD: `e8c1aa37`
+- Safety baseline HEAD before repository extraction: `17a108b1`
 - Tracking branch: `fork/linux`
-- Cached comparison with `origin/linux`: 41 commits ahead, 1 commit behind
-- Rust workspace: 15 crates and approximately 37,000 lines of Rust
+- Rust workspace: 16 crates, 134 Rust source files, and 42,539 lines of Rust
 - Stable drivers: PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse
 - Experimental drivers: Redis, MongoDB, DuckDB, Oracle
 - No Linux account, subscription, receipt, license-key, or entitlement checks
@@ -290,7 +289,7 @@ Promote the test to a required PR check after 30 retry-free scheduled runs.
 
 ---
 
-# Phase 5: Restore documentation and parity tracking
+# Phase 5: Restore documentation and capability tracking
 
 ## Status
 
@@ -298,14 +297,17 @@ In progress.
 
 ## Documentation cleanup
 
-- Rewrite `linux/docs/production-audit.md` from current code and test evidence.
-- Make `linux/ROADMAP.md` a concise status view of this plan rather than a competing historical roadmap.
-- Correct test counts, CI jobs, drivers, XDG locations, TLS limitations, audit behavior, cancellation behavior, and packaging maturity.
-- Add user-facing changes to `linux/CHANGELOG.md` under `[Unreleased]`.
+- [x] Rewrite the repository `README.md`, `CONTRIBUTING.md`, and `CLAUDE.md` for the Linux Rust and GTK application.
+- [x] Rewrite `linux/docs/production-audit.md` from current code and test evidence.
+- [x] Make `linux/ROADMAP.md` a concise status view of this plan rather than a competing historical roadmap.
+- [x] Correct workspace size, CI jobs, drivers, XDG locations, TLS limitations, audit behavior, cancellation behavior, and packaging maturity.
+- [x] Remove retired product documentation and automation that described source no longer present in this repository.
+- [x] Retain `external-audit.md` as advisory planning research while keeping this plan and current test evidence authoritative.
+- [ ] Keep user-facing changes in `linux/CHANGELOG.md` under `[Unreleased]`.
 
-## Swift parity matrix
+## Linux capability backlog
 
-Maintain a feature matrix with these states: Swift reference, Linux implemented, Linux integrated, Linux release-verified, intentionally not ported.
+Track capabilities as planned, implemented, integrated, release-verified, deferred, or excluded. The backlog is based on Linux user needs and test evidence, not another product's source tree.
 
 ### Already useful on Linux
 
@@ -351,23 +353,23 @@ Maintain a feature matrix with these states: Swift reference, Linux implemented,
 - Vim mode and multi-cursor
 - Built-in AI chat
 
-### Intentionally not ported
+### Product exclusions
 
-- iCloud Sync and Handoff
-- Apple-specific Keychain/CloudKit behavior
-- Swift plugin ABI and registry runtime
-- macOS licensing, team seats, and entitlement checks
-- Sparkle updates
+- Runtime-loaded database driver plugins
+- Remote account, licensing, subscription, or entitlement services
+- Cross-platform UI abstractions and embedded browser interfaces
+- Organization account administration
+- Automatic background activation of the agent daemon
 
 ---
 
-# Phase 6: Port persona-priority features
+# Phase 6: Deliver persona-priority features
 
 ## Status
 
 Not started. Begin only after Phases 1–4 are release-safe.
 
-Deliver in small vertical slices:
+Deliver in small vertical slices. The first post-safety slice stays editor productivity because it has the highest daily value:
 
 1. SQL autocomplete, parameters, favorites, and quick switcher
 2. PostgreSQL object browser and administration
@@ -416,39 +418,30 @@ Do not enable an agent daemon automatically. If packaged, it requires explicit u
 
 Flatpak follows after the identity is final and offline Cargo sources, portals, Secret Service, SSH, Kerberos, export paths, and updates are verified.
 
+Measure release startup time, resident memory, binary size, and query-grid behavior before changing Cargo release profiles. Review shutdown and audit durability before selecting `panic = "abort"`. Keep only settings with measured benefit.
+
 ---
 
-# Phase 9: Remove macOS material only after extraction
+# Phase 9: Complete the Linux-only repository extraction
 
 ## Status
 
-Deferred and gated.
+Complete on 2026-08-17.
 
-The Rust workspace has no compile-time dependency on Swift. The macOS tree is nevertheless the current parity reference and upstream-sync anchor.
+The Cargo workspace remains under `linux/` to avoid unrelated build and packaging path churn. The repository contains only the Linux application source, Linux automation, Linux documentation, and shared legal or community files.
 
-## Keep until parity extraction is complete
-
-- Swift feature source and tests used to define behavior
-- Root changelog and feature documentation
-- Driver-specific SQL quirks and regression knowledge
-- Reusable icons/assets and legal files
-- Linux GitHub workflows
-
-## Candidates for removal in a standalone Linux repository
-
-- `TablePro/`, `TableProMobile/`, Swift tests, and Xcode projects
-- `Plugins/`, `Packages/`, `LocalPackages/`, and `CloudKit/`
-- macOS/iOS workflows and macOS build/release scripts
-- `appcast.xml`, `.swiftlint.yml`, and `.swiftformat`
-- macOS marketing documentation after useful specifications are migrated
+Removed material included retired application source, tests, project files, runtime driver bundles, platform release tooling, obsolete documentation, stale marketing assets, and workflows that could no longer succeed.
 
 ## Cleanup acceptance criteria
 
-- The permanent repository strategy is documented.
-- Every desired Swift feature is present in the parity matrix.
-- Useful tests, SQL behavior, assets, and legal material are migrated.
-- Linux CI, packaging, documentation, issue links, and release gates have no removed-path references.
-- Upstream synchronization has an explicit replacement process.
+- [x] The repository scope and branch strategy are documented.
+- [x] Root contributor and agent guidance describes Rust, GTK, Relm4, static drivers, policy, audit, and Linux packaging.
+- [x] Linux CI and packaging do not depend on removed source trees.
+- [x] Issue templates request Linux environment and database details.
+- [x] The root license and Linux changelog remain authoritative.
+- [x] External planning research is labeled advisory and cannot override current code or test evidence.
+- [x] Optional upstream research is behavior review and manual implementation, never source-tree merging.
+- [x] Cargo metadata resolves the complete workspace after extraction.
 
 ---
 
@@ -481,5 +474,3 @@ The release is trusted only when:
 - Reconnect restores a usable connection and tunnel.
 - The installed Arch package launches and upgrades without losing user data.
 - Every Linux feature remains available without a commercial gate.
-
-SwiftLint is not a Linux release gate. It remains part of macOS CI only while the repository is a monorepo.

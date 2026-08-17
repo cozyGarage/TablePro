@@ -1,8 +1,8 @@
 # TablePro Linux roadmap
 
-Last audited: 2026-08-14
+Last audited: 2026-08-17
 
-The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Swift parity backlog. This file is the concise Linux status view.
+The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Linux capability backlog. This file is the concise status view.
 
 ## Current state
 
@@ -37,7 +37,7 @@ Status terms:
 
 ## Active phases
 
-### 0 — Development baseline
+### 0: Development baseline
 
 - [x] Reconcile upstream SQL Server Kerberos and service identity without losing fork safety work
 - [x] Preserve legacy connection serialization
@@ -51,7 +51,7 @@ Status terms:
 
 Phase 0 is complete locally. Rust 1.93 CI is green, current stable Clippy passes locally, and the first hosted current-stable schedule is expected after push. Real SQL Server TLS and Kerberos negotiation remain release-fixture work in Phase 3.
 
-### 1 — Authorization and approval
+### 1: Authorization and approval
 
 - [x] Replace production automatic approval with principal-aware routing
 - [x] Enforce read-only before unparseable-statement fallback
@@ -64,7 +64,7 @@ Phase 0 is complete locally. Rust 1.93 CI is green, current stable Clippy passes
 
 Phase 1 is implemented, security-reviewed, and locally verified. Phase 4 still owns release-level GTK proof for dialog dismissal and approve-once behavior.
 
-### 2 — Fail-closed audit
+### 2: Fail-closed audit
 
 - [x] Disable governed writes and in-app MCP when audit initialization fails
 - [x] Record durable intent before mutations and transaction completion
@@ -75,27 +75,29 @@ Phase 1 is implemented, security-reviewed, and locally verified. Phase 4 still o
 
 Phase 2 is implemented, security-reviewed, and locally verified. PostgreSQL cancellation and terminal outcomes are now verified in Phase 3.
 
-### 3 — PostgreSQL release safety
+### 3: PostgreSQL release safety
 
 - [ ] Verify direct and SSH `VerifyFull`
 - [x] Implement and verify server-side cancellation, parameterized cancellation, rollback, and pool reuse
 - [ ] Verify rollback, activity, locks, reconnect, and SSH reconnect
 - [ ] Add deterministic PostgreSQL release fixture
 
-### 4 — GTK safety tests
+### 4: GTK safety tests
 
 - [ ] Dismissed approval denies
 - [ ] Approve-once approves exactly one operation
 - [ ] Audit failure cannot be approved around
 
-### 5 — Documentation and Swift parity
+### 5: Documentation and capability tracking
 
 - [x] Replace the historical roadmap with evidence-based status
-- [ ] Keep the production audit synchronized with code and tests
-- [ ] Maintain the Swift-to-Linux parity matrix
-- [ ] Distinguish implementation from release verification in every claim
+- [x] Rewrite repository guidance for the Linux Rust and GTK application
+- [x] Synchronize the production audit with server-side PostgreSQL cancellation evidence
+- [x] Replace source-parity tracking with a Linux capability backlog
+- [x] Keep external planning research advisory rather than authoritative
+- [ ] Distinguish implementation from release verification in every product claim
 
-### 6 — DBA and data-engineering depth
+### 6: DBA and data-engineering depth
 
 - [ ] SQL autocomplete, parameters, favorites, and quick switcher
 - [ ] PostgreSQL objects, users/roles, and administration
@@ -103,25 +105,23 @@ Phase 2 is implemented, security-reviewed, and locally verified. PostgreSQL canc
 - [ ] Connection organization and reusable transport profiles
 - [ ] True result streaming and optional Parquet export
 
-### 7 — Driver expansion
+### 7: Driver expansion
 
-Prioritize real workflows: Redshift/CockroachDB profiles, Trino, Snowflake, then BigQuery. Other Swift drivers remain demand-driven.
+Prioritize real workflows: Redshift and CockroachDB profiles, Trino, Snowflake, then BigQuery. Other drivers remain demand-driven.
 
-### 8 — Identity and packaging
+### 8: Identity and packaging
 
 Finalize the product name, repository, and application ID before publishing. AUR/Omarchy is first; Flatpak follows after sandbox and update behavior are verified.
 
-### 9 — Repository cleanup
+### 9: Linux-only repository extraction
 
-Keep the macOS tree as the parity reference until useful behavior, tests, documentation, and assets are extracted. Remove it only after a standalone Linux repository is explicitly chosen and Linux paths no longer depend on it.
+- [x] Remove retired non-Linux source, tests, build projects, runtime driver bundles, documentation, and release automation
+- [x] Keep the Cargo workspace under `linux/` to preserve stable build and packaging paths
+- [x] Rewrite root and Linux documentation around the Rust and GTK architecture
+- [x] Retain optional upstream behavior review without source-tree merging
+- [x] Preserve the root license, Linux changelog, Linux workflows, and package scaffolding
 
-## Explicit non-ports
-
-- iCloud Sync and Handoff
-- Apple Keychain and CloudKit behavior
-- Swift plugin ABI and registry loader
-- macOS licensing, team seats, and entitlements
-- Sparkle updates
+The repository extraction completed on 2026-08-17. Product planning now follows Linux user needs and release evidence.
 
 ## Next implementation target
 

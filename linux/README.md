@@ -1,44 +1,30 @@
 # TablePro Linux
 
-Native Linux database client. Sister product to the macOS TablePro app,
-sharing no code but matching the feature set over time.
+TablePro is a Linux-only database client built with Rust, GTK4, libadwaita, and Relm4. The Rust workspace is rooted in this `linux/` directory.
 
 ## Status
 
-Working GTK4 / libadwaita client with PostgreSQL, MySQL, SQLite, MSSQL,
-and ClickHouse stable, plus Experimental Redis / MongoDB (DuckDB and
-Oracle behind `--features duckdb` / `--features odpi`). SSH tunnels,
-multi-tab browse / SQL editor / structure editor, inline cell edit,
-query history, Flatpak scaffolding, and a governed data plane (policy
-chokepoint, MCP server, headless agentd). See [ROADMAP.md](ROADMAP.md)
-and [docs/driver-maturity.md](docs/driver-maturity.md).
+The GTK application supports PostgreSQL, MySQL, SQLite, SQL Server, and ClickHouse. Redis and MongoDB are experimental. DuckDB and Oracle require the `duckdb` and `odpi` Cargo features.
 
-It is past demo-grade, but still not beta-shippable for Flathub.
+Current workflows include saved connections, SSH tunnels, browse and SQL tabs, structure editing, inline row changes, query history, policy checks, MCP access, and the headless `tablepro-agentd` process. See [ROADMAP.md](ROADMAP.md), [docs/driver-maturity.md](docs/driver-maturity.md), and [docs/production-audit.md](docs/production-audit.md) for current limits.
+
+The application is suitable for development and personal testing. Release fixtures for PostgreSQL TLS over SSH and reconnect behavior, plus targeted GTK safety tests, are still required before trusted production writes or unattended agents are approved.
 
 ## Stack
 
-| Layer | Pick |
+| Layer | Technology |
 |---|---|
 | Language | Rust 1.93+ |
-| GUI toolkit | GTK4 4.14+ + libadwaita 1.6+ + GtkSourceView 5.12+ |
-| App architecture | [Relm4](https://relm4.org) — Elm-style components on gtk4-rs |
-| Async | tokio (DB drivers) bridged to glib main loop (UI) |
-| DB drivers | sqlx (PG / MySQL / SQLite), tiberius (MSSQL), official `clickhouse` crate; Redis / DuckDB / MongoDB / Oracle crates |
-| Persistence | libsecret (passwords), JSON files (connections / prefs / workspace) |
-| Distribution | Flathub primary; `.deb` / AUR secondary |
+| GUI | GTK4 4.14+, libadwaita 1.6+, GtkSourceView 5.12+ |
+| Components | Relm4 |
+| Async work | Tokio for database and service work, GLib main context for GTK |
+| Drivers | sqlx, tiberius, clickhouse, and engine-specific Rust crates |
+| Storage | XDG JSON files, SQLite FTS5, JSONL audit journal, Secret Service through `oo7` |
+| Packaging | AUR and Omarchy first, Flatpak later |
 
-## What this is not
+Drivers are linked at build time. TablePro does not load database drivers as runtime plugins. The UI uses native GTK widgets and does not embed a browser view.
 
-| Not | Why |
-|---|---|
-| A port of the macOS app | Swift does not run on Linux. Zero shared source. |
-| A plugin host | Drivers are statically linked. See [decisions/0001-no-plugin-system.md](docs/decisions/0001-no-plugin-system.md). |
-| Cross-platform | Linux only. macOS and iOS have separate apps in this monorepo. |
-| Electron / WebView | Native GTK4 widgets throughout. |
-
-## Quickstart
-
-System dependencies:
+## Build requirements
 
 ```bash
 # Ubuntu / Debian
@@ -54,12 +40,16 @@ sudo pacman -S --needed base-devel pkg-config gtk4 libadwaita \
   gtksourceview5 openssl libsecret krb5 clang
 ```
 
+Check the native libraries and Rust toolchain:
+
 ```bash
-pkg-config --modversion gtk4 libadwaita-1 gtksourceview-5   # need 4.14+ / 1.6+ / 5.12+
-rustc --version                                             # need 1.93+
+pkg-config --modversion gtk4 libadwaita-1 gtksourceview-5
+rustc --version
 ```
 
-Build and run:
+## Build and run
+
+Run Cargo commands from the workspace root:
 
 ```bash
 cd linux
@@ -68,54 +58,57 @@ cargo run -p tablepro-app
 
 ### SQL Server Kerberos
 
-Run `kinit` before connecting, then confirm the ticket with `klist`. Select **Windows (Kerberos)** in the SQL Server connection form and enter the server's real DNS hostname. SQL Server requests the service principal `MSSQLSvc/<host>:<port>`, including when SSH forwards the socket through localhost.
+Run `kinit` before connecting and confirm the ticket with `klist`. Select **Windows (Kerberos)** in the SQL Server connection form and enter the server's real DNS hostname. SQL Server requests `MSSQLSvc/<host>:<port>`, including when SSH forwards the socket through localhost.
 
-The Flatpak can read the host Kerberos configuration and KCM socket. A FILE credential cache also works when `KRB5CCNAME` points inside the shared home directory. Custom SPN overrides and cross-realm setup are not exposed in the connection form.
+A FILE credential cache works when `KRB5CCNAME` points to a readable location. Custom SPN overrides and cross-realm setup are not exposed in the connection form.
 
-Local CI mirrors (prefer the cheap gate while iterating):
+## Checks
 
 ```bash
-./scripts/preflight.sh              # no GTK app; policy/mcp/drivers/unit tests
-./scripts/ci-local.sh               # full workspace unit tests (includes GTK)
-./scripts/ci-local.sh integration   # docker driver suites
+./scripts/preflight.sh
+./scripts/ci-local.sh
+./scripts/ci-local.sh integration
 ```
 
-Driver smoke against a Postgres you already run, no Docker needed:
+`preflight.sh` skips the GTK application. `ci-local.sh` runs the current workspace library and binary test targets, including the GTK binary tests. Integration mode runs the real-driver Docker suites.
+
+To smoke-test a PostgreSQL server you already run:
 
 ```bash
 ./scripts/smoke-postgres.sh
 ```
 
-Optional: if the system `-dev` packages above are missing, extract the package payloads under `../.local-deps/root/` (so headers land in `../.local-deps/root/usr/include`) and `source scripts/dev-env.sh` before cargo. Debian-family layouts only.
+If native development packages are unavailable, `scripts/dev-env.sh` can use Debian-family package payloads extracted under `../.local-deps/root/`.
 
 ## Packaging
 
-See [packaging/README.md](packaging/README.md) once present on this branch.
-Quick local `.deb`:
+AUR packaging is the first release target, with Omarchy as the first supported desktop distribution. The current package recipe is in [packaging/aur/PKGBUILD](packaging/aur/PKGBUILD).
 
 ```bash
-./scripts/build-deb.sh
-# → packaging/out/tablepro_0.1.0-1_amd64.deb
+cd packaging/aur
+makepkg -si
 ```
 
-## Documentation index
+Debian package and Flatpak files exist for development. Flatpak publication is planned after the native Arch and Omarchy path is release-verified. See [packaging/README.md](packaging/README.md).
+
+## Documentation
 
 | Topic | File |
 |---|---|
-| Layered architecture, crate boundaries | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| Roadmap and current stage | [ROADMAP.md](ROADMAP.md) |
-| Production gap analysis | [docs/production-audit.md](docs/production-audit.md) |
+| Architecture and crate boundaries | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| Roadmap | [ROADMAP.md](ROADMAP.md) |
+| Production audit | [docs/production-audit.md](docs/production-audit.md) |
 | Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| Rust toolchains on Arch/Omarchy | [docs/toolchains.md](docs/toolchains.md) |
-| Upstream Linux sync history | [docs/upstream-sync.md](docs/upstream-sync.md) |
+| Rust toolchains on Arch and Omarchy | [docs/toolchains.md](docs/toolchains.md) |
+| Optional upstream reference review | [docs/upstream-sync.md](docs/upstream-sync.md) |
 | Adding a database driver | [docs/adding-drivers.md](docs/adding-drivers.md) |
-| Driver maturity matrix | [docs/driver-maturity.md](docs/driver-maturity.md) |
-| State management with Relm4 | [docs/state-management.md](docs/state-management.md) |
-| Persistence | [docs/storage.md](docs/storage.md) |
+| Driver maturity | [docs/driver-maturity.md](docs/driver-maturity.md) |
+| State management | [docs/state-management.md](docs/state-management.md) |
+| Storage | [docs/storage.md](docs/storage.md) |
 | Error handling | [docs/error-handling.md](docs/error-handling.md) |
 | Testing | [docs/testing.md](docs/testing.md) |
-| Architecture decision records | [docs/decisions/](docs/decisions/) |
+| Architecture decisions | [docs/decisions/](docs/decisions/) |
 
 ## License
 
-Same as the parent TablePro project.
+TablePro Linux is licensed under AGPL-3.0-or-later. See [LICENSE.md](LICENSE.md).

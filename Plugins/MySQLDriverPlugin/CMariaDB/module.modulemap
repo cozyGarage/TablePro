@@ -1,5 +1,0 @@
-module CMariaDB [system] {
-    header "CMariaDB.h"
-    link "mariadb"
-    export *
-}

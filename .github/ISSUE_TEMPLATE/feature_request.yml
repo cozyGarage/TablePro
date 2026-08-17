@@ -1,52 +1,86 @@
 name: Feature Request
-description: Suggest a new feature or improvement
-labels: ["enhancement"]
+description: Suggest a feature for the Linux application
+labels: ["enhancement", "linux"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        TablePro features must remain free of account, license, subscription, paid-tier, and remote entitlement gates.
+
   - type: textarea
     id: problem
     attributes:
       label: Problem
-      description: What problem does this feature solve? What's frustrating or missing today?
-      placeholder: "I often need to X but currently have to Y, which is slow/tedious."
+      description: What task is difficult or missing today?
+      placeholder: "I need to compare two query results, but I currently export both and compare them elsewhere."
     validations:
       required: true
 
   - type: textarea
     id: solution
     attributes:
-      label: Proposed solution
-      description: How would you like this to work? Include mockups or examples if you have them.
+      label: Proposed behavior
+      description: Describe the workflow, expected result, and any safety limits.
     validations:
-      required: false
+      required: true
 
   - type: textarea
     id: alternatives
     attributes:
       label: Alternatives considered
-      description: Any workarounds or alternative approaches you've tried or considered.
+      description: List workarounds or other designs you considered.
     validations:
       required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Connections and SSH
+        - Data browser and editing
+        - SQL editor and query results
+        - Table structure
+        - Import and export
+        - Policy and approvals
+        - Audit records
+        - MCP and tablepro-agentd
+        - Packaging and installation
+        - Accessibility and desktop integration
+        - Other
+    validations:
+      required: true
 
   - type: dropdown
     id: database
     attributes:
       label: Related database type
       options:
-        - MySQL / MariaDB
         - PostgreSQL
+        - MySQL / MariaDB
         - SQLite
-        - SQL Server
-        - MongoDB
-        - Redis
+        - Microsoft SQL Server
         - ClickHouse
-        - Oracle
+        - Redis
+        - MongoDB
         - DuckDB
-        - BigQuery
-        - Cassandra
-        - Cloudflare D1
-        - DynamoDB
-        - etcd
-        - libSQL
+        - Oracle Database
         - N/A / General
+    validations:
+      required: true
+
+  - type: textarea
+    id: safety
+    attributes:
+      label: Security and data safety
+      description: Explain any effect on credentials, SQL execution, approvals, masking, audit records, MCP scopes, or connection allowlists.
+    validations:
+      required: false
+
+  - type: textarea
+    id: mockups
+    attributes:
+      label: Examples or mockups
+      description: Add sample inputs, outputs, screenshots, or sketches with private data removed.
     validations:
       required: false

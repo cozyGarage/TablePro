@@ -1,35 +1,43 @@
-# Upstream Linux sync log
+# Optional upstream reference review
 
-Record every reconciliation from `TableProApp/TablePro` into this Linux fork from 2026-08-10 onward. Earlier merges remain in Git history. An entry names the upstream ref reviewed, the local result, conflicts or deliberate deviations, and the verification performed. Normal local feature commits do not need entries.
+TablePro Linux is an independent Rust and GTK codebase. Other TablePro implementations may be reviewed as references for security fixes, product behavior, SQL semantics, and user expectations. This review is optional and is not a source synchronization process.
 
-## 2026-08-10 — SQL Server Kerberos reconciliation
+## Rules
 
-- Upstream reviewed: `origin/linux` at `807d2809` (`feat(drivers): Windows integrated (Kerberos) auth for SQL Server`).
-- Local result: `c0b368a2` (`feat(linux): reconcile Kerberos support and tunnel identity`).
-- Method: manually reconciled instead of merging because the fork already had policy guards, TLS modes, SSH jump chains, expanded drivers, and refactored core/UI modules.
-- Preserved fork behavior: all connections still enter through `DatabaseService` and `PolicyGuard`; saved password connections remain compatible; direct TLS behavior is unchanged.
-- Intentional extension: `ConnectOptions` separates the physical dial endpoint from the database service endpoint so an SSH-forwarded SQL Server connection dials localhost while TLS and Kerberos use the original hostname and port.
-- Verification: core service-address tests, saved-connection legacy/round-trip tests, SQL Server password/Kerberos target tests, strict Clippy, workspace unit tests, and local supply-chain checks.
+- Never merge, rebase, or cherry-pick Apple source trees into this repository.
+- Do not copy platform framework code or assume another implementation's architecture applies to Linux.
+- Inspect the behavior and the reason for the change.
+- Check whether the same risk or product need exists in the Rust and GTK application.
+- Manually implement only the behavior that applies to Linux.
+- Keep existing Linux policy, audit, storage, GTK ownership, and driver boundaries intact.
+- Add Rust tests that prove the ported behavior here.
+- Omit changes that depend on platform services with no Linux equivalent unless there is a clear Linux product requirement.
 
-## 2026-08-13 - Linux security catch-up
+## Good review targets
 
-- Upstream reviewed: `origin/linux` at `807d2809`, `origin/main` at `c849d75f`, and security hardening commit `05389523`.
-- Local result: the Phase 0 security catch-up commit containing this entry.
-- Method: reviewed every new upstream commit touching Linux directly, then mapped shared security behavior onto the Rust implementation.
-- Preserved fork behavior: MCP remains loopback-only and token-authenticated; SSH remains TOFU-based with jump chains; Linux CI keeps Rust 1.93 as the MSRV and current stable as a scheduled signal.
-- Intentional deviations: SQL Server Kerberos remains the stronger manual port from `c0b368a2`; Swift plugin, AppKit, iOS, FreeTDS, libssh2, and Sparkle changes do not apply to the native Rust client.
-- Security ports: reject untrusted browser origins before MCP JSON-RPC dispatch, treat SSH host-key algorithm changes as mismatches, and pin Linux GitHub Actions to immutable commits.
-- Verification: focused MCP and SSH tests, full Rust formatting, workspace tests, Clippy, and supply-chain checks.
+Reference review is most useful for:
 
-## Entry template
+- SQL safety classification and approval rules
+- Credential handling and redaction
+- Connection cancellation and reconnect behavior
+- TLS and SSH identity checks
+- Data-grid correctness and destructive-action guards
+- User-facing behavior that should be consistent across TablePro products
+
+Packaging, desktop integration, process management, keyrings, and UI framework details should follow native Linux behavior instead.
+
+## Recording a manual port
+
+Add an entry only when a reference review causes a Linux code or product change. Routine Linux development does not need an entry.
 
 ```text
-## YYYY-MM-DD — short description
+## YYYY-MM-DD: short behavior name
 
-- Upstream reviewed: remote/ref and commit.
-- Local result: commit or pull request.
-- Method: merge, rebase, cherry-pick, or manual reconciliation.
-- Preserved fork behavior: safety and product invariants retained.
-- Intentional deviations: differences from upstream and why.
-- Verification: commands and release fixtures run.
+- Reference reviewed: repository, ref, and commit or release.
+- Linux relevance: risk or product behavior that also applies here.
+- Manual port: Rust or GTK behavior implemented in this repository.
+- Not ported: platform-specific parts that do not apply.
+- Verification: focused tests, real-driver fixture, or GTK flow run.
 ```
+
+The entry should describe behavior, not file-by-file source movement. There should be no source-tree merge to record.

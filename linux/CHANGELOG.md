@@ -1,4 +1,4 @@
-# Changelog — TablePro Linux
+# Changelog: TablePro Linux
 
 ## [Unreleased]
 

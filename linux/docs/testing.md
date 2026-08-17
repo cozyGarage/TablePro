@@ -1,168 +1,115 @@
 # Testing
 
-Three layers, three tools. Each crate's test policy follows from its position in the dependency graph.
+Run test commands from the `linux/` workspace root.
 
-| Crate | Layer | Tools | Required for merge? |
-|---|---|---|---|
-| `core` | Pure traits + types | Unit tests in `src/`, table-driven for type mappers | Yes |
-| `storage` | Filesystem + libsecret + GSchema | Unit tests + integration tests with `tempfile` | Yes |
-| `drivers/<engine>` | Real engines | Unit tests + `testcontainers-rs` integration tests | Yes |
-| `app` | GTK4 + Relm4 components | Limited; pure logic in `services/` is unit-tested | No |
+## Current local checks
 
-Two helper scripts sit on top: `scripts/ci-local.sh` runs the fast CI checks, `scripts/smoke-postgres.sh` runs the driver smoke against a Postgres you already have.
+The quick non-GTK gate is:
+
+```bash
+./scripts/preflight.sh
+```
+
+It runs the file-size guard, formatting, Clippy for the non-GTK package list, library tests for those packages, and the MCP policy integration test.
+
+The current full default workspace gate is:
+
+```bash
+./scripts/ci-local.sh
+```
+
+Its Cargo commands are:
+
+```bash
+cargo clippy --workspace --exclude tablepro-driver-duckdb --all-targets -- -D warnings
+cargo test --workspace --exclude tablepro-driver-duckdb --lib --bins
+```
+
+Keep both `--lib` and `--bins`. `tablepro-app` is a binary crate, so `--lib` alone skips its tests. DuckDB is excluded from the default gate because its optional native build is large.
+
+To run the same unit-test shape without the helper script:
+
+```bash
+cargo test --workspace --exclude tablepro-driver-duckdb --lib --bins
+```
 
 ## Unit tests
 
-In-crate, in `#[cfg(test)] mod tests` next to the code they cover. Standard Rust idiom.
+Place focused tests beside the Rust module under `#[cfg(test)]`. Pure parsing, SQL generation, policy, mapping, persistence, and state-transition behavior should be tested without GTK where possible.
 
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
+The full `--lib --bins` command builds and runs tests from library crates and binary crates. Application service tests are included through the `tablepro-app` binary target.
 
-    #[test]
-    fn maps_unique_violation_to_query_error() {
-        let err = sqlx::Error::Database(/* ... */);
-        let mapped = map_sqlx_error(err);
-        assert!(matches!(mapped, DriverError::Query { sqlstate: Some(_), .. }));
-    }
-}
-```
+## Storage tests
 
-Run all unit tests:
+Storage tests use temporary directories and explicit file paths for JSON and audit behavior. Query-history tests use SQLite. The Secret Service round-trip test is ignored by default because it needs a working desktop keyring session.
+
+Tests that change XDG environment variables must avoid racing with other tests. Prefer internal functions that accept a path when the module already provides them.
+
+## Real-driver integration tests
+
+Run all configured Docker suites with:
 
 ```bash
-cargo test --workspace --lib --bins
+./scripts/ci-local.sh integration
 ```
 
-`--bins` is not optional: `tablepro-app` has no `lib.rs`, so `--lib` alone skips every test in the app crate. `scripts/ci-local.sh` and the CI workflow both run this command.
-
-## Integration tests
-
-Per-crate `tests/` directory. One file per scenario.
-
-For `storage`, integration tests use `tempfile::TempDir` to run against an isolated filesystem root, with `XDG_CONFIG_HOME` overridden via env var.
-
-For drivers, integration tests use [`testcontainers`](https://docs.rs/testcontainers/latest/testcontainers/) to spin up a real database. The pattern is identical for every driver:
-
-```rust
-use testcontainers::ImageExt;
-use testcontainers_modules::postgres::Postgres;
-use testcontainers_modules::testcontainers::runners::AsyncRunner;
-
-#[tokio::test]
-#[ignore = "requires docker"]
-async fn list_tables_returns_seeded_tables() {
-    let container = Postgres::default().with_tag("16-alpine").start().await.unwrap();
-    let host = container.get_host().await.unwrap().to_string();
-    let port = container.get_host_port_ipv4(5432).await.unwrap();
-
-    let conn = PgDriver.connect(opts_for(host, port)).await.unwrap();
-
-    conn.execute("CREATE TABLE foo (id INT)").await.unwrap();
-    let tables = conn.list_tables().await.unwrap();
-    assert!(tables.iter().any(|t| t.name == "foo"));
-}
-```
-
-Keep the container alive for the whole test: dropping the handle stops it.
-
-Integration tests run in CI. Locally they require a Docker-compatible API socket.
-
-### Docker or Podman
-
-Upstream CI uses Docker. Fedora ships Podman instead, and on Debian it is the easier install; either way, point testcontainers at Podman's rootless socket:
+The script runs:
 
 ```bash
-sudo dnf install -y podman   # or: sudo apt install -y podman
-systemctl --user enable --now podman.socket
-export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock
 cargo test --test integration -p tablepro-driver-postgres -- --include-ignored --test-threads=1
 cargo test --test integration -p tablepro-driver-mysql -- --include-ignored --test-threads=1
+cargo test --test integration -p tablepro-driver-mssql -- --include-ignored --test-threads=1
 cargo test --test integration -p tablepro-driver-clickhouse -- --include-ignored --test-threads=1
 ```
 
-Do not bother with `TESTCONTAINERS_RYUK_DISABLED`. That is a testcontainers-java / go setting; the Rust crate has no Ryuk reaper and stops each container when its handle drops.
+These tests require Docker or a compatible Podman API socket. Keep each container handle alive for the full test because dropping it stops the container.
 
-`curl --unix-socket "${DOCKER_HOST#unix://}" http://localhost/_ping` should print `OK` before you run the suite. `--unix-socket` takes a filesystem path, so the `unix://` prefix has to come off.
+PostgreSQL integration coverage includes controlled cancellation and timeout against a real server. The tests confirm the query appears in `pg_stat_activity`, trigger cancellation or a deadline, confirm the query leaves server activity, and verify that the pool remains usable. Transaction cancellation is followed by rollback and a data check.
 
-A test that panics hard can still leave a container behind. `podman container prune` clears them.
+## Local PostgreSQL smoke test
 
-### Local smoke without a container
-
-`crates/drivers/postgres/tests/smoke_local.rs` runs connect, list tables, fetch rows, edit a cell against a Postgres that is already up. It is `#[ignore]`d like the container suites, so it never runs during a plain `cargo test`.
+For a PostgreSQL server you already run:
 
 ```bash
-podman run -d --name tablepro-smoke -p 54329:5432 \
-  -e POSTGRES_USER=tablepro -e POSTGRES_PASSWORD=tablepro -e POSTGRES_DB=tablepro \
-  docker.io/library/postgres:16-alpine
-
 ./scripts/smoke-postgres.sh
 ```
 
-Point it somewhere else with `SMOKE_PG_HOST`, `SMOKE_PG_PORT`, `SMOKE_PG_USER`, `SMOKE_PG_PASS`, `SMOKE_PG_DB`. The test creates, clears and drops `tablepro_smoke_items`, so use a scratch database.
+The ignored smoke test creates and drops `tablepro_smoke_items`. Use a disposable database. Configure another target with `SMOKE_PG_HOST`, `SMOKE_PG_PORT`, `SMOKE_PG_USER`, `SMOKE_PG_PASS`, and `SMOKE_PG_DB`.
 
-Mark slow integration tests with `#[ignore]` if they take more than ~5 seconds:
+## GTK tests
 
-```rust
-#[tokio::test]
-#[ignore]  // pulls a 1GB image
-async fn import_pgdump_one_million_rows() { /* ... */ }
-```
+The application has unit tests in its binary target, but it does not yet have the targeted GTK safety suite required for release. Those tests are planned and remain blockers.
 
-Run them explicitly: `cargo test --workspace -- --include-ignored`.
+The first GTK safety tests must cover:
 
-## App / UI tests
+1. Approval denial when the dialog is dismissed or no active window exists.
+2. Approval scope and a governed write through the real GTK route.
+3. Cancel, timeout, audit outcome, and warning behavior through the installed application.
 
-We do not write Relm4 component tests until we hit a bug that they would have caught. The reasoning:
+These tests need a real GTK main loop and disposable database fixtures. Service-level tests should still cover pure state and policy behavior, but they do not replace the cross-layer GTK tests.
 
-- Relm4's testing helpers require a running GTK main loop, which makes CI flaky.
-- Most app logic worth testing belongs in `app::services` modules — extract those into pure Rust and test directly.
-- UI testing tools that drive GTK4 (`pyatspi`, `dogtail`) are more trouble than they are worth at this scale.
-
-Policy:
-
-- Pure logic: extract to `app::services::<thing>`, write unit tests there.
-- View building: cover by manual QA. Add a screenshot to the PR description.
-- Cross-component flows: covered by smoke test (see below).
-
-If a UI bug ships and a regression test would have caught it, write the test then.
-
-## End-to-end smoke test
-
-There is no app-level end-to-end test yet. Driving the GTK app under `xvfb-run` through its registered `gtk::Application` actions is the intended shape when we add one.
-
-What exists today is the driver-level smoke described above: `scripts/smoke-postgres.sh` against a Postgres you already run.
-
-## File size guardrail
-
-Rust sources under `crates/` are capped like SwiftLint file length:
-
-| Limit | Lines | Rule |
-|---|---|---|
-| Soft | 1200 | New files over this must be split, or listed in `file-size-baselines.txt` |
-| Hard | 1800 | Unlisted files over this always fail |
-| Ratchet | listed max | Listed oversized files may not grow past their ceiling |
-
-`scripts/check-file-size.sh` runs from `preflight.sh` and `ci-local.sh`. After you shrink a listed file, lower its baseline max in the same change.
+For ordinary UI changes, test the affected flow manually and include before and after screenshots. Add deterministic automation when a regression can be reproduced without timing or desktop-session assumptions.
 
 ## CI
 
-GitHub Actions (`.github/workflows/build-linux.yml`) uses these jobs:
+`.github/workflows/build-linux.yml` has these jobs:
 
-1. **Preflight**: `scripts/preflight.sh` (file-size guardrail, fmt, clippy, non-GTK unit tests).
-2. **Fast checks**: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace --lib --bins` (via `ci-local.sh`). Runs in an `ubuntu:25.10` container, which ships the glib version libadwaita 1.6 needs.
-3. **Driver integration tests**: runs after preflight. Boots Docker on the host runner and runs the Postgres, MySQL, MSSQL, and ClickHouse suites with `--include-ignored`.
-4. **Current stable Clippy**: runs weekly and on manual workflow dispatch with the latest stable Rust toolchain. It does not replace the Rust 1.93 preflight.
+1. Preflight on Rust 1.93 without the GTK application.
+2. GTK formatting, Clippy, and `cargo test --workspace --exclude tablepro-driver-duckdb --lib --bins` in Ubuntu 25.10.
+3. PostgreSQL, MySQL, SQL Server, and ClickHouse integration tests on Docker.
+4. Scheduled and manually triggered Clippy on current stable Rust.
+5. Supply-chain checks with `cargo deny` and `cargo audit` in the GTK job.
 
-PRs only merge when the required pull-request jobs are green. The scheduled stable job protects against new compiler lints between dependency updates.
+The Ubuntu 25.10 container provides the GLib version required by the selected libadwaita and Relm4 features.
 
-## Coverage
+## File-size guard
 
-Tracked with `cargo-llvm-cov` once the codebase has substance. No hard coverage threshold; coverage is a discussion aid, not a gate.
+`scripts/check-file-size.sh` enforces the Rust source limits recorded in `file-size-baselines.txt`:
 
-## Mocking
+| Limit | Lines | Result |
+|---|---:|---|
+| Soft | 1200 | Split the file or record an approved baseline |
+| Hard | 1800 | Unlisted files fail |
+| Ratchet | Recorded maximum | A listed oversized file may not grow past its baseline |
 
-Avoid mock objects. We do not mock drivers, the filesystem, or `tokio::time`. Either use a real implementation (testcontainers, `tempfile`, `tokio::time::pause`) or extract the logic to a pure function and test that.
-
-If a test cannot be written without a mock, the design is wrong. Refactor before writing the mock.
+Lower a baseline in the same change when an oversized file shrinks.

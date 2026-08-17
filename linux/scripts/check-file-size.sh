@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
 # Enforce Rust source file size limits under linux/crates.
 #
-# Soft limit (warn / ratchet): 1200 lines — matches SwiftLint file_length warning.
-# Hard limit (error for new offenders): 1800 lines — matches SwiftLint file_length error.
-#
-# Oversized files that already exist are listed in file-size-baselines.txt with a
-# ceiling. They may shrink freely; growth past the ceiling fails the gate.
+# New files above 1200 lines require an explicit baseline. Unlisted files above
+# 1800 lines fail. Listed files may shrink but cannot grow past their ceiling.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

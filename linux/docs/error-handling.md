@@ -45,7 +45,7 @@ pub enum DriverError {
 Rules:
 
 - Variants are stable. Once shipped, do not rename or remove. Add new variants at the end.
-- Avoid wrapping arbitrary `Box<dyn Error>` inside variants. Map underlying errors into specific variants. The `Internal(String)` variant is the escape hatch for cases that genuinely cannot be classified — use it sparingly.
+- Avoid wrapping arbitrary `Box<dyn Error>` inside variants. Map underlying errors into specific variants. The `Internal(String)` variant is the escape hatch for cases that genuinely cannot be classified. Use it sparingly.
 - The `#[error]` message is for logs and developer-facing surfaces. The UI builds its own message based on the variant.
 
 ## Driver-side error mapping
@@ -94,11 +94,11 @@ Do not display raw `Debug` or `Display` output for domain errors. Always go thro
 
 Use the `tracing` crate, with a `tracing-journald` subscriber installed in `app::main`. Levels:
 
-- `error!` — something the user must see, or a contract was violated.
-- `warn!` — recoverable but suspicious.
-- `info!` — significant lifecycle events: app start, driver registered, connection opened.
-- `debug!` — verbose internal flow.
-- `trace!` — query bodies, network frames. Off by default.
+- `error!`: something the user must see, or a contract was violated.
+- `warn!`: recoverable but suspicious.
+- `info!`: significant lifecycle events such as app start, driver registration, or a connection opening.
+- `debug!`: verbose internal flow.
+- `trace!`: query bodies and network frames. Off by default.
 
 Never log passwords, secret tokens, or full query parameters at any level above `trace!`. The lint enforces this in CI by grepping for known sensitive identifiers.
 

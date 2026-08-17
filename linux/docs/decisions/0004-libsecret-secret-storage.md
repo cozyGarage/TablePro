@@ -1,66 +1,50 @@
-# 0004 — libsecret via oo7 for password storage
+# 0004: Secret Service through oo7
 
 - **Status**: Accepted
 - **Date**: 2026-04-26
 
 ## Context
 
-Database connections require credentials. The macOS app stores passwords in the macOS Keychain, keyed by connection UUID, with the `KeychainHelper` wrapper providing a typed API. Linux has no Keychain.
+Database, SSH, and MCP credentials must persist without being written to JSON files. The storage mechanism must work across common Linux desktop environments, expose an async Rust API, and fail safely when no keyring service is available.
 
-The Linux ecosystem offers:
-
-- **Secret Service** D-Bus API. Implemented by GNOME Keyring (gnome-keyring-daemon) and by KWallet (via `kwalletd6`'s Secret Service compatibility layer).
-- **Direct GNOME Keyring** access (older, deprecated in favour of Secret Service).
-- **Direct KWallet** access (KDE-only, no GNOME story).
-- **Plain-text JSON file** under `~/.config/`. Universal but unsafe.
-- **OS-level full-disk encryption** as the only protection. Common in distros but does not protect a running session.
-- **No persistence** (prompt every connect). Bad UX, used by some lower-tier tools.
-
-The choice must work on both GNOME and KDE without per-DE branching, must have a maintained Rust binding, and must fail gracefully when the Secret Service is unavailable.
+Available choices include the Secret Service D-Bus API, desktop-specific keyring APIs, encrypted application files, plain files, or prompting on every connection.
 
 ## Decision
 
-Passwords are stored via the **Secret Service D-Bus API**, accessed through the **[`oo7`](https://crates.io/crates/oo7)** Rust crate.
+TablePro stores credentials through the Secret Service D-Bus API using the `oo7` Rust crate.
 
-- Schema name: `com.tablepro.linux.Password`.
-- Attributes: `connection-id` (the UUID).
-- Label: the human-readable connection name, kept in sync on rename.
-- Wrapper: `storage::secrets`, exposing `store_password`, `load_password`, `delete_password`.
+Items use the schema `com.tablepro.linux.Password` with connection and secret-kind attributes. The storage crate exposes typed functions for database passwords, SSH passwords, SSH key passphrases, and MCP secrets.
 
-When the Secret Service is unavailable (no daemon, sandbox without portal, headless system), the storage layer returns `Ok(None)` from `load_password`. The UI prompts the user at connect time. The app never falls back to writing passwords to plain files.
+If Secret Service is unavailable, loading returns no secret and the caller must request it again. The application never falls back to a plain credential file.
 
 ## Rationale
 
-Secret Service is the only Linux-wide secret API. Both major desktop environments implement it; both `seahorse` (GNOME) and `kwalletmanager` (KDE) display secrets stored under our schema correctly. Choosing a DE-specific API would require runtime DE detection and double the implementation cost.
+Secret Service is supported by GNOME Keyring and KWallet compatibility services. It gives the application one desktop-neutral API and lets users inspect or remove credentials with their normal keyring tools.
 
-`oo7` is the most active modern Rust binding for the Secret Service API, maintained by GNOME developers, keeps up with portal API additions, and has clean async API that fits our `tokio`-centric backend. The older `secret-service` crate is unmaintained; the older `libsecret` C-binding crates are heavier and require system development packages.
-
-Falling back to plain files is rejected. Storing user database passwords in cleartext on disk is a class of vulnerability we will not introduce. The only acceptable fallback is the prompt-every-time behaviour.
+`oo7` provides an async Rust interface that fits the storage crate. Keeping access behind `tablepro-storage` prevents UI and driver code from creating inconsistent schemas or fallback behavior.
 
 ## Consequences
 
 Accepted:
 
-- **System dependency.** `libsecret-1` development package required at build time on systems where `oo7` falls back to libsecret backend (the "compat" feature).
-- **Daemon dependency.** Headless or minimal Linux installs without `gnome-keyring-daemon` or `kwalletd` will not store passwords. We accept this and prompt instead.
-- **Flatpak portal.** In sandboxed builds, Secret Service access is mediated by `xdg-desktop-portal`. Verified working on Flatpak 1.16.4+. We pin runtime versions accordingly.
-- **One-way migration.** Once a connection's password is stored, it is keyed by UUID. Re-imports keep the same UUID; renames update the label only.
+- A desktop keyring service is required for persistent credentials.
+- Minimal or headless sessions may prompt for secrets again.
+- Sandboxed packages must verify Secret Service access through their desktop permissions.
+- Existing item attributes and identifiers need migration if the application identity changes.
 
 Gained:
 
-- Single API across GNOME and KDE.
-- Native integration with `seahorse` / `kwalletmanager` — users can audit and delete secrets through their distro's standard tools.
-- No password ever written to a regular file by the app.
-- A small, async-first, well-maintained Rust binding (`oo7`).
+- Credentials stay out of regular application files.
+- GNOME and KDE sessions use one storage API.
+- Secret values remain wrapped by `secrecy` until the driver boundary.
+- Keyring failure has a defined fail-safe path.
 
 ## Alternatives considered
 
-**Plain-text JSON file under `~/.config/`.** Rejected on security grounds. Even with file permissions of 600, it loses to `seahorse` for any threat model that includes "another process running as the same user".
+**Plain JSON with restrictive file permissions.** Rejected because credentials would remain directly readable by processes running as the user.
 
-**Direct libsecret C bindings.** Workable but adds a system-package dependency for a problem `oo7` solves at the Rust level.
+**Desktop-specific keyring backends.** Rejected because they would duplicate implementation and produce different behavior across environments.
 
-**KWallet-only on KDE, GNOME Keyring-only on GNOME.** Rejected on complexity. We would gain DE-specific UX (KWallet's session unlock prompt is friendlier in KDE) at the cost of doubling the storage backend implementation. Secret Service abstracts both.
+**Application-managed encrypted files.** Rejected because they require a master-key lifecycle, recovery design, and cryptographic storage format that the system keyring already provides.
 
-**No persistence; prompt every time.** Acceptable as the failsafe behaviour but unacceptable as the primary UX. Power users connect to dozens of databases per day.
-
-**Per-connection encrypted blob with a master password the user enters once per session.** Considered, rejected as YAGNI for the spike's user base. Revisit if a user explicitly requests it; the storage layer's variant model can absorb it.
+**Prompt on every connection.** Retained as the fallback when no Secret Service is available, but rejected as the normal user experience.

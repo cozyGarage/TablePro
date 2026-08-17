@@ -1,173 +1,94 @@
-# Production-readiness audit
+# Production readiness audit
 
-**Date**: 2026-08-13
+**Updated**: 2026-08-17
 
-**Branch**: `linux`
+**State**: useful for development and personal database work, not yet approved for trusted production writes or unattended agents
 
-**State**: capable personal database client; not ready for trusted production writes or unattended agents
+This audit describes the Linux Rust and GTK repository. [ROADMAP.md](../ROADMAP.md) tracks broader product work. This document focuses on behavior that must be proven before a public release.
 
-This document records current implementation and verification evidence. The repository-level [`PLAN.md`](../../PLAN.md) owns sequencing and acceptance criteria; [`ROADMAP.md`](../ROADMAP.md) is the concise status view.
+## Verified foundations
 
-## Evidence collected
+### Application
 
-At audit time:
+- Native GTK4 and libadwaita UI built with Relm4
+- Saved connections in XDG JSON files and secrets in Secret Service
+- Browse, SQL editor, and structure tabs
+- Inline inserts, updates, and deletes with save and discard paths
+- Workspace, preferences, window state, filters, and column widths persisted as JSON
+- Query history stored in SQLite with FTS5
+- SSH tunnels and nested jump chains
+- MCP over stdio and loopback HTTP, plus `tablepro-agentd`
 
-- The Rust workspace contains 15 crates and approximately 37,000 lines of Rust.
-- 387 fast local tests and 5 MCP policy integration tests passed; one Secret Service integration test was ignored.
-- The GTK application contributed 104 passing unit tests.
-- File-size and formatting gates passed.
-- `cargo deny check` and `cargo audit --no-fetch` passed. The unmaintained `paste` advisory is an explicitly allowed warning.
-- Full-workspace strict Clippy passed with Rust 1.93.0 and Arch stable Rust 1.97.1. Weekly CI now repeats the current-stable check with an explicit toolchain selector.
-- The full Rust 1.93 preflight passed, including 283 non-GTK unit tests and 5 MCP policy integration tests; one Secret Service test was ignored.
-- All 27 Docker driver integration tests passed: PostgreSQL 4, MySQL 4, SQL Server 9, and ClickHouse 10.
-- GTK end-to-end safety tests were not run because they do not yet exist; this remains a Phase 4 blocker.
-
-## What exists
-
-### Application workflows
-
-- Native GTK4/libadwaita application using Relm4
-- Saved connections in XDG JSON storage and secrets in Secret Service/libsecret
-- Multi-window, multi-tab browse, SQL editor, and structure workspace
-- Workspace restoration, connection recency, preferences, and persisted column widths
-- Virtualized data grid with sorting, parameterized filters, pagination, inline edit, staged inserts/updates/deletes, undo/redo, save, and discard
-- SQL editor with GtkSourceView highlighting, formatting, run-at-cursor, multiple statements, multiple result tabs, history recording, timeout, and cancel UI
-- Table structure editing for columns, indexes, and foreign keys
-- Query history backed by SQLite FTS5 with filtering, pinning, deletion, and export
-- CSV table export that pages through rows, plus JSON export
-- Server activity SQL, lock/replication views, session termination UI, and EXPLAIN display
-
-### Drivers
-
-Stable labels:
-
-- PostgreSQL
-- MySQL
-- SQLite
-- SQL Server, including password and current-ticket Kerberos authentication
-- ClickHouse
-
-Experimental labels:
-
-- Redis
-- MongoDB
-- DuckDB, behind the `duckdb` Cargo feature
-- Oracle, behind the `odpi` Cargo/native-client feature
-
-“Stable” currently means the common connect/browse/query/write path is implemented. It does not yet mean the full release matrix has been exercised for TLS, cancellation, reconnect, transactions, large results, and packaging.
-
-### Safety and automation foundations
+### Policy and audit
 
 - SQL classification through `sqlparser`
-- Environment-aware policy rules
-- Read-only enforcement before approval fallback, including unparseable SQL and data-changing CTEs
-- Administrative classification for PostgreSQL backend-control functions and MySQL `KILL`
-- Principal-aware guarded connection handles
-- Blast-radius estimation and agent result masking
-- Principal-aware GTK approval routing that denies when no application window is active
-- Hash-chained JSONL audit journal with durable mutation intents, terminal outcomes, legacy migration, and cross-process locking
-- Interactive transactions for PostgreSQL, MySQL, and SQLite
-- MCP over stdio and loopback HTTP with scoped tokens, connection allowlists, and rate limiting
-- Headless `tablepro-agentd`
-- SSH tunnels and nested jump chains
-- Five TLS modes with `VerifyFull` as the secure network default
+- Environment and read-only policy checks before execution
+- Token scopes and connection allowlists for MCP callers
+- Principal-aware approval routing in the GTK application
+- Result masking for governed agent access
+- Hash-chained JSONL audit records
+- Durable mutation intents and terminal outcomes
+- Fail-closed behavior when required audit storage is unavailable
+- Recovery detection for unresolved write outcomes across restarts
+- Cross-process journal locking and restrictive file permissions
 
-### Engineering and distribution foundations
+### Driver verification
 
-- Layered Rust workspace with static driver registration
-- Typed errors and user-facing error translation
-- File-size ratchet, rustfmt, Clippy, unit tests, cargo-deny, and cargo-audit checks
-- Docker integration suites for PostgreSQL, MySQL, SQL Server, and ClickHouse in CI
-- Debian, AUR, and Flatpak scaffolding
-- gettext infrastructure and an accessibility checklist
+The Docker integration suites cover PostgreSQL, MySQL, SQL Server, and ClickHouse against real servers. Unit tests cover shared core, policy, storage, MCP, SSH, driver, and application logic.
 
-## Phase 1 corrections verified in code and local tests
+PostgreSQL server-side cancellation is implemented and real-driver verified. Controlled query and execute paths use a separate PostgreSQL control pool to request cancellation. Integration tests start `pg_sleep`, confirm the tagged query is active in `pg_stat_activity`, cancel or time it out, confirm it leaves `pg_stat_activity`, and run another query through the pool. Transaction cancellation is also verified with a later rollback.
 
-- `DatabaseService` starts with deny and the GUI installs its approval router during startup, independently of MCP startup.
-- Production GUI and daemon code do not construct `AutoApproveSink`; agentd exposes deny and interactive TTY modes only.
-- GTK approval without an active application window denies, as does closing or dismissing the dialog.
-- Read-only enforcement runs before unparseable-statement handling.
-- PostgreSQL backend-control functions and MySQL `KILL` are administrative writes. Token-aware detection covers predicates and wrapper expressions without treating comments or string literals as calls.
-- Session termination accepts only positive numeric identifiers before driver-specific SQL is built.
-- MCP no longer advertises or dispatches `search_query_history`.
-- Partial environment and connection policy sections overlay secure environment defaults; omitted mask patterns retain sensitive-field defaults.
-- Transactional batches authorize once per batch rather than once per statement.
+Cancellation is no longer a release blocker by itself. Release testing must still prove the installed GTK cancel flow and audit outcome behavior as part of the targeted GTK safety suite.
 
-These corrections are implemented and unit/integration tested. They are not yet release-verified through the real GTK dismissal and approve-once flows; Phase 4 owns those tests.
+## Remaining release blockers
 
-## Phase 2 audit corrections verified in code and local tests
+### PostgreSQL TLS through SSH and reconnect fixture
 
-- `AuditSink::record` reports persistence failures.
-- State-changing operations persist redacted, hash-correlated intent before driver execution and a terminal outcome afterward.
-- Production, staging, and agent operations fail closed when required audit records cannot be written.
-- Local and development human writes require audit by default. Best-effort writes require the explicit `human_allow_unaudited_writes` policy setting.
-- Agentd refuses startup without a valid journal or while unresolved write outcomes exist. In-app MCP does not start when audit initialization fails.
-- Unknown, timed-out, dropped, or ambiguous write outcomes disable further governed writes across restarts and concurrent processes.
-- Journal initialization verifies the chain and writability, enforces mode `0600`, recovers safe trailing fragments, rotates verified Phase 1 journals intact, and serializes writers with process locks.
-- Tests cover 1,000 concurrent appends, two subprocess writers, restart recovery, legacy migration, and MCP timeout poisoning.
+There is no deterministic release fixture that covers the full PostgreSQL TLS, SSH tunnel, certificate identity, disconnect, and reconnect path. The model separates the physical tunnel endpoint from the database service identity, but the supported PostgreSQL connector path must prove hostname verification against the original service while dialing the forwarded endpoint.
 
-These corrections are locally verified. PostgreSQL server-side cancellation and installed GTK warning behavior remain release checks in Phases 3 and 4.
+The fixture must fail on a wrong hostname or untrusted certificate, pass with the expected certificate, survive the supported reconnect path, and confirm that verification is never lowered without an explicit user choice.
 
-## Remaining release-blocking findings
+### Targeted GTK safety tests
 
-### 1. PostgreSQL `VerifyFull` through SSH is unresolved
+The application does not yet have deterministic GTK tests for its highest-risk cross-layer flows. Required tests are planned for:
 
-The core model separates the physical dial endpoint from the database service identity. SQL Server consumes this for TLS and Kerberos, but sqlx 0.8.6 does not expose separate PostgreSQL dial and TLS-server-name inputs.
+1. Denial when an approval dialog is dismissed or no active application window can approve.
+2. Approval scope and write execution through the real GTK route.
+3. Audit intent, terminal outcome, cancel, timeout, and warning behavior as seen by the installed application.
 
-Required correction: use a supported sqlx API, a reviewed sqlx patch, or a connector that verifies the original hostname over the tunneled stream. Never downgrade verification silently.
+These tests must run with a real GTK main loop and disposable database fixtures. Unit tests of service logic do not replace them.
 
-### 2. Cancellation is not proven on the server
+### Release packaging verification
 
-The editor can race a cancellation token or timeout against the query future. Dropping a future does not prove PostgreSQL stopped the operation, and it can prevent a terminal audit outcome.
+AUR and Omarchy are the first release target. Installation, desktop launch, keyring access, SSH, Kerberos, policy file handling, `tablepro-agentd`, upgrades, and uninstall behavior have not been release-verified as one installed system.
 
-Required correction: add a cancellable driver contract, send server cancellation, confirm the query leaves `pg_stat_activity`, discard an untrustworthy connection, and record cancelled, timed-out, or unknown outcomes.
+Flatpak files exist, but Flatpak publication is later and is not the first release gate.
 
-### 3. Release tests are missing
+## Known limits
 
-There is no deterministic PostgreSQL TLS/SSH/reconnect fixture and no GTK end-to-end safety test. Unit coverage is strong, but the most important safety properties cross driver, policy, storage, and UI boundaries.
+- Parquet export reports unsupported. CSV and JSON export are the available paths.
+- Arbitrary query results are materialized up to configured limits rather than streamed end to end.
+- TLS fingerprint fields are not a finished storage, UI, and driver workflow.
+- SSH jump chains can be loaded from saved connection JSON but are not fully editable in the connection form.
+- gettext infrastructure exists, but translation coverage is incomplete.
+- Accessibility work needs full keyboard and screen-reader validation.
+- Stable driver labels cover common connection, browse, query, and write paths. They do not mean every TLS, reconnect, transaction, large-result, and packaging case has passed a release fixture.
 
-Required correction: add the focused release fixture and three GTK approval/audit flows defined in `PLAN.md`. Those tests must promote the Phase 1 authorization work from locally verified to release-verified.
+## Current decision
 
-## Partial or overstated features
+Reasonable uses today:
 
-- Parquet export is a stub that returns Unsupported; only CSV streaming is implemented.
-- Arbitrary query results are still materialized, with a high row cap; they are not true result streaming.
-- TLS fingerprint fields exist in the model but are not a complete storage/UI/driver workflow.
-- SSH jump chains exist in saved JSON but are not fully editable in the GTK connection form.
-- Packaging files build artifacts, but installation, launch, update, keyring, SSH, and Kerberos behavior are not release-verified.
-- English gettext infrastructure exists; complete translations do not.
-- Accessibility labels/checklists exist; full keyboard and screen-reader validation does not.
-
-## Swift parity position
-
-The Linux application matches the Swift application's core connection, query, browse, edit, structure, history, SSH, and explain workflows only partially. High-value gaps for Platform/DBA/Data Engineering work include:
-
-- Schema-aware autocomplete, named parameters, SQL favorites, and quick switching
-- SQL file workflows
-- Views, routines, triggers, sequences, extensions, users, roles, and privileges
-- Backup/restore and CSV/JSON/SQL import
-- Connection URL import, organization, reusable SSH profiles, and certificate configuration
-- True large-result streaming
-- Redshift/CockroachDB profiles, Trino, Snowflake, and BigQuery
-
-Apple sync, Handoff, Swift plugins, licensing, team accounts, and Sparkle are intentional non-ports.
-
-## Production readiness decision
-
-Safe for current development and personal testing:
-
-- Local/dev browsing and querying against non-critical databases
+- Development against disposable databases
+- Personal testing against non-critical databases
 - SQLite-based UI work
-- Driver development with disposable integration databases
-- Read-only exploration when the user independently limits database credentials
+- Read-only exploration with independently restricted database credentials
+- Driver integration work in containers
 
-Not approved as trusted behavior yet:
+Not approved yet:
 
-- Production mutations
+- Trusted production mutations
 - Unattended MCP or agent writes
-
-- Assuming cancel stopped a server query
-- PostgreSQL `VerifyFull` through SSH
+- PostgreSQL `VerifyFull` through an SSH tunnel without the release fixture
 - Public stable package distribution
 
-Re-run this audit after Phases 1–4 of `PLAN.md` are release-verified.
+Re-run this audit after the PostgreSQL TLS, SSH, and reconnect fixture, targeted GTK safety tests, and installed AUR or Omarchy package checks pass.

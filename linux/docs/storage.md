@@ -1,110 +1,75 @@
 # Storage
 
-Three persistence backends, used for different data shapes. Each is owned by the `storage` crate; nothing else in the workspace touches the filesystem, libsecret, or `gio::Settings` directly.
+TablePro uses XDG files for local state, SQLite for query history, a JSONL audit journal, and Secret Service for credentials. The code is split between `tablepro-storage` and focused application services.
 
-| Data | Backend | Crate API |
+## Locations
+
+| Data | Format | Default path |
 |---|---|---|
-| Connection metadata (host, port, db, etc.) | JSON file in XDG | `storage::connections` |
-| Passwords | libsecret via `oo7` | `storage::secrets` |
-| App preferences (theme, last window size, etc.) | `gio::Settings` (GSchema) | `storage::settings` |
-| Query history | SQLite (FTS5) — **deferred to Phase 2** | `storage::history` (does not exist yet) |
-| Tab state | JSON file — **deferred to Phase 2** | `storage::tabs` (does not exist yet) |
+| Saved connections | Versioned JSON | `$XDG_CONFIG_HOME/tablepro/connections.json` |
+| Preferences | JSON | `$XDG_CONFIG_HOME/tablepro/preferences.json` |
+| Window state | JSON | `$XDG_CONFIG_HOME/tablepro/window.json` |
+| Workspace tabs | JSON | `$XDG_CONFIG_HOME/tablepro/workspace_state.json` |
+| Column widths | JSON | `$XDG_CONFIG_HOME/tablepro/column_widths.json` |
+| Table filters | JSON | `$XDG_CONFIG_HOME/tablepro/filter_settings.json` |
+| Query history | SQLite with FTS5 | `$XDG_CONFIG_HOME/tablepro/history.db` |
+| Audit journal | Hash-chained JSONL | `$XDG_DATA_HOME/tablepro/audit.jsonl` |
+| Database passwords, SSH passwords, SSH key passphrases, MCP secrets | Secret Service through `oo7` | Desktop keyring |
 
-## File locations
+If `XDG_CONFIG_HOME` is unset, config storage falls back to `~/.config/tablepro/`. If `XDG_DATA_HOME` is unset, the audit journal falls back to `~/.local/share/tablepro/`.
 
-All paths follow the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html). Defaults assume the user has not overridden `XDG_CONFIG_HOME` or `XDG_DATA_HOME`.
+The current history database is under XDG config because that is what `query_history::db_path()` implements. Do not document or migrate it to XDG data without a code change and a tested migration.
 
-| Path | Purpose |
-|---|---|
-| `$XDG_CONFIG_HOME/tablepro/connections.json` | Connection list, ordered, with metadata |
-| `$XDG_CONFIG_HOME/tablepro/groups.json` | Connection groups |
-| `$XDG_DATA_HOME/tablepro/history.db` | SQLite FTS5 query history (Phase 2) |
-| `$XDG_DATA_HOME/tablepro/tabs.json` | Open-tab snapshots (Phase 2) |
-| `$XDG_CACHE_HOME/tablepro/` | Anything regenerable. Schema caches, parsed manifests. |
+## Saved connections
 
-In Flatpak, these resolve under the sandboxed home, which is the correct behaviour. Do not reach outside the sandbox.
+`tablepro-storage` exposes `load_connections`, `save_connections`, `delete_connection`, and `touch_last_opened`. The file has a top-level version and a connection array. Loading rejects unsupported versions.
 
-## Connection metadata
+Connection records contain host, port, database, username, TLS mode, read-only state, authentication mode, environment, optional SSH configuration, and optional last-opened time. Passwords and SSH secrets are not part of the JSON record.
 
-`storage::connections` exposes:
+`save_connections` writes a temporary file beside `connections.json` and renames it over the destination. The application JSON services use the same write-then-rename shape with per-process temporary names. These writes do not claim crash durability beyond what the current code provides.
 
-```rust
-pub async fn load_connections() -> Result<Vec<SavedConnection>, StorageError>;
-pub async fn save_connections(connections: &[SavedConnection]) -> Result<(), StorageError>;
-pub async fn save_connection(connection: &SavedConnection) -> Result<(), StorageError>;
-pub async fn delete_connection(id: ConnectionId) -> Result<(), StorageError>;
-```
+## Preferences and UI state
 
-Implementation rules:
+Application services own the JSON files for preferences, window state, workspace state, column widths, and table filters. They read from the XDG config directory and use defaults when a file is absent or cannot be decoded.
 
-- Writes are atomic: write to `connections.json.tmp`, fsync, rename. Same pattern as the macOS app's `ConnectionStorage`.
-- The JSON schema includes a `version` field. Migrations live in `storage::connections::migrate`. Never silently change the on-disk shape.
-- A `SavedConnection` does **not** carry the password. Passwords are stored separately in libsecret, keyed by the connection's UUID.
+Workspace state is keyed by connection UUID and limited before it is written. Unknown tab variants deserialize as `Unknown` and are dropped during restore. This lets an older build ignore a newer tab kind without rejecting the whole workspace file.
 
-## Passwords with libsecret
+## Query history
 
-`storage::secrets` exposes:
+`tablepro_storage::query_history` owns a single SQLite pool. `init()` creates `history.db`, enables WAL mode, creates the `history` table, and creates an FTS5 virtual table with triggers that follow inserts, deletes, and query text updates.
 
-```rust
-pub async fn store_password(id: ConnectionId, password: &str) -> Result<(), StorageError>;
-pub async fn load_password(id: ConnectionId) -> Result<Option<String>, StorageError>;
-pub async fn delete_password(id: ConnectionId) -> Result<(), StorageError>;
-```
+History records include query text, driver and connection identity, execution time, duration, affected rows, success, cancellation, pin state, and an optional error. Search supports text, connection, outcome, time, and limit filters. Unpinned entries can be pruned by age.
 
-Backed by the [`oo7`](https://crates.io/crates/oo7) crate, which speaks the Secret Service D-Bus API. Both GNOME Keyring and KWallet implement it.
+A query larger than 1 MiB is rejected by the history recorder.
 
-Notes:
+## Audit journal
 
-- Schema name: `com.tablepro.linux.Password`. Attributes: `connection-id`. Label: human-readable connection name (kept in sync on rename).
-- If libsecret is not available (rare; truly minimal Linux installs), `load_password` returns `Ok(None)` and the UI prompts at connect time. The app does not crash and does not write passwords to plain files as a fallback.
-- Never log a password, ever. Wrap them in `secrecy::SecretString` from the `secrecy` crate before they leave the storage layer.
+`AuditJournal::open_default()` opens `$XDG_DATA_HOME/tablepro/audit.jsonl`. Initialization creates the parent directory, sets the journal mode to `0600`, verifies the hash chain, recovers safe trailing fragments, and reports unresolved operation IDs.
 
-## App preferences with `gio::Settings`
+Each record contains a sequence number, previous hash, current hash, and audit event. Mutation intents and transaction commit records use the durable append path. File locks serialize initialization and appends across processes.
 
-A GSchema XML file lives at `linux/data/com.tablepro.linux.gschema.xml`. It is compiled at build time and installed by Flatpak / `meson` / `cargo` build scripts.
+The GTK application disables governed writes and MCP startup when the required audit journal cannot be opened. `tablepro-agentd` also refuses startup when the journal is unavailable or unresolved operations are recovered.
 
-Schema namespace: `com.tablepro.linux`. Keys we expect to start with:
+## Secrets
 
-| Key | Type | Default |
-|---|---|---|
-| `theme` | `s` (`auto` / `light` / `dark`) | `auto` |
-| `editor-font` | `s` | `JetBrains Mono 11` |
-| `editor-tab-width` | `u` | `4` |
-| `result-grid-row-height` | `u` | `28` |
-| `last-window-width` | `u` | `1200` |
-| `last-window-height` | `u` | `760` |
-| `last-window-maximised` | `b` | `false` |
+The secrets module uses `oo7::Keyring`, which talks to the Linux Secret Service API. Items use the schema `com.tablepro.linux.Password` and attributes for `connection-id` and `kind`.
 
-`storage::settings` wraps `gio::Settings` so the rest of the app reads typed values:
+The implemented kinds are:
 
-```rust
-pub fn theme() -> Theme;
-pub fn set_theme(theme: Theme);
-pub fn editor_font() -> String;
-pub fn last_window_size() -> (u32, u32);
-```
+- Database password
+- SSH password
+- SSH private-key passphrase
+- MCP token secret
 
-Do not call `gio::Settings` directly from UI code. Always go through `storage::settings`. This isolates the schema from accidental misuse and makes future migration possible.
+Loaded values are returned as `secrecy::SecretString`. If Secret Service cannot be opened during a load, the storage layer logs a warning and returns no secret. It does not copy the value into a JSON file.
 
-## Errors
+## Change rules
 
-`StorageError` is a `thiserror` enum exported from `storage`. Variants:
+When changing storage behavior:
 
-- `Io(std::io::Error)`
-- `Serde(serde_json::Error)`
-- `Secret(oo7::Error)`
-- `Schema(String)` — schema mismatch, migration failed
-- `NotFound`
-
-UI code matches on these variants to display useful messages, not the raw `Display` output. See [error-handling.md](error-handling.md).
-
-## Migration policy
-
-When the on-disk shape changes:
-
-1. Bump the `version` field in the schema.
-2. Add a migration step in `storage::*::migrate`.
-3. Test loading the previous version's fixture in `tests/`.
-4. Update this file and the changelog.
-
-Never break old user data without a migration step. Users have years-worth of saved connections.
+1. Keep secrets out of JSON and logs.
+2. Preserve existing file locations unless the change includes a tested migration.
+3. Keep saved connection versions explicit and reject versions the code cannot read.
+4. Test missing files, malformed or unsupported data, round trips, and migration behavior.
+5. Keep audit failures fail-closed for governed writes.
+6. Update this document from the implementation, not from planned APIs.

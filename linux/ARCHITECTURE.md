@@ -1,202 +1,127 @@
 # Architecture
 
-TablePro Linux is a layered Rust workspace with strict, one-directional dependencies. The shape is chosen so that adding a database engine touches one crate, replacing the GUI framework would touch one crate, and the domain layer never imports either.
+TablePro is a Linux-only Rust workspace rooted in `linux/`. GTK4 and Relm4 provide the desktop UI. Domain, policy, storage, SSH, MCP, and database drivers are separate crates so they can be tested without starting the application.
 
-## Crate layout
+## Workspace layout
 
-```
+```text
 linux/
-├── Cargo.toml                     workspace manifest
-├── flatpak/                       Flatpak manifest, icons, .desktop file
-└── crates/
-    ├── app/                       binary, GTK4 entry point, Relm4 components
-    ├── agentd/                    headless MCP daemon (no GTK)
-    ├── mcp/                       MCP bridge, tokens, rate limit
-    ├── policy/                    classify, PolicyGuard, mask, blast radius
-    ├── core/                      domain types and traits, no GUI deps
-    ├── storage/                   libsecret, JSON, history, audit journal
-    ├── ssh/                       russh tunnel
-    └── drivers/
-        ├── postgres/              sqlx-postgres impl
-        ├── mysql/                 sqlx-mysql impl
-        ├── sqlite/                sqlx-sqlite impl
-        ├── mssql/                 tiberius impl
-        └── ...                    one crate per database engine
+├── Cargo.toml
+├── crates/
+│   ├── app/                 GTK4 and Relm4 application binary
+│   ├── agentd/              headless MCP daemon
+│   ├── core/                shared domain types and driver traits
+│   ├── policy/              SQL classification, approval, masking, and audit rules
+│   ├── mcp/                 MCP transport, tokens, allowlists, and rate limits
+│   ├── storage/             connections, secrets, query history, and audit journal
+│   ├── ssh/                 SSH tunnels and jump chains
+│   └── drivers/             one crate per database engine
+├── packaging/               AUR and Debian package files
+├── flatpak/                 later Flatpak packaging work
+└── scripts/                 local checks, integration tests, and package helpers
 ```
 
-## Dependency graph
+The workspace currently has these driver crates: PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse, Redis, MongoDB, DuckDB, and Oracle.
 
+## Dependency direction
+
+`tablepro-core` defines shared connection options, values, errors, operation control, and driver traits. It does not depend on another workspace crate.
+
+Driver crates implement the core traits. They do not depend on GTK. `tablepro-policy` applies authorization and audit rules around core connections. `tablepro-storage` owns saved connections, Secret Service access, query history, and the audit journal. `tablepro-mcp` combines core, policy, and storage behavior for MCP clients.
+
+`tablepro-app` and `tablepro-agentd` are composition roots. They register drivers and assemble policy, storage, transport, and connection services for their process.
+
+```mermaid
+graph TD
+    App[tablepro-app] --> Core[tablepro-core]
+    App --> Policy[tablepro-policy]
+    App --> Storage[tablepro-storage]
+    App --> MCP[tablepro-mcp]
+    App --> SSH[tablepro-ssh]
+    App --> Drivers[driver crates]
+    Agent[tablepro-agentd] --> MCP
+    Agent --> Policy
+    Agent --> Storage
+    Agent --> Drivers
+    MCP --> Core
+    MCP --> Policy
+    MCP --> Storage
+    Policy --> Core
+    Drivers --> Core
 ```
-                       ┌─────────┐     ┌──────────┐
-                       │   app   │     │  agentd  │
-                       └────┬────┘     └─────┬────┘
-                  ┌─────────┼──────────┐     │
-                  ▼         ▼          ▼     ▼
-             ┌────────┐ ┌─────────┐  ┌─────┐
-             │ policy │ │   mcp   │  │ mcp │
-             └───┬────┘ └────┬────┘  └──┬──┘
-                 │           │          │
-                 ▼           ▼          ▼
-             ┌────────┐ ┌─────────┐ ┌────────┐
-             │  core  │ │ storage │ │ policy │
-             └────────┘ └────┬────┘ └───┬────┘
-                             │          │
-                             └────► core ◄──── drivers/*
-```
 
-Rules, enforced by review:
-
-- `core` depends on **no other workspace crate**.
-- `policy` depends on `core` only.
-- `storage` depends on `core` + `policy` (audit types) + `ssh`.
-- `mcp` depends on `core` + `policy` + `storage`.
-- Each `drivers/<engine>` crate depends on `core` only.
-- `app` and `agentd` are composition roots.
-- Every consumer obtains connections only through a policy-gated handle.
-
-Consequences:
-
-- Adding a driver does not touch `core`, `storage`, or any other driver.
-- Replacing the GUI framework would require rewriting only `app`.
-- Drivers can be unit-tested against `core` traits without pulling GTK.
-- The build graph is shallow — incremental rebuilds stay fast.
+Database drivers are linked into the binaries and registered in code. There is no runtime plugin ABI or driver discovery.
 
 ## Policy boundaries
 
-Two layers gate agent and MCP access. They answer different questions and must not be collapsed into one check.
+MCP authorization and SQL policy answer different questions:
 
-| Layer | Answers | Lives in |
-|---|---|---|
-| MCP token scopes + connection allowlist | Who is calling, and which saved connections may they touch | `crates/mcp` (`McpScope`, `TokenPermissions`, allowlist) |
-| `PolicyGuard` | What SQL may run (classify → rules → approval → mask → audit) | `crates/policy` |
+| Boundary | Responsibility |
+|---|---|
+| MCP token scopes and connection allowlists | Decide which saved connections and MCP tools a caller may access |
+| `PolicyGuard` | Classify SQL, apply environment rules, request approval, mask results, and record audit events |
 
-Rules:
+A token scope never bypasses `PolicyGuard`. Policy approval never bypasses a token's connection allowlist. The GTK app and `tablepro-agentd` build guarded connection handles before governed operations run.
 
-- Scopes never substitute for policy. A token with `ToolsWrite` still hits `PolicyGuard` on every statement.
-- Policy never replaces allowlists. An approved write on a connection outside the token allowlist is still denied at the bridge.
-- GUI, MCP (in-app), and `tablepro-agentd` all obtain connections only through a provider that wraps `PolicyGuard`. Preview/`begin` paths use the same guard.
+Writes record an audit intent before driver execution and a terminal outcome afterward. Required audit failures deny governed writes. Recovered unresolved outcomes also keep governed writes disabled until they are handled.
 
-## Composition root
+## Async and GTK ownership
 
-The driver registry is built once in `app::main` before the GTK application starts running:
+GTK objects belong to the GLib main context. Database calls and other blocking or async service work run on Tokio through Relm4 command tasks. Results return to component update methods as messages.
 
-```rust
-fn build_registry() -> DriverRegistry {
-    let mut r = DriverRegistry::new();
-    r.register(Arc::new(drivers_postgres::PgDriver));
-    r.register(Arc::new(drivers_mysql::MysqlDriver));
-    r.register(Arc::new(drivers_sqlite::SqliteDriver));
-    r
-}
-```
+Use component-scoped commands for work tied to a tab or component lifetime. Detached Relm4 tasks are reserved for independent persistence and cleanup work. Do not access GTK widgets from Tokio worker threads.
 
-Adding a new driver = adding one workspace member + one `register` call. There is no runtime discovery, no ABI versioning, no plugin manifest. The trade-off is documented in [docs/decisions/0001-no-plugin-system.md](docs/decisions/0001-no-plugin-system.md).
+The application creates a short-lived Tokio runtime during startup to initialize and prune query history before Relm4 starts the main application loop.
 
-## Async architecture
+## UI structure
 
-Two runtimes coexist:
+The application owns an `AdwTabView` for connection workspaces. Tabs are represented by typed Rust state and backed by Relm4 controllers. The application component routes child output by tab UUID so tab controllers do not depend on each other.
 
-- **glib's main context** runs the UI. Single-threaded. Owns all GTK widgets.
-- **tokio runtime** owned by Relm4 runs all DB driver work and other async tasks.
+Table tabs combine data browsing and structure views. Pending row changes and pending structure changes are tracked by tab UUID. Closing, saving, discarding, and reconnecting pass through application-level routing so cross-tab state is handled in one place.
 
-Bridging uses Relm4's built-in primitives instead of hand-rolled channels:
-
-- `sender.command(move |out, shutdown| shutdown.register(async move { ... out.send(...) }).drop_on_shutdown())` — a component-scoped tokio task that cancels when the component drops. The `out` sender feeds `CmdOutput` back into the component's update loop on the GTK thread. Used for every per-tab fetch (browse rows, schema introspection, save transaction).
-- `relm4::spawn(async move { ... })` — fire-and-forget tokio task with no component lifetime tie. Used for storage writes (`touch_last_opened`, `query_history::record`, column-width persistence) and other side-effect work.
-- `sender.input(AppMsg::...)` from inside an async block routes back into the component's `update` on the GTK thread. Combined with `sender.command`, this is how a "fetch-then-render" round trip lands its result on the right widget.
-
-`main.rs` builds a tiny `tokio::runtime::Builder::new_multi_thread().worker_threads(1)` runtime exclusively to `block_on` the history-DB init / prune at startup, then `shutdown_timeout`s it before `RelmApp::run` takes over. The query-history sqlx pool is stored in a `OnceLock` and reused from Relm4's runtime afterward.
-
-## UI architecture: Relm4
-
-The `app` crate uses [Relm4](https://relm4.org) for component-based UI structure.
-
-- **Component**: a unit of UI with explicit `Init`, `Input`, `Output`, `CmdOutput` types. State is private. All transitions go through `update`.
-- **AsyncComponent**: same shape, but `init` and `update` may be `async`. Used for components that load data on creation.
-- **Factory**: drives a list / grid of homogeneous child components from a model. Used for the table sidebar and similar lists.
-- **CmdOutput**: how a component receives async results. The tokio bridge sends `CmdOutput` messages back into the component's update loop.
-
-See [docs/state-management.md](docs/state-management.md) for the patterns and naming we use.
+Workspace state is persisted per connection. Unknown persisted tab kinds deserialize to an `Unknown` variant and are dropped during restore instead of failing the whole file.
 
 ## Driver contract
 
-Every driver crate exports a single zero-sized struct that implements `core::DatabaseDriver`. The trait is async (via `async_trait`), small, and stable.
+Each driver exports a type that implements `tablepro_core::DatabaseDriver`. A successful connection returns a boxed `Connection` trait object. The connection trait covers query execution, parameterized operations, schema inspection, transactions, server activity, and controlled cancellation where supported.
 
-```rust
-#[async_trait::async_trait]
-pub trait DatabaseDriver: Send + Sync {
-    fn id(&self) -> &'static str;
-    fn display_name(&self) -> &'static str;
-    fn default_port(&self) -> u16;
-    async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError>;
-}
-```
+`OperationControl` carries a cancellation token and an optional deadline. PostgreSQL controlled operations send a server cancellation request through a separate control pool, wait for the original operation to finish, and only return a connection to the pool when it is safe to reuse. Real PostgreSQL integration tests verify that cancelled and timed-out queries leave `pg_stat_activity` and that later queries still work.
 
-A `Connection` exposes the operations that `app` needs: list tables, fetch rows, run a query, etc. The full surface is defined in `core::connection`.
-
-The full step-by-step guide for adding a driver lives in [docs/adding-drivers.md](docs/adding-drivers.md).
-
-## Workspace tab system
-
-The active connection drives a single `AdwTabView` hosting heterogeneous tabs. The `App` component owns the strip; tabs are typed via the `WorkspaceTab` enum:
-
-```rust
-pub enum WorkspaceTab {
-    Editor(EditorTabSlot),     // SQL editor, free-form query
-    Structure(StructureTabSlot), // New-Table draft only (Edit promotes to Table)
-    Table(TableTabSlot),       // (schema, table) entity with Data / Structure
-                               // sub-views toggled via AdwViewSwitcher
-}
-```
-
-Each tab is a Relm4 `Controller<T>` whose widget the `AdwTabView` adopts. `App` keeps a `HashMap<Uuid, WorkspaceTab>` keyed by the tab's UUID; the canonical display order comes from `tab_view.pages()` (drag-reorderable). The UUID is stashed on the `AdwTabPage` via `glib::Quark` qdata so close / right-click actions can recover it.
-
-App routing is hub-and-spoke: every per-tab event becomes an output that App's `forward(...)` closure tags with the tab's UUID and re-emits as an `AppMsg::*ForTab(id, ...)`. App's `update` looks up the slot and dispatches back to the controller's input. This keeps the per-tab controllers ignorant of each other and gives App one place to enforce cross-tab invariants (refetch siblings after Save, close all tabs for a dropped table, etc.).
-
-Reopening a closed tab uses a 10-deep `VecDeque<ClosedTabDescriptor>` snapshot taken in `finish_close_workspace_tab` before the slot is dropped. The stack clears on disconnect because descriptors reference tables in the active connection.
-
-## Per-tab pending-change registries
-
-Two parallel thread-local registries hold the in-flight edit state for each tab, keyed by the same UUID as the workspace slot:
-
-| Registry | What it tracks | Materialised by |
-|---|---|---|
-| `services::change_tracker` | Row-level INSERT / UPDATE / DELETE for browse tabs | `BrowseTab::commit_save` → `Vec<(String, Vec<Value>)>` |
-| `services::structure_tracker` | Column / index / FK / table-rename DDL for structure tabs | `sql_ddl::materialize_ops` → `Vec<String>` |
-
-Both registries live in `thread_local!` `RefCell<HashMap<Uuid, _>>` because relm4 + GTK is single-threaded on the UI side, and a single map keyed by tab UUID is simpler than passing trackers through every component handler. Helpers (`with_tab`, `with_tab_ref`, `open_tab`, `close_tab`, `any_pending_globally`) are the only public surface.
-
-A `Table` tab owns BOTH a row tracker and a DDL tracker against the same UUID. `close_workspace_tab_by_id` closes both registries; the close-with-pending dialog ORs both `has_pending()` flags and may dispatch up to two save transactions, gated through a `close_after_save: HashMap<Uuid, u32>` counter.
-
-The Structure tab is **snapshot + diff**, not per-op log. `original_*` snapshots capture the load-time schema; the diff against the live model produces ops via `sql_ddl::diff_to_ops`. Discard restores the snapshot. There is no per-op undo — Discard is the only restore point. The tracker just caches the most recent diff so out-of-band callers (close prompt, save dispatcher) read the same op list without re-deriving.
+See [docs/adding-drivers.md](docs/adding-drivers.md) for registration and test steps.
 
 ## Persistence
 
-| Data | Backend | Path / table |
+| Data | Backend | Default location |
 |---|---|---|
-| Saved connections | JSON, atomic temp-file rename | `$XDG_CONFIG_HOME/tablepro/connections.json` |
-| Connection passwords + SSH secrets | libsecret via `oo7` (Secret Service / KWallet) | keyring item per connection UUID |
-| Per-connection workspace tabs | JSON, atomic temp-file rename, debounced 500 ms | `$XDG_DATA_HOME/tablepro/workspace.json` |
-| Query history | SQLite + FTS5 virtual table | `$XDG_DATA_HOME/tablepro/history.db` |
-| Application preferences | JSON, atomic temp-file rename | `$XDG_CONFIG_HOME/tablepro/preferences.json` |
-| Window size / position | JSON | `$XDG_CONFIG_HOME/tablepro/window.json` |
-| Per-table column widths | JSON | `$XDG_CONFIG_HOME/tablepro/column_widths.json` |
+| Saved connections | Versioned JSON | `$XDG_CONFIG_HOME/tablepro/connections.json` |
+| Preferences | JSON | `$XDG_CONFIG_HOME/tablepro/preferences.json` |
+| Window state | JSON | `$XDG_CONFIG_HOME/tablepro/window.json` |
+| Workspace tabs | JSON | `$XDG_CONFIG_HOME/tablepro/workspace_state.json` |
+| Column widths | JSON | `$XDG_CONFIG_HOME/tablepro/column_widths.json` |
+| Table filters | JSON | `$XDG_CONFIG_HOME/tablepro/filter_settings.json` |
+| Query history | SQLite with FTS5 | `$XDG_CONFIG_HOME/tablepro/history.db` |
+| Audit records | Hash-chained JSONL | `$XDG_DATA_HOME/tablepro/audit.jsonl` |
+| Passwords and SSH secrets | Secret Service through `oo7` | Desktop keyring |
 
-Forward compat: `WorkspaceTabRecord` uses `#[serde(other)] Unknown` so an old binary reading a newer file silently skips unknown variants instead of failing the whole load. `clamp_connection` runs on load to migrate legacy variants (`Browse`, `Structure { schema, table }`) into the unified `Table` shape.
+When an XDG variable is unset, config files fall back to `~/.config/tablepro/` and the audit journal falls back to `~/.local/share/tablepro/`.
 
-`SavedConnection::last_opened_at: Option<DateTime<Utc>>` is stamped on each successful connect via `touch_last_opened`. The welcome view sorts by recency-first with alphabetical tiebreaker; never-opened entries fall to the bottom.
+See [docs/storage.md](docs/storage.md) for details verified against the current implementation.
 
-## Build & CI
+## Build and CI
 
-The host runner image (`ubuntu-24.04`) ships glib 2.80, but the workspace pins `libadwaita = { version = "0.9", features = ["v1_6", "gtk_v4_6"] }` and `relm4 = { ..., features = ["gnome_47"] }`. Both `v1_6` and `gnome_47` transitively require `gio-2.0 >= 2.82` via `gio-sys`, so `cargo clippy --all-targets` fails the system-deps check on the host runner.
+The default full check excludes the optional DuckDB driver because it compiles a large native dependency tree:
 
-`.github/workflows/build-linux.yml` runs the **Fast checks** job inside a `container: ubuntu:25.10` (glib 2.84). The container is minimal so the install step has to pull `ca-certificates` + `curl` + `git` before rust-toolchain and Swatinem can run; full list of `-dev` packages stays the same. The **integration** job stays on the host runner because the driver crates depend only on `tablepro-core` and don't pull libadwaita.
+```bash
+cargo clippy --workspace --exclude tablepro-driver-duckdb --all-targets -- -D warnings
+cargo test --workspace --exclude tablepro-driver-duckdb --lib --bins
+```
 
-Bumping libadwaita past 1.6 (or relm4 past `gnome_47`) means revisiting whether 25.10 still satisfies the new glib floor.
+CI runs GTK checks in an Ubuntu 25.10 container because the selected libadwaita and Relm4 features require a newer GLib than the Ubuntu 24.04 host provides. Driver integration tests run separately against Docker services.
 
-## Out of scope
+## Deliberate limits
 
-- **Plugin system**. Drivers are static. The macOS plugin model does not transfer.
-- **In-process scripting**. No embedded JavaScript / Python / Lua. SQL is enough.
-- **Cross-platform builds**. Linux only. macOS / iOS have their own targets.
-- **Hot reload**. Compile-time only. Use `cargo watch` during development.
+- Linux is the only supported operating system.
+- Drivers are statically linked.
+- There is no embedded browser UI.
+- There is no in-process user scripting runtime.
+- AUR and Omarchy are the first packaging target. Flatpak publication comes later.

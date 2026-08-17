@@ -1,4 +1,0 @@
-module CLibMongoc [system] {
-    header "CLibMongoc.h"
-    export *
-}
