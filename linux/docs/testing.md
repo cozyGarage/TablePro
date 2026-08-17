@@ -78,15 +78,27 @@ The ignored smoke test creates and drops `tablepro_smoke_items`. Use a disposabl
 
 ## GTK tests
 
-The application has unit tests in its binary target, but it does not yet have the targeted GTK safety suite required for release. Those tests are planned and remain blockers.
+Run the installed safety suite with:
 
-The first GTK safety tests must cover:
+```bash
+./scripts/test-gtk-safety.sh
+```
 
-1. Approval denial when the dialog is dismissed or no active window exists.
-2. Approval scope and a governed write through the real GTK route.
-3. Cancel, timeout, audit outcome, and warning behavior through the installed application.
+The script builds `tablepro-app`, starts an isolated D-Bus session and Xvfb display, and drives the real application through PyAT-SPI. Each scenario gets temporary XDG directories and a production SQLite saved connection.
 
-These tests need a real GTK main loop and disposable database fixtures. Service-level tests should still cover pure state and policy behavior, but they do not replace the cross-layer GTK tests.
+The suite verifies:
+
+1. Dismissing a production approval leaves SQLite unchanged.
+2. Approving once performs one mutation and prompts again for the next operation.
+3. Unavailable audit storage denies the mutation without showing an approval path around the failure.
+
+On Arch or Omarchy, install the harness dependencies with:
+
+```bash
+sudo pacman -S --needed dbus xorg-server-xvfb at-spi2-core python-atspi
+```
+
+Ubuntu CI uses `dbus-daemon`, `xvfb`, `xauth`, `at-spi2-core`, and `python3-pyatspi`. The CI step remains non-blocking until it completes 30 retry-free scheduled runs. Service-level tests still cover pure state and policy behavior, but they do not replace these cross-layer tests.
 
 For ordinary UI changes, test the affected flow manually and include before and after screenshots. Add deterministic automation when a regression can be reproduced without timing or desktop-session assumptions.
 
@@ -96,9 +108,10 @@ For ordinary UI changes, test the affected flow manually and include before and 
 
 1. Preflight on Rust 1.93 without the GTK application.
 2. GTK formatting, Clippy, and `cargo test --workspace --exclude tablepro-driver-duckdb --lib --bins` in Ubuntu 25.10.
-3. PostgreSQL, MySQL, SQL Server, and ClickHouse integration tests on Docker.
-4. Scheduled and manually triggered Clippy on current stable Rust.
-5. Supply-chain checks with `cargo deny` and `cargo audit` in the GTK job.
+3. Installed GTK safety flows under Xvfb and PyAT-SPI, non-blocking during the soak period.
+4. PostgreSQL, MySQL, SQL Server, and ClickHouse integration tests on Docker.
+5. Scheduled and manually triggered Clippy on current stable Rust.
+6. Supply-chain checks with `cargo deny` and `cargo audit` in the GTK job.
 
 The Ubuntu 25.10 container provides the GLib version required by the selected libadwaita and Relm4 features.
 

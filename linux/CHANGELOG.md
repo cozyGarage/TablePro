@@ -31,6 +31,7 @@
 - Explicit administrative SQL classification for PostgreSQL backend-control functions and MySQL KILL
 - Weekly and manually dispatched full-workspace Clippy on current stable Rust, alongside the Rust 1.93 MSRV gate
 - Arch/Omarchy Rust toolchain guidance and a traceable upstream Linux sync log
+- Installed GTK safety checks for approval dismissal, approve-once scope, and unavailable audit storage
 
 ### Changed
 
@@ -64,6 +65,8 @@
 - The agent daemon requires at least one existing saved connection when issuing a token
 - Verified legacy audit journals rotate intact when upgrading to durable intent and outcome records
 - PostgreSQL cancellation now stops the server query, records a terminal audit outcome, supports parameterized operations and transaction rollback, and discards sessions with unknown outcomes
+- Approval dialogs attach to a visible application window when the desktop does not report an active window
+- Saved connections expose a keyboard and screen-reader accessible open action
 
 ### Removed
 

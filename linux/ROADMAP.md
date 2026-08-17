@@ -87,9 +87,11 @@ Phase 2 is implemented, security-reviewed, and locally verified. PostgreSQL canc
 - [x] Dialog close and unexpected responses map to denial
 - [x] Approve-once is not cached across policy operations
 - [x] Disabled audit state takes precedence over an approving sink
-- [ ] Installed GTK dismissal leaves SQLite unchanged
-- [ ] Installed GTK approve-once prompts again for the next operation
-- [ ] Installed GTK audit failure cannot be approved around
+- [x] Installed GTK dismissal leaves SQLite unchanged
+- [x] Installed GTK approve-once prompts again for the next operation
+- [x] Installed GTK audit failure cannot be approved around
+
+Phase 4 is implemented and locally release-verified. The installed suite remains non-blocking in CI until it completes 30 retry-free scheduled runs.
 
 ### 5: Documentation and capability tracking
 

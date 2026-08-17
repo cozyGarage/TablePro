@@ -72,9 +72,21 @@ impl ApprovalSink for GtkApprovalSink {
                 }
             });
 
-            if let Some(window) = gtk::Application::default().active_window() {
+            let application = gtk::Application::default();
+            let window = application
+                .active_window()
+                .or_else(|| application.windows().into_iter().find(|window| window.is_visible()))
+                .or_else(|| {
+                    gtk::Window::list_toplevels()
+                        .into_iter()
+                        .filter_map(|widget| widget.downcast::<gtk::Window>().ok())
+                        .find(|window| window.is_visible())
+                });
+            if let Some(window) = window {
                 dialog.present(Some(&window));
-            } else if let Ok(mut guard) = tx.lock()
+                return;
+            }
+            if let Ok(mut guard) = tx.lock()
                 && let Some(sender) = guard.take()
             {
                 let _ = sender.send(ApprovalOutcome::Deny);

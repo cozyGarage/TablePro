@@ -277,7 +277,7 @@ Required scenarios:
 
 ## Status
 
-In progress. Deterministic safety-boundary tests were added on 2026-08-17. Installed GTK automation remains open.
+Implemented and locally release-verified on 2026-08-17. The installed GTK suite is soaking in CI before it becomes a required PR check.
 
 Foundation:
 
@@ -287,9 +287,9 @@ Foundation:
 
 Use SQLite, temporary XDG directories, `dbus-run-session`, Xvfb, and AT-SPI automation for the installed flows:
 
-1. [ ] Dismissed production approval leaves the database unchanged.
-2. [ ] `Approve once` performs exactly one mutation and asks again next time.
-3. [ ] An unavailable audit journal cannot be bypassed through approval.
+1. [x] Dismissed production approval leaves the database unchanged.
+2. [x] `Approve once` performs exactly one mutation and asks again next time.
+3. [x] An unavailable audit journal cannot be bypassed through approval.
 
 Promote the installed test to a required PR check after 30 retry-free scheduled runs.
 

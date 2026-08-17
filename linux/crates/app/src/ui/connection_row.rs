@@ -48,6 +48,14 @@ impl FactoryComponent for ConnectionRow {
             connect_activated => ConnectionRowMsg::Open,
 
             add_suffix = &gtk::Button {
+                set_icon_name: "go-next-symbolic",
+                set_valign: gtk::Align::Center,
+                set_tooltip_text: Some(crate::tr!("Open connection").as_str()),
+                add_css_class: "flat",
+                connect_clicked => ConnectionRowMsg::Open,
+            },
+
+            add_suffix = &gtk::Button {
                 set_icon_name: "user-trash-symbolic",
                 set_valign: gtk::Align::Center,
                 set_tooltip_text: Some(crate::tr!("Remove connection").as_str()),

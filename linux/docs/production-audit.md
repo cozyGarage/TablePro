@@ -38,7 +38,7 @@ The Docker integration suites cover PostgreSQL, MySQL, SQL Server, and ClickHous
 
 PostgreSQL server-side cancellation is implemented and real-driver verified. Controlled query and execute paths use a separate PostgreSQL control pool to request cancellation. Integration tests start `pg_sleep`, confirm the tagged query is active in `pg_stat_activity`, cancel or time it out, confirm it leaves `pg_stat_activity`, and run another query through the pool. Transaction cancellation is also verified with a later rollback.
 
-Cancellation is no longer a release blocker by itself. Release testing must still prove the installed GTK cancel flow and audit outcome behavior as part of the targeted GTK safety suite.
+Cancellation is no longer a release blocker by itself. Release testing must still prove the installed GTK cancel flow and audit outcome behavior in the PostgreSQL release fixture.
 
 ## Remaining release blockers
 
@@ -50,13 +50,9 @@ The fixture must fail on a wrong hostname or untrusted certificate, pass with th
 
 ### Targeted GTK safety tests
 
-The application does not yet have deterministic GTK tests for its highest-risk cross-layer flows. Required tests are planned for:
+The installed GTK suite runs the real application under an isolated D-Bus session and Xvfb display with PyAT-SPI and disposable XDG directories. Local release verification proves that dismissing a production approval leaves SQLite unchanged, approve-once does not authorize the next mutation, and unavailable audit storage cannot be approved around.
 
-1. Denial when an approval dialog is dismissed or no active application window can approve.
-2. Approval scope and write execution through the real GTK route.
-3. Audit intent, terminal outcome, cancel, timeout, and warning behavior as seen by the installed application.
-
-These tests must run with a real GTK main loop and disposable database fixtures. Unit tests of service logic do not replace them.
+The suite remains non-blocking in CI until it completes 30 retry-free scheduled runs. PostgreSQL-specific installed cancel, timeout, and terminal audit behavior remains part of the Phase 3 release fixture rather than this deterministic SQLite suite.
 
 ### Release packaging verification
 
@@ -91,4 +87,4 @@ Not approved yet:
 - PostgreSQL `VerifyFull` through an SSH tunnel without the release fixture
 - Public stable package distribution
 
-Re-run this audit after the PostgreSQL TLS, SSH, and reconnect fixture, targeted GTK safety tests, and installed AUR or Omarchy package checks pass.
+Re-run this audit after the PostgreSQL TLS, SSH, and reconnect fixture, the GTK safety CI soak, and installed AUR or Omarchy package checks pass.
