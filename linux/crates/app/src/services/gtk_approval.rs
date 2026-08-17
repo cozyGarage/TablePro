@@ -7,6 +7,17 @@ use tablepro_policy::{ApprovalOutcome, ApprovalRequest, ApprovalSink};
 /// context and parks the async caller until the user responds.
 pub struct GtkApprovalSink;
 
+const DENY_RESPONSE: &str = "deny";
+const APPROVE_ONCE_RESPONSE: &str = "once";
+const CLOSE_RESPONSE: &str = DENY_RESPONSE;
+
+fn outcome_for_response(response: &str) -> ApprovalOutcome {
+    if response == APPROVE_ONCE_RESPONSE {
+        return ApprovalOutcome::AllowOnce;
+    }
+    ApprovalOutcome::Deny
+}
+
 #[async_trait]
 impl ApprovalSink for GtkApprovalSink {
     async fn request(&self, req: ApprovalRequest) -> ApprovalOutcome {
@@ -45,18 +56,15 @@ impl ApprovalSink for GtkApprovalSink {
             use relm4::{adw, gtk};
 
             let dialog = adw::AlertDialog::builder().heading(&heading_c).body(&body_c).build();
-            dialog.add_response("deny", "Deny");
-            dialog.add_response("once", "Approve once");
-            dialog.set_response_appearance("deny", adw::ResponseAppearance::Destructive);
-            dialog.set_response_appearance("once", adw::ResponseAppearance::Suggested);
-            dialog.set_default_response(Some("deny"));
-            dialog.set_close_response("deny");
+            dialog.add_response(DENY_RESPONSE, "Deny");
+            dialog.add_response(APPROVE_ONCE_RESPONSE, "Approve once");
+            dialog.set_response_appearance(DENY_RESPONSE, adw::ResponseAppearance::Destructive);
+            dialog.set_response_appearance(APPROVE_ONCE_RESPONSE, adw::ResponseAppearance::Suggested);
+            dialog.set_default_response(Some(DENY_RESPONSE));
+            dialog.set_close_response(CLOSE_RESPONSE);
 
             dialog.connect_response(None, move |_dlg, response| {
-                let outcome = match response {
-                    "once" => ApprovalOutcome::AllowOnce,
-                    _ => ApprovalOutcome::Deny,
-                };
+                let outcome = outcome_for_response(response);
                 if let Ok(mut guard) = tx_c.lock()
                     && let Some(sender) = guard.take()
                 {
@@ -74,5 +82,25 @@ impl ApprovalSink for GtkApprovalSink {
         });
 
         rx.await.unwrap_or(ApprovalOutcome::Deny)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dismissed_approval_denies() {
+        assert_eq!(outcome_for_response(CLOSE_RESPONSE), ApprovalOutcome::Deny);
+    }
+
+    #[test]
+    fn unexpected_approval_response_denies() {
+        assert_eq!(outcome_for_response("unexpected"), ApprovalOutcome::Deny);
+    }
+
+    #[test]
+    fn approve_once_response_allows_one_operation() {
+        assert_eq!(outcome_for_response(APPROVE_ONCE_RESPONSE), ApprovalOutcome::AllowOnce);
     }
 }

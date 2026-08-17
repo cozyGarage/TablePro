@@ -56,6 +56,50 @@ struct Entry {
     _monitor: tokio::task::JoinHandle<()>,
 }
 
+struct AuditRuntime {
+    sink: Arc<dyn tablepro_policy::AuditSink>,
+    available: bool,
+    state: Arc<AuditState>,
+}
+
+impl AuditRuntime {
+    fn open_default() -> Self {
+        match AuditJournal::open_default() {
+            Ok(journal) => {
+                let recovered = journal.recovery().recovered_unresolved_operations();
+                if recovered {
+                    tracing::error!(
+                        operations = journal.recovery().recovered_operation_ids().len(),
+                        "unresolved audit intents recovered; governed writes remain disabled"
+                    );
+                }
+                let state = if recovered {
+                    AuditState::with_governed_writes_disabled()
+                } else {
+                    AuditState::new()
+                };
+                Self {
+                    sink: Arc::new(journal),
+                    available: true,
+                    state: Arc::new(state),
+                }
+            }
+            Err(error) => {
+                tracing::error!(%error, "audit journal unavailable; MCP and governed writes are disabled");
+                Self::unavailable()
+            }
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self {
+            sink: Arc::new(NullAuditSink),
+            available: false,
+            state: Arc::new(AuditState::with_governed_writes_disabled()),
+        }
+    }
+}
+
 pub struct DatabaseService {
     connections: Mutex<HashMap<Uuid, Entry>>,
     active: Mutex<Option<Uuid>>,
@@ -68,39 +112,14 @@ pub struct DatabaseService {
 
 impl DatabaseService {
     fn new() -> Self {
-        let (audit, audit_available, audit_state): (Arc<dyn tablepro_policy::AuditSink>, bool, Arc<AuditState>) =
-            match AuditJournal::open_default() {
-                Ok(journal) => {
-                    let recovered = journal.recovery().recovered_unresolved_operations();
-                    if recovered {
-                        tracing::error!(
-                            operations = journal.recovery().recovered_operation_ids().len(),
-                            "unresolved audit intents recovered; governed writes remain disabled"
-                        );
-                    }
-                    let state = if recovered {
-                        AuditState::with_governed_writes_disabled()
-                    } else {
-                        AuditState::new()
-                    };
-                    (Arc::new(journal), true, Arc::new(state))
-                }
-                Err(error) => {
-                    tracing::error!(%error, "audit journal unavailable; MCP and governed writes are disabled");
-                    (
-                        Arc::new(NullAuditSink),
-                        false,
-                        Arc::new(AuditState::with_governed_writes_disabled()),
-                    )
-                }
-            };
+        let audit = AuditRuntime::open_default();
         Self {
             connections: Mutex::new(HashMap::new()),
             active: Mutex::new(None),
             policy: Mutex::new(Arc::new(load_policy())),
-            audit,
-            audit_available,
-            audit_state,
+            audit: audit.sink,
+            audit_available: audit.available,
+            audit_state: audit.state,
             approval: Mutex::new(Arc::new(DenyApprovalSink)),
         }
     }
@@ -248,5 +267,13 @@ mod tests {
         let a = instance() as *const _;
         let b = instance() as *const _;
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn unavailable_audit_runtime_disables_governed_writes() {
+        let audit = AuditRuntime::unavailable();
+
+        assert!(!audit.available);
+        assert!(audit.state.governed_writes_disabled());
     }
 }

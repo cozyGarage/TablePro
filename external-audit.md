@@ -12,8 +12,6 @@ The goal is to build a lightweight, native Linux database client matching the vi
 
 ## The Big Plan: 5-Phase Roadmap
 
-[Phase 1: Architecture] ➔ [Phase 2: Backend Extraction] ➔ [Phase 3: Core Glue] ➔ [Phase 4: GTK4 UI Integration] ➔ [Phase 5: Optimization]
-
 ## **Phase 1: Architectural Blueprint & Code Audit**
 
 Establish how the asynchronous Rust backend will safely talk to the synchronous GTK4 main UI loop.
@@ -53,22 +51,6 @@ Maximize performance and prepare the software for easy Linux distribution.
 * **Technical Choice:** Implement binary compilation optimizations (`panic = "abort"`, `lto = true`) to achieve a sub-80MB RAM footprint and sub-1-second boot times. Package the final product via **Flatpak** for universal Linux distribution.
 
 ---
-
-## For you my AI Research Agent
-
-\#\#\# AGENT ASSIGNMENT: Technical Specification for a Rust \+ GTK4 Database Client
-
-\*\*Context:\*\*   
-We are building a highly lightweight, native Linux SQL client using a Rust backend and a GTK4 \+ Libadwaita front-end (inspired by TablePro's UI and Tablio's backend logic).
-
-\*\*Your Tasks:\*\*  
-1\. \*\*Analyze Tablio:\*\* Review the open-source repository \`dasunNimantha/tablio\` (specifically its \`src-tauri\` directory). Map out how it structures database connections, authentication, connection pools, and query execution for PostgreSQL and MySQL.  
-2\. \*\*Draft the Architecture:\*\* Design a multi-threaded architecture showing how a Tokio async runtime (handling the database connections) will safely communicate with the single-threaded GTK4 main loop using glib channels (\`glib::MainContext::channel\`).  
-3\. \*\*Specify UI Components:\*\* Document how to implement a high-performance data grid in GTK4 using \`Gtk.ColumnView\` and \`gio::ListStore\` to handle large query result sets efficiently.  
-4\. \*\*Draft a Project Structure:\*\* Provide a recommended Cargo workspace structure that separates the headless database logic (\`core\`) from the GTK4 application logic (\`ui\`).
-
-Provide a highly technical, step-by-step implementation guide addressing these 4 points.
-
 Answer:
 
 I read the whole tree and your wish document side by side. The most important finding first, because it changes the plan: **the wish document describes a project that the pasted repo has already largely built.** Your five phases map onto existing code almost one-to-one, so the job is not "start a Rust \+ GTK4 client and scavenge Tablio", it's "finish and polish an existing 37k-line Rust/GTK4 client that is further along than the plan assumes."
@@ -108,12 +90,3 @@ There is also a strategic tension you should decide on consciously: the repo car
 Replace the four tasks with: (1) audit `crates/core`, `crates/drivers/*`, and `crates/policy` and produce a capability matrix per driver against `docs/driver-maturity.md`, noting where sqlx/tiberius limit us; (2) skip designing the tokio↔GTK bridge, instead review `ARCHITECTURE.md` \+ `docs/state-management.md` and list any places raw `tokio::spawn` or `glib::clone!`\-captured `&mut` state violate the Relm4 conventions; (3) evaluate the existing `ui/grid/` for large-result behavior (row cap, keyset pagination, column width persistence) and propose true streaming; (4) map the macOS `docs/features/*.mdx` to Linux status (implemented / integrated / release-verified / not ported) to seed the parity matrix `PLAN.md` Phase 5 asks for.
 
 If you tell me which of the four phases you want to start with, I can turn it into a file-by-file task list against this tree.
-
-That is a good review. now can you create a zip file for me of improvement file by file for PLAN.md first. and then we will circle back and research on the concrete plan here. Or base on on the PLAN we have here and the work already done, let create a better PLAN and research and start writing code?
-
-Weighed technical constraints against user options and sought clarification
-
-A quick practical note before the questions: I can't produce a zip here since file/code execution is off in this conversation (enabling it in Settings gives me artifacts and downloadable files). I can still write the improved PLAN.md and any code as inline documents you paste into the tree, and for the "start writing code" part the right tool is Claude Code pointed at your fork, since I can't touch the repo from here.
-
-On direction: I'd lean toward your second option. The existing PLAN.md is honest but it's a *safety-first* plan written for a governed production tool; your stated goal is a polished, lightweight daily driver. A rewritten PLAN that reorders around that goal, backed by research on the specific technical blockers (schema-aware completion in GtkSourceView 5, sqlx TLS server name over SSH, true result streaming in `ColumnView`), is more useful than a diff of the current one. Three things I need pinned down before I launch the research:
-

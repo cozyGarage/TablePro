@@ -438,6 +438,23 @@ struct CountingApprovalSink {
     calls: Arc<AtomicUsize>,
 }
 
+struct SequenceApprovalSink {
+    calls: Arc<AtomicUsize>,
+    outcomes: Mutex<Vec<ApprovalOutcome>>,
+}
+
+#[async_trait]
+impl ApprovalSink for SequenceApprovalSink {
+    async fn request(&self, _request: ApprovalRequest) -> ApprovalOutcome {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let mut outcomes = self.outcomes.lock().expect("outcome lock");
+        if outcomes.is_empty() {
+            return ApprovalOutcome::Deny;
+        }
+        outcomes.remove(0)
+    }
+}
+
 #[async_trait]
 impl ApprovalSink for CountingApprovalSink {
     async fn request(&self, _request: ApprovalRequest) -> ApprovalOutcome {
@@ -549,27 +566,29 @@ async fn read_only_denial_skips_blast_radius_query() {
 }
 
 #[tokio::test]
-async fn poisoned_state_skips_blast_radius_query() {
+async fn disabled_audit_state_cannot_be_bypassed_by_approval() {
     let queries = Arc::new(AtomicUsize::new(0));
-    let state = Arc::new(AuditState::new());
-    state.disable_governed_writes();
+    let approvals = Arc::new(AtomicUsize::new(0));
     let guard = PolicyGuard::new(
         query_counting_connection(queries.clone()),
         context(
             Principal::human_gui(),
             Environment::Prod,
             PolicyConfig::default(),
-            Arc::new(AutoApproveSink),
+            Arc::new(CountingApprovalSink {
+                calls: approvals.clone(),
+            }),
             Arc::new(SequenceAuditSink::new(vec![])),
-            state,
+            Arc::new(AuditState::with_governed_writes_disabled()),
         ),
     );
 
     guard
         .execute("UPDATE jobs SET status = 'done' WHERE id = 1")
         .await
-        .expect_err("poisoned write must be denied");
+        .expect_err("disabled audit state must deny the write");
 
+    assert_eq!(approvals.load(Ordering::SeqCst), 0);
     assert_eq!(queries.load(Ordering::SeqCst), 0);
 }
 
@@ -1014,6 +1033,38 @@ async fn batch_records_correlated_redacted_intent_and_outcome() {
     assert_eq!(events[0].redacted_sql, "[REDACTED]");
     assert!(!events[0].redacted_sql.contains("raw-secret"));
     assert_eq!(events[0].sql_hash.len(), 64);
+}
+
+#[tokio::test]
+async fn approve_once_authorizes_only_the_current_operation() {
+    let executes = Arc::new(AtomicUsize::new(0));
+    let approvals = Arc::new(AtomicUsize::new(0));
+    let guard = PolicyGuard::new(
+        connection(executes.clone(), Arc::new(AtomicUsize::new(0))),
+        context(
+            Principal::human_gui(),
+            Environment::Prod,
+            PolicyConfig::default(),
+            Arc::new(SequenceApprovalSink {
+                calls: approvals.clone(),
+                outcomes: Mutex::new(vec![ApprovalOutcome::AllowOnce, ApprovalOutcome::Deny]),
+            }),
+            Arc::new(SequenceAuditSink::new(vec![])),
+            Arc::new(AuditState::new()),
+        ),
+    );
+
+    guard
+        .execute("INSERT INTO jobs(id) VALUES (1)")
+        .await
+        .expect("first operation should be approved");
+    guard
+        .execute("INSERT INTO jobs(id) VALUES (2)")
+        .await
+        .expect_err("second operation must request approval again");
+
+    assert_eq!(approvals.load(Ordering::SeqCst), 2);
+    assert_eq!(executes.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

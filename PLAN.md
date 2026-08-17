@@ -277,15 +277,21 @@ Required scenarios:
 
 ## Status
 
-Not started.
+In progress. Deterministic safety-boundary tests were added on 2026-08-17. Installed GTK automation remains open.
 
-Use SQLite, temporary XDG directories, `dbus-run-session`, Xvfb and AT-SPI automation. Cover only the critical flows:
+Foundation:
 
-1. Dismissed production approval leaves the database unchanged.
-2. “Approve once” performs exactly one mutation and asks again next time.
-3. An unavailable audit journal cannot be bypassed through approval.
+- [x] The dialog close response and every unexpected response map to denial through the same constants used by the production dialog.
+- [x] `AllowOnce` authorizes one policy operation and is not cached for the next operation.
+- [x] Audit initialization failure creates disabled governed-write state, and an approving sink cannot bypass that state.
 
-Promote the test to a required PR check after 30 retry-free scheduled runs.
+Use SQLite, temporary XDG directories, `dbus-run-session`, Xvfb, and AT-SPI automation for the installed flows:
+
+1. [ ] Dismissed production approval leaves the database unchanged.
+2. [ ] `Approve once` performs exactly one mutation and asks again next time.
+3. [ ] An unavailable audit journal cannot be bypassed through approval.
+
+Promote the installed test to a required PR check after 30 retry-free scheduled runs.
 
 ---
 

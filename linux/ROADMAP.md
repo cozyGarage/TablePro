@@ -84,9 +84,12 @@ Phase 2 is implemented, security-reviewed, and locally verified. PostgreSQL canc
 
 ### 4: GTK safety tests
 
-- [ ] Dismissed approval denies
-- [ ] Approve-once approves exactly one operation
-- [ ] Audit failure cannot be approved around
+- [x] Dialog close and unexpected responses map to denial
+- [x] Approve-once is not cached across policy operations
+- [x] Disabled audit state takes precedence over an approving sink
+- [ ] Installed GTK dismissal leaves SQLite unchanged
+- [ ] Installed GTK approve-once prompts again for the next operation
+- [ ] Installed GTK audit failure cannot be approved around
 
 ### 5: Documentation and capability tracking
 
