@@ -818,6 +818,12 @@ impl App {
         Some((schema.map(str::to_owned), table.to_string()))
     }
 
+    pub(super) fn selected_browse_tab_connection(&self) -> Option<Uuid> {
+        let id = self.selected_browse_tab_id()?;
+        let tabs = self.workspace_tabs.borrow();
+        tabs.get(&id)?.browse_controller()?.model().connection_id()
+    }
+
     pub(super) fn rebuild_schema_buffer(&self) {
         let mut words: Vec<String> = self.table_names.clone();
         let tabs = self.workspace_tabs.borrow();

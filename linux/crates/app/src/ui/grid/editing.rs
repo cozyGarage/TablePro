@@ -123,11 +123,11 @@ fn install_edit_triggers(
         }
         CellEditorKind::Int => {
             let sender = sender.clone();
-            std::rc::Rc::new(move |l| show_spin_button_popover(l, col_index, &sender, false))
+            std::rc::Rc::new(move |l| show_numeric_popover(l, col_index, &sender, false))
         }
         CellEditorKind::Float => {
             let sender = sender.clone();
-            std::rc::Rc::new(move |l| show_spin_button_popover(l, col_index, &sender, true))
+            std::rc::Rc::new(move |l| show_numeric_popover(l, col_index, &sender, true))
         }
         CellEditorKind::Json => {
             let sender = sender.clone();
@@ -233,14 +233,78 @@ fn show_calendar_popover(label: &CellEditor, col_index: usize, sender: &relm4::S
     popover.popup();
 }
 
-fn show_spin_button_popover(label: &CellEditor, col_index: usize, sender: &relm4::Sender<GridMsg>, is_float: bool) {
-    let current_text = label.text().to_string();
-    let (initial, lower, upper, step, digits) = if is_float {
-        let val = current_text.parse::<f64>().unwrap_or(0.0);
-        (val, f64::MIN, f64::MAX, 0.1_f64, 6_u32)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum NumericEditor {
+    Spin(f64),
+    ExactText,
+}
+
+const MAX_EXACT_F64_INTEGER: i64 = 1 << 53;
+
+pub(crate) fn numeric_editor(text: &str, is_float: bool) -> NumericEditor {
+    let trimmed = text.trim();
+    if is_float {
+        return match trimmed.parse::<f64>() {
+            Ok(value) if value.is_finite() => NumericEditor::Spin(value),
+            _ => NumericEditor::ExactText,
+        };
+    }
+    match trimmed.parse::<i64>() {
+        Ok(value) if value.unsigned_abs() <= MAX_EXACT_F64_INTEGER as u64 => NumericEditor::Spin(value as f64),
+        _ => NumericEditor::ExactText,
+    }
+}
+
+fn show_numeric_popover(label: &CellEditor, col_index: usize, sender: &relm4::Sender<GridMsg>, is_float: bool) {
+    match numeric_editor(label.text().as_str(), is_float) {
+        NumericEditor::Spin(value) => show_spin_button_popover(label, col_index, sender, is_float, value),
+        NumericEditor::ExactText => show_exact_text_popover(label, col_index, sender),
+    }
+}
+
+fn show_exact_text_popover(label: &CellEditor, col_index: usize, sender: &relm4::Sender<GridMsg>) {
+    let entry = gtk::Entry::new();
+    entry.set_text(label.text().as_str());
+    entry.set_width_chars(24);
+
+    let popover = gtk::Popover::builder().child(&entry).build();
+    popover.set_parent(label);
+    POPOVER_SLOT.set(label, popover.clone());
+
+    let label_for_commit = label.clone();
+    let popover_for_commit = popover.clone();
+    let sender_for_commit = sender.clone();
+    entry.connect_activate(move |e| {
+        let formatted = e.text().to_string();
+        let position = POSITION_SLOT.get(&label_for_commit).unwrap_or(0);
+        label_for_commit.set_text(&formatted);
+        sender_for_commit
+            .send(GridMsg::CellEdited {
+                row_position: position,
+                col_index,
+                new_value: formatted,
+            })
+            .ok();
+        popover_for_commit.popdown();
+    });
+
+    install_popover_close_cleanup(label, &popover);
+    popover.popup();
+    entry.grab_focus();
+}
+
+fn show_spin_button_popover(
+    label: &CellEditor,
+    col_index: usize,
+    sender: &relm4::Sender<GridMsg>,
+    is_float: bool,
+    initial: f64,
+) {
+    let (lower, upper, step, digits) = if is_float {
+        (f64::MIN, f64::MAX, 0.1_f64, 6_u32)
     } else {
-        let val = current_text.parse::<i64>().unwrap_or(0) as f64;
-        (val, i64::MIN as f64, i64::MAX as f64, 1.0_f64, 0_u32)
+        let bound = MAX_EXACT_F64_INTEGER as f64;
+        (-bound, bound, 1.0_f64, 0_u32)
     };
     let adjustment = gtk::Adjustment::new(initial, lower, upper, step, step * 10.0, 0.0);
     let spin = gtk::SpinButton::new(Some(&adjustment), step, digits);
@@ -405,4 +469,46 @@ fn commit_cell_edit(label: &CellEditor, col_index: usize, sender: &relm4::Sender
             new_value,
         })
         .ok();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NumericEditor, numeric_editor};
+
+    #[test]
+    fn small_integers_use_the_spin_button() {
+        assert_eq!(numeric_editor("42", false), NumericEditor::Spin(42.0));
+        assert_eq!(numeric_editor(" -7 ", false), NumericEditor::Spin(-7.0));
+        assert_eq!(
+            numeric_editor("9007199254740992", false),
+            NumericEditor::Spin(9007199254740992.0)
+        );
+    }
+
+    #[test]
+    fn wide_integers_use_exact_text_editing() {
+        assert_eq!(numeric_editor("9007199254740993", false), NumericEditor::ExactText);
+        assert_eq!(numeric_editor("-9007199254740993", false), NumericEditor::ExactText);
+        assert_eq!(numeric_editor("9223372036854775807", false), NumericEditor::ExactText);
+        assert_eq!(
+            numeric_editor("170141183460469231731687303715884105727", false),
+            NumericEditor::ExactText
+        );
+    }
+
+    #[test]
+    fn unreadable_numbers_keep_their_text_instead_of_becoming_zero() {
+        assert_eq!(numeric_editor("", false), NumericEditor::ExactText);
+        assert_eq!(numeric_editor("NULL", false), NumericEditor::ExactText);
+        assert_eq!(numeric_editor("1_000", false), NumericEditor::ExactText);
+        assert_eq!(numeric_editor("", true), NumericEditor::ExactText);
+        assert_eq!(numeric_editor("nan", true), NumericEditor::ExactText);
+        assert_eq!(numeric_editor("inf", true), NumericEditor::ExactText);
+    }
+
+    #[test]
+    fn floats_use_the_spin_button() {
+        assert_eq!(numeric_editor("1.5", true), NumericEditor::Spin(1.5));
+        assert_eq!(numeric_editor("-0.25", true), NumericEditor::Spin(-0.25));
+    }
 }

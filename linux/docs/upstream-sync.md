@@ -41,3 +41,11 @@ Add an entry only when a reference review causes a Linux code or product change.
 ```
 
 The entry should describe behavior, not file-by-file source movement. There should be no source-tree merge to record.
+
+## 2026-08-18: exact wide integers, export target, and unterminated SQL literals
+
+- Reference reviewed: `TableProApp/TablePro` `origin/main` at `f696b5f3`, commits `060e5ea4` (preserve wide integer values), `e055dcd0` (export from the database you picked), and `00885a7e` (Format Query on an unterminated SQL literal).
+- Linux relevance: the GTK grid edited integer cells through a spin button backed by `f64`, so opening the editor on an integer wider than 2^53 rewrote the value; streaming CSV export read from the active connection instead of the browse tab that owns the selection; unterminated literals are a known parser hazard.
+- Manual port: integer cells wider than the exact `f64` range, and values that do not parse, now open an exact text editor instead of a spin button. CSV export resolves the browse tab's own connection and reports a closed connection instead of exporting from another one.
+- Not ported: macOS view models, the Liquid Glass and Open Quickly work, license gating, and the display-format state machine. Linux has no SQL formatter, so the Format Query crash has no equivalent; the statement splitter was reviewed and covered with unterminated-literal tests instead.
+- Verification: `cargo test -p tablepro-app --bins` covers the numeric editor choice, export connection resolution, and unterminated literals in both splitter paths.

@@ -372,8 +372,15 @@ impl App {
         let parent = self.window.clone();
         let parent_for_alert = parent.clone();
         let toast_overlay = self.toast_overlay.clone();
-        let Some(conn) = database_service::instance().active() else {
+        let Some(connection_id) = export_connection_id(
+            self.selected_browse_tab_connection(),
+            database_service::instance().active_id(),
+        ) else {
             self.show_toast(&crate::tr!("no active connection"));
+            return;
+        };
+        let Some(conn) = database_service::instance().get(connection_id) else {
+            self.show_toast(&crate::tr!("The connection for this tab is closed."));
             return;
         };
         dialog.save(Some(&parent), gtk::gio::Cancellable::NONE, move |outcome| {
@@ -463,5 +470,29 @@ impl App {
             }
         });
         dialog.present(Some(&self.window));
+    }
+}
+
+fn export_connection_id(tab_connection: Option<Uuid>, active: Option<Uuid>) -> Option<Uuid> {
+    tab_connection.or(active)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::export_connection_id;
+    use uuid::Uuid;
+
+    #[test]
+    fn export_uses_the_tab_connection_even_when_another_one_is_active() {
+        let tab = Uuid::new_v4();
+        let active = Uuid::new_v4();
+        assert_eq!(export_connection_id(Some(tab), Some(active)), Some(tab));
+    }
+
+    #[test]
+    fn export_falls_back_to_the_active_connection_for_a_tab_without_one() {
+        let active = Uuid::new_v4();
+        assert_eq!(export_connection_id(None, Some(active)), Some(active));
+        assert_eq!(export_connection_id(None, None), None);
     }
 }

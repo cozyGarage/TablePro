@@ -187,6 +187,40 @@ pub(crate) fn split_sql_statements(sql: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
+mod unterminated_literal_tests {
+    use super::{split_sql_statements, statement_at_cursor};
+
+    #[test]
+    fn an_unterminated_single_quote_keeps_the_tail_as_one_statement() {
+        let sql = "SELECT 1; SELECT 'open; SELECT 2";
+        assert_eq!(split_sql_statements(sql), vec!["SELECT 1", "SELECT 'open; SELECT 2"]);
+    }
+
+    #[test]
+    fn an_unterminated_double_quote_keeps_the_tail_as_one_statement() {
+        let sql = "SELECT 1; SELECT \"open; SELECT 2";
+        assert_eq!(split_sql_statements(sql), vec!["SELECT 1", "SELECT \"open; SELECT 2"]);
+    }
+
+    #[test]
+    fn an_unterminated_block_comment_swallows_the_rest() {
+        assert_eq!(
+            split_sql_statements("SELECT 1; /* open ; SELECT 2"),
+            vec!["SELECT 1", "/* open ; SELECT 2"]
+        );
+    }
+
+    #[test]
+    fn statement_at_cursor_survives_an_unterminated_literal() {
+        let sql = "SELECT 'open; SELECT 2";
+        assert_eq!(statement_at_cursor(sql, 0).as_deref(), Some(sql));
+        assert_eq!(statement_at_cursor(sql, sql.len()).as_deref(), Some(sql));
+        assert_eq!(statement_at_cursor("'", 1).as_deref(), Some("'"));
+        assert_eq!(statement_at_cursor("", 0), None);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{split_sql_statements, statement_at_cursor};
 

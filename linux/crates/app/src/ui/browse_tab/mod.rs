@@ -339,6 +339,10 @@ impl BrowseTab {
         }
     }
 
+    pub fn connection_id(&self) -> Option<Uuid> {
+        self.connection_id
+    }
+
     pub fn schema(&self) -> Option<&str> {
         self.schema.as_deref()
     }
