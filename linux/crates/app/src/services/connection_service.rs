@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tablepro_core::{ConnectOptions, Connection, DriverRegistry, TlsConfig, TlsMode};
+use tablepro_core::{ConnectOptions, Connection, DriverRegistry};
 use tablepro_ssh::{SshConfig, SshTunnel};
 use tablepro_storage::SavedConnection;
 use tablepro_transport::TransportError;
@@ -58,8 +58,4 @@ fn message(error: TransportError) -> String {
         }
         other => other.to_string(),
     }
-}
-
-pub fn tls_config(mode: TlsMode) -> TlsConfig {
-    tablepro_transport::tls_config(mode)
 }

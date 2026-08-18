@@ -337,6 +337,7 @@ impl RecordingProvider {
             username: "stub".into(),
             use_tls: false,
             tls_mode: None,
+            tls_root_cert: None,
             read_only: false,
             auth_mode: Default::default(),
             environment: Default::default(),

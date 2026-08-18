@@ -147,6 +147,7 @@ mod tests {
             username: username.into(),
             use_tls: true,
             tls_mode: Some(TlsMode::VerifyFull),
+            tls_root_cert: None,
             auth_mode,
             read_only: false,
             environment: Environment::Prod,

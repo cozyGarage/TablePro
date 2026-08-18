@@ -27,6 +27,10 @@ pub struct SavedConnection {
     pub use_tls: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_mode: Option<TlsMode>,
+    /// Certificate authority used to verify the server, for engines whose
+    /// certificate is not issued by a CA in the system trust store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_root_cert: Option<PathBuf>,
     #[serde(default)]
     pub read_only: bool,
     #[serde(default)]
@@ -217,6 +221,7 @@ mod tests {
             username: "postgres".into(),
             use_tls: false,
             tls_mode: Some(TlsMode::Disabled),
+            tls_root_cert: None,
             read_only: false,
             auth_mode: AuthMode::Password,
             environment: Environment::Local,
@@ -298,6 +303,35 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
         assert!(load_from(&path).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_certificate_authority_path_round_trips() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let mut connection = sample_connection();
+        connection.tls_mode = Some(TlsMode::VerifyFull);
+        connection.tls_root_cert = Some(PathBuf::from("/etc/tablepro/corp-ca.crt"));
+        save_to(&path, std::slice::from_ref(&connection)).await.unwrap();
+        let loaded = load_from(&path).await.unwrap();
+        assert_eq!(loaded[0].tls_root_cert, connection.tls_root_cert);
+    }
+
+    #[tokio::test]
+    async fn a_file_without_a_certificate_authority_still_loads() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let id = Uuid::new_v4();
+        let legacy = format!(
+            r#"{{"version":1,"connections":[{{
+                "id":"{id}","name":"Old","driver_id":"postgres",
+                "host":"db.example","port":5432,"database":"postgres",
+                "username":"postgres","use_tls":true}}]}}"#
+        );
+        tokio::fs::write(&path, legacy).await.unwrap();
+        let loaded = load_from(&path).await.unwrap();
+        assert!(loaded[0].tls_root_cert.is_none());
+        assert_eq!(loaded[0].effective_tls_mode(), TlsMode::VerifyFull);
     }
 
     #[tokio::test]

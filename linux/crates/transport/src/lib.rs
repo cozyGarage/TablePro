@@ -40,7 +40,11 @@ pub async fn connect_options_for(saved: &SavedConnection) -> Result<ConnectOptio
         database: saved.database.clone(),
         username: saved.username.clone(),
         password,
-        tls: tls_config(saved.effective_tls_mode()),
+        tls: TlsConfig {
+            mode: saved.effective_tls_mode(),
+            root_cert: saved.tls_root_cert.clone(),
+            ..Default::default()
+        },
         auth_mode: saved.auth_mode,
         service_endpoint: None,
         forwarded_socket_dir: None,

@@ -44,6 +44,7 @@ fn saved_with_bastion(host: &str, bastion_port: u16) -> SavedConnection {
         username: "reader".into(),
         use_tls: false,
         tls_mode: Some(TlsMode::VerifyFull),
+        tls_root_cert: None,
         read_only: true,
         auth_mode: AuthMode::Password,
         environment: Environment::Prod,

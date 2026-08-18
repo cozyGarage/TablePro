@@ -121,6 +121,7 @@ Debian package and Flatpak files exist for development. Flatpak publication is p
 | Driver maturity | [docs/driver-maturity.md](docs/driver-maturity.md) |
 | State management | [docs/state-management.md](docs/state-management.md) |
 | Connection handling | [docs/connections.md](docs/connections.md) |
+| Capability evidence | [docs/capability-evidence.md](docs/capability-evidence.md) |
 | Storage | [docs/storage.md](docs/storage.md) |
 | Error handling | [docs/error-handling.md](docs/error-handling.md) |
 | Testing | [docs/testing.md](docs/testing.md) |

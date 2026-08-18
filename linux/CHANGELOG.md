@@ -4,6 +4,7 @@
 
 ### Added
 
+- Saved connections can name a certificate authority, so a server whose certificate is issued privately can be verified with Verify Ca or Verify Full
 - Policy crate with AST SQL classification, PolicyGuard, blast-radius rewrite, column masking, and policy.toml
 - Environment field on saved connections (Local / Dev / Staging / Prod)
 - Hash-chained audit journal at `$XDG_DATA_HOME/tablepro/audit.jsonl`

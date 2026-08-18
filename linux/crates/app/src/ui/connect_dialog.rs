@@ -27,6 +27,7 @@ pub struct ConnectDialog {
     password: adw::PasswordEntryRow,
     auth_combo: adw::ComboRow,
     tls_mode: adw::ComboRow,
+    tls_root_cert: adw::EntryRow,
     read_only: adw::SwitchRow,
     environment: adw::ComboRow,
     auth_group: adw::PreferencesGroup,
@@ -90,6 +91,7 @@ pub struct ConnectDialogInit {
 pub enum ConnectDialogInput {
     DriverChanged(u32),
     SshToggled,
+    TlsModeChanged,
     SshAuthChanged,
     AuthModeChanged,
     Submit,
@@ -203,6 +205,13 @@ impl Component for ConnectDialog {
         let tls_model = gtk::StringList::new(&tls_labels);
         tls_mode.set_model(Some(&tls_model));
         tls_mode.set_selected(TlsMode::VerifyFull.index());
+        let tls_root_cert = adw::EntryRow::builder()
+            .title(crate::tr!("Certificate authority"))
+            .build();
+        let sender_for_tls = sender.clone();
+        tls_mode.connect_selected_notify(move |_| {
+            sender_for_tls.input(ConnectDialogInput::TlsModeChanged);
+        });
         let read_only = adw::SwitchRow::builder()
             .title(crate::tr!("Read-only mode"))
             .subtitle(crate::tr!("Block writes at the policy layer"))
@@ -263,6 +272,7 @@ impl Component for ConnectDialog {
 
         let options_group = adw::PreferencesGroup::builder().title(crate::tr!("Options")).build();
         options_group.add(&tls_mode);
+        options_group.add(&tls_root_cert);
         options_group.add(&read_only);
         options_group.add(&environment);
 
@@ -298,6 +308,7 @@ impl Component for ConnectDialog {
             password,
             auth_combo,
             tls_mode,
+            tls_root_cert,
             read_only,
             environment,
             auth_group,
@@ -343,6 +354,9 @@ impl Component for ConnectDialog {
                 self.refresh_validity();
             }
 
+            ConnectDialogInput::TlsModeChanged => {
+                self.apply_tls_visibility();
+            }
             ConnectDialogInput::SshToggled => {
                 self.refresh_validity();
             }
@@ -558,13 +572,36 @@ impl ConnectDialog {
         } else {
             self.selected_tls_mode()
         };
-        crate::services::connection_service::tls_config(mode)
+        tablepro_core::TlsConfig {
+            mode,
+            root_cert: self.selected_root_cert(mode),
+            ..Default::default()
+        }
+    }
+
+    fn selected_root_cert(&self, mode: TlsMode) -> Option<std::path::PathBuf> {
+        if !mode.verifies_cert() {
+            return None;
+        }
+        let text = self.tls_root_cert.text();
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(std::path::PathBuf::from(trimmed))
+    }
+
+    fn apply_tls_visibility(&self) {
+        self.tls_root_cert
+            .set_visible(!self.form.file_based && self.selected_tls_mode().verifies_cert());
     }
 
     fn apply_driver_form_visibility(&mut self, driver: &dyn tablepro_core::DatabaseDriver) {
         self.form.file_based = driver.is_file_based();
         self.form.supports_integrated = driver.supports_integrated_auth();
         self.apply_form_state();
+        self.tls_root_cert
+            .set_visible(!driver.is_file_based() && self.selected_tls_mode().verifies_cert());
         self.database.set_title(&if self.form.file_based {
             crate::tr!("File path")
         } else {
@@ -690,6 +727,7 @@ async fn run_connect(
         username: opts_clone.username.clone(),
         use_tls: tls_mode.encrypts(),
         tls_mode: Some(tls_mode),
+        tls_root_cert: opts_clone.tls.root_cert.clone(),
         auth_mode: opts_clone.auth_mode,
         read_only,
         environment,
@@ -889,6 +927,7 @@ mod tests {
             username: username.into(),
             use_tls: false,
             tls_mode: Some(TlsMode::Disabled),
+            tls_root_cert: None,
             auth_mode,
             read_only: false,
             environment: Environment::Local,

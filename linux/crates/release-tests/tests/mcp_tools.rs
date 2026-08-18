@@ -51,6 +51,7 @@ impl ConnectionProvider for FixtureProvider {
             username: "tablepro".into(),
             use_tls: true,
             tls_mode: None,
+            tls_root_cert: None,
             read_only: self.read_only,
             auth_mode: Default::default(),
             environment: Environment::Local,

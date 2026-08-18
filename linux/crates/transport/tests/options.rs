@@ -17,6 +17,7 @@ fn saved(tls_mode: Option<TlsMode>, use_tls: bool) -> SavedConnection {
         username: "reader".into(),
         use_tls,
         tls_mode,
+        tls_root_cert: None,
         read_only: false,
         auth_mode: AuthMode::Password,
         environment: Environment::Prod,
@@ -56,6 +57,28 @@ async fn a_direct_connection_carries_no_tunnel_state() {
         }
     );
     assert!(saved_ssh_chain(&connection).await.expect("no ssh chain").is_none());
+}
+
+#[tokio::test]
+async fn a_saved_certificate_authority_reaches_the_driver() {
+    let mut connection = saved(Some(TlsMode::VerifyFull), false);
+    connection.tls_root_cert = Some(PathBuf::from("/etc/tablepro/corp-ca.crt"));
+
+    let opts = connect_options_for(&connection).await.expect("build connect options");
+
+    assert_eq!(opts.tls.mode, TlsMode::VerifyFull);
+    assert_eq!(
+        opts.tls.root_cert.as_deref(),
+        Some(std::path::Path::new("/etc/tablepro/corp-ca.crt"))
+    );
+}
+
+#[tokio::test]
+async fn a_connection_without_a_certificate_authority_uses_the_system_trust_store() {
+    let opts = connect_options_for(&saved(Some(TlsMode::VerifyFull), false))
+        .await
+        .expect("build connect options");
+    assert!(opts.tls.root_cert.is_none());
 }
 
 #[tokio::test]

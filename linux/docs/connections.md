@@ -99,15 +99,16 @@ switches TLS to Disabled**, and the error text does not say why. This fails
 closed, which is the right direction, but the capability is advertised and
 absent.
 
-### 3. A private certificate authority is unusable on every driver
+### 3. A private certificate authority is unusable on every driver — fixed
 
-`SavedConnection` has no field for a root certificate, so `connect_options_for`
-can never populate `TlsConfig.root_cert`. PostgreSQL and MySQL read that field
-and would use it; nothing can set it. Any server whose certificate is issued by
-an internal CA cannot be reached with Verify Ca or Verify Full from a saved
-connection, on any surface. This was demonstrated during the release-test work:
-a tunnelled fixture connection failed with `UnknownIssuer` until the test passed
-the CA path directly, bypassing the saved-connection layer.
+**Closed on 2026-08-19.** `SavedConnection` now carries `tls_root_cert`, the
+connect dialog exposes it whenever the selected mode verifies certificates, and
+`connect_options_for` threads it into `TlsConfig.root_cert`. Release-verified
+against the fixture: a saved connection naming the fixture authority verifies a
+privately issued certificate, one naming an unrelated authority is refused, one
+naming none fails against the system trust store, and an encrypt-only mode
+ignores the setting. PostgreSQL and MySQL consume the field; SQL Server,
+ClickHouse, Redis, and MongoDB still ignore it, which is item 5 below.
 
 ### 4. `TlsConfig` advertises three capabilities that nothing implements
 
@@ -202,15 +203,12 @@ Ordered by how much risk the gap carries.
 Fixing the silent failures first, then the missing capability, then the coverage
 that would have caught both.
 
-1. **MongoDB TLS.** Set `tls=true` on the URI and map the verification modes.
+1. ~~**Root certificate on saved connections.**~~ Done on 2026-08-19.
+2. **MongoDB TLS.** Set `tls=true` on the URI and map the verification modes.
    This is a silent downgrade and should be treated as a security fix.
-2. **Redis TLS.** Either enable the `tls-rustls` feature and map the modes, or
+3. **Redis TLS.** Either enable the `tls-rustls` feature and map the modes, or
    refuse a TLS mode the driver cannot honour with an error that says so. Do not
    leave the default configuration failing.
-3. **Root certificate on saved connections.** Add the field, thread it through
-   `connect_options_for`, expose it in the connect dialog, and honour it on
-   every driver that can. This unblocks every internally-issued certificate and
-   makes items 1 and 2 testable against a fixture.
 4. **Connect timeouts.** Bound the SSH handshake and the three drivers that have
    none. Add a fixture case that black-holes packets rather than refusing them.
 5. **Remove or implement the dead TLS fields.** `client_cert`, `client_key`, and

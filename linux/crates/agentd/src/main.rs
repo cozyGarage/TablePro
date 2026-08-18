@@ -193,6 +193,7 @@ mod tests {
             username: "postgres".into(),
             use_tls: false,
             tls_mode: None,
+            tls_root_cert: None,
             read_only: false,
             auth_mode: AuthMode::Password,
             environment: Environment::Local,
