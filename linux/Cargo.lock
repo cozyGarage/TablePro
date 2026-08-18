@@ -6327,6 +6327,7 @@ dependencies = [
  "tablepro-policy",
  "tablepro-ssh",
  "tablepro-storage",
+ "tablepro-transport",
  "thiserror 2.0.19",
  "tokio",
  "tokio-util",
@@ -6587,6 +6588,20 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "tablepro-transport"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "secrecy",
+ "tablepro-core",
+ "tablepro-ssh",
+ "tablepro-storage",
+ "thiserror 2.0.19",
+ "tokio",
  "uuid",
 ]
 

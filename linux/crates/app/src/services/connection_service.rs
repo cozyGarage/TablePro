@@ -1,11 +1,9 @@
 use std::sync::Arc;
 
-use secrecy::SecretString;
-use tablepro_core::{AuthMode, ConnectOptions, Connection, DriverRegistry, TlsConfig, TlsMode};
+use tablepro_core::{ConnectOptions, Connection, DriverRegistry, TlsConfig, TlsMode};
 use tablepro_ssh::{SshConfig, SshTunnel};
-use tablepro_storage::{
-    SavedConnection, SavedSshAuth, SavedSshConfig, load_password, load_ssh_passphrase, load_ssh_password,
-};
+use tablepro_storage::SavedConnection;
+use tablepro_transport::TransportError;
 
 use super::database_service::{self, ConnectionMetadata, ReconnectParams};
 
@@ -16,39 +14,12 @@ pub async fn open_saved(
     let driver = registry
         .get(&saved.driver_id)
         .ok_or_else(|| format!("driver {} not registered", saved.driver_id))?;
-    let password = match saved.auth_mode {
-        AuthMode::Password => load_password(saved.id)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| SecretString::new(String::new().into())),
-        AuthMode::Kerberos => SecretString::new(String::new().into()),
-    };
     let id = saved.id;
     let environment = saved.environment;
     let read_only = saved.read_only;
-    let auth_mode = saved.auth_mode;
-    let tls_mode = saved.effective_tls_mode();
 
-    let ssh_hops = match &saved.ssh {
-        Some(ssh) => Some(resolve_saved_ssh_chain(id, ssh).await?),
-        None => None,
-    };
-
-    let opts = ConnectOptions {
-        host: saved.host,
-        port: saved.port,
-        database: saved.database,
-        username: saved.username,
-        password,
-        tls: TlsConfig {
-            mode: tls_mode,
-            ..Default::default()
-        },
-        auth_mode,
-        service_endpoint: None,
-        forwarded_socket_dir: None,
-    };
+    let ssh_hops = tablepro_transport::saved_ssh_chain(&saved).await.map_err(message)?;
+    let opts = tablepro_transport::connect_options_for(&saved).await.map_err(message)?;
 
     let (conn, tunnel) = establish(&*driver, opts.clone(), ssh_hops.clone()).await?;
     let server_version = conn.server_version().await.ok().flatten();
@@ -72,286 +43,23 @@ pub async fn open_saved(
 
 pub async fn establish(
     driver: &dyn tablepro_core::DatabaseDriver,
-    mut opts: ConnectOptions,
+    opts: ConnectOptions,
     ssh: Option<Vec<SshConfig>>,
 ) -> Result<(Box<dyn Connection>, Option<SshTunnel>), String> {
-    check_auth_mode(opts.auth_mode, driver.supports_integrated_auth(), driver.display_name())?;
-    opts.forwarded_socket_dir = None;
-
-    let tunnel = if let Some(hops) = ssh {
-        if hops.is_empty() {
-            return Err("ssh: jump chain is empty".into());
-        }
-        let remote = (std::mem::take(&mut opts.host), opts.port);
-        let socket_name = forwarded_socket_name(driver, opts.tls.mode, remote.1);
-        let tun = match &socket_name {
-            Some(name) => SshTunnel::open_chain_socket(&hops, remote.0.clone(), remote.1, name).await,
-            None => SshTunnel::open_chain(&hops, remote.0.clone(), remote.1).await,
-        }
-        .map_err(|e| format!("ssh: {e}"))?;
-        match tun.socket_dir() {
-            Some(directory) => forward_through_socket(&mut opts, remote, directory.to_path_buf()),
-            None => redirect_through_tunnel(&mut opts, remote, (tun.local_host().to_string(), tun.local_port())),
-        }
-        Some(tun)
-    } else {
-        None
-    };
-    let raw = driver
-        .connect(opts)
-        .await
-        .map_err(|error| crate::ui::error_text::driver_message(&error))?;
-    Ok((raw, tunnel))
+    tablepro_transport::establish(driver, opts, ssh).await.map_err(message)
 }
 
-fn redirect_through_tunnel(opts: &mut ConnectOptions, service_endpoint: (String, u16), dial_endpoint: (String, u16)) {
-    opts.service_endpoint = Some(service_endpoint);
-    opts.host = dial_endpoint.0;
-    opts.port = dial_endpoint.1;
-    opts.forwarded_socket_dir = None;
-}
-
-fn forward_through_socket(opts: &mut ConnectOptions, service_endpoint: (String, u16), directory: std::path::PathBuf) {
-    opts.host = service_endpoint.0.clone();
-    opts.port = service_endpoint.1;
-    opts.service_endpoint = Some(service_endpoint);
-    opts.forwarded_socket_dir = Some(directory);
-}
-
-fn forwarded_socket_name(
-    driver: &dyn tablepro_core::DatabaseDriver,
-    tls_mode: TlsMode,
-    service_port: u16,
-) -> Option<String> {
-    if !tls_mode.verifies_cert() {
-        return None;
-    }
-    driver.forwarded_socket_name(service_port)
-}
-
-fn check_auth_mode(mode: AuthMode, supports_integrated_auth: bool, driver_name: &str) -> Result<(), String> {
-    if mode == AuthMode::Kerberos && !supports_integrated_auth {
-        return Err(
+fn message(error: TransportError) -> String {
+    match error {
+        TransportError::Driver(error) => crate::ui::error_text::driver_message(&error),
+        TransportError::IntegratedAuthUnsupported(driver_name) => {
             crate::tr!("The {driver} driver does not support Windows (Kerberos) authentication.")
-                .replace("{driver}", driver_name),
-        );
-    }
-    Ok(())
-}
-
-async fn resolve_saved_ssh_chain(id: uuid::Uuid, saved: &SavedSshConfig) -> Result<Vec<SshConfig>, String> {
-    let hops = saved.flatten_hops();
-    let mut out = Vec::with_capacity(hops.len());
-    for (index, hop) in hops.into_iter().enumerate() {
-        out.push(resolve_saved_ssh_hop(id, hop, index).await?);
-    }
-    Ok(out)
-}
-
-async fn resolve_saved_ssh_hop(id: uuid::Uuid, saved: &SavedSshConfig, hop_index: usize) -> Result<SshConfig, String> {
-    let auth = match &saved.auth {
-        SavedSshAuth::Password => {
-            // Hop 0 uses the legacy keyring slot; deeper hops share the
-            // same password only when configured that way in JSON (UI
-            // does not yet collect per-hop secrets).
-            let pw = if hop_index == 0 {
-                load_ssh_password(id)
-                    .await
-                    .map_err(|e| format!("load ssh password: {e}"))?
-                    .ok_or_else(|| "ssh password not in keyring".to_string())?
-            } else {
-                load_ssh_password(id)
-                    .await
-                    .map_err(|e| format!("load ssh password for hop {hop_index}: {e}"))?
-                    .ok_or_else(|| {
-                        format!(
-                            "ssh password for jump hop {hop_index} not in keyring \
-                             (edit connections.json jump auth to use a private key, or store the hop-0 password)"
-                        )
-                    })?
-            };
-            tablepro_ssh::SshAuth::Password { password: pw }
+                .replace("{driver}", &driver_name)
         }
-        SavedSshAuth::PrivateKey { path, has_passphrase } => {
-            let passphrase = if *has_passphrase {
-                load_ssh_passphrase(id)
-                    .await
-                    .map_err(|e| format!("load ssh passphrase: {e}"))?
-            } else {
-                None
-            };
-            tablepro_ssh::SshAuth::PrivateKey {
-                path: path.clone(),
-                passphrase,
-            }
-        }
-    };
-    Ok(SshConfig {
-        host: saved.host.clone(),
-        port: saved.port,
-        username: saved.username.clone(),
-        auth,
-    })
+        other => other.to_string(),
+    }
 }
 
 pub fn tls_config(mode: TlsMode) -> TlsConfig {
-    TlsConfig {
-        mode,
-        ..Default::default()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tunnel_uses_local_dial_endpoint_and_keeps_service_identity() {
-        let mut opts = ConnectOptions {
-            host: "sql.corp.example".into(),
-            port: 1433,
-            ..Default::default()
-        };
-
-        redirect_through_tunnel(
-            &mut opts,
-            ("sql.corp.example".into(), 1433),
-            ("127.0.0.1".into(), 54321),
-        );
-
-        assert_eq!(opts.host, "127.0.0.1");
-        assert_eq!(opts.port, 54321);
-        assert_eq!(opts.service_address(), ("sql.corp.example", 1433));
-    }
-
-    struct SocketDriver;
-
-    #[async_trait::async_trait]
-    impl tablepro_core::DatabaseDriver for SocketDriver {
-        fn id(&self) -> &'static str {
-            "socket"
-        }
-        fn display_name(&self) -> &'static str {
-            "Socket"
-        }
-        fn default_port(&self) -> u16 {
-            5432
-        }
-        fn forwarded_socket_name(&self, service_port: u16) -> Option<String> {
-            Some(format!(".s.PGSQL.{service_port}"))
-        }
-        async fn connect(
-            &self,
-            _opts: ConnectOptions,
-        ) -> Result<Box<dyn tablepro_core::Connection>, tablepro_core::DriverError> {
-            Err(tablepro_core::DriverError::Unsupported("test driver".into()))
-        }
-    }
-
-    struct TcpOnlyDriver;
-
-    #[async_trait::async_trait]
-    impl tablepro_core::DatabaseDriver for TcpOnlyDriver {
-        fn id(&self) -> &'static str {
-            "tcp-only"
-        }
-        fn display_name(&self) -> &'static str {
-            "TCP only"
-        }
-        fn default_port(&self) -> u16 {
-            3306
-        }
-        async fn connect(
-            &self,
-            _opts: ConnectOptions,
-        ) -> Result<Box<dyn tablepro_core::Connection>, tablepro_core::DriverError> {
-            Err(tablepro_core::DriverError::Unsupported("test driver".into()))
-        }
-    }
-
-    #[test]
-    fn socket_forwarding_applies_only_when_the_mode_verifies_certificates() {
-        assert_eq!(
-            forwarded_socket_name(&SocketDriver, TlsMode::VerifyFull, 5432).as_deref(),
-            Some(".s.PGSQL.5432")
-        );
-        assert_eq!(
-            forwarded_socket_name(&SocketDriver, TlsMode::VerifyCa, 5432).as_deref(),
-            Some(".s.PGSQL.5432")
-        );
-        assert!(forwarded_socket_name(&SocketDriver, TlsMode::Require, 5432).is_none());
-        assert!(forwarded_socket_name(&SocketDriver, TlsMode::Disabled, 5432).is_none());
-        assert!(forwarded_socket_name(&TcpOnlyDriver, TlsMode::VerifyFull, 3306).is_none());
-    }
-
-    #[test]
-    fn socket_forwarding_keeps_the_service_hostname_for_tls() {
-        let mut opts = ConnectOptions {
-            host: String::new(),
-            port: 5432,
-            tls: tls_config(TlsMode::VerifyFull),
-            ..Default::default()
-        };
-
-        forward_through_socket(
-            &mut opts,
-            ("db.corp.example".into(), 5432),
-            std::path::PathBuf::from("/run/user/1000/tablepro-ssh-abc"),
-        );
-
-        assert_eq!(opts.service_address(), ("db.corp.example", 5432));
-        assert_eq!(
-            opts.transport(),
-            tablepro_core::Transport::Socket {
-                directory: std::path::Path::new("/run/user/1000/tablepro-ssh-abc"),
-                identity_host: "db.corp.example",
-                identity_port: 5432,
-            }
-        );
-    }
-
-    #[test]
-    fn tcp_forwarding_clears_any_earlier_socket_directory() {
-        let mut opts = ConnectOptions {
-            host: "db.corp.example".into(),
-            port: 5432,
-            forwarded_socket_dir: Some(std::path::PathBuf::from("/run/user/1000/stale")),
-            ..Default::default()
-        };
-
-        redirect_through_tunnel(&mut opts, ("db.corp.example".into(), 5432), ("127.0.0.1".into(), 54321));
-
-        assert!(opts.forwarded_socket_dir.is_none());
-        assert_eq!(
-            opts.transport(),
-            tablepro_core::Transport::Tcp {
-                host: "127.0.0.1",
-                port: 54321
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn establish_never_reuses_a_socket_directory_from_an_earlier_attempt() {
-        let opts = ConnectOptions {
-            host: "db.corp.example".into(),
-            port: 5432,
-            forwarded_socket_dir: Some(std::path::PathBuf::from("/run/user/1000/removed")),
-            ..Default::default()
-        };
-
-        let error = establish(&SocketDriver, opts, None)
-            .await
-            .err()
-            .expect("test driver refuses to connect");
-
-        assert!(error.contains("test driver"), "unexpected error: {error}");
-    }
-
-    #[test]
-    fn kerberos_requires_driver_support() {
-        assert!(check_auth_mode(AuthMode::Kerberos, false, "PostgreSQL").is_err());
-        assert!(check_auth_mode(AuthMode::Kerberos, true, "SQL Server").is_ok());
-        assert!(check_auth_mode(AuthMode::Password, false, "PostgreSQL").is_ok());
-    }
+    tablepro_transport::tls_config(mode)
 }

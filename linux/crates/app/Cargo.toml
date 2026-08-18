@@ -37,6 +37,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tablepro-ssh = { path = "../ssh" }
 tablepro-storage = { path = "../storage" }
+tablepro-transport = { path = "../transport" }
 gtk4.workspace = true
 libadwaita.workspace = true
 sourceview5.workspace = true

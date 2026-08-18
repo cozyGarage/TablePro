@@ -1,0 +1,23 @@
+[package]
+name = "tablepro-transport"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "tablepro_transport"
+path = "src/lib.rs"
+
+[dependencies]
+tablepro-core = { path = "../core" }
+tablepro-ssh = { path = "../ssh" }
+tablepro-storage = { path = "../storage" }
+secrecy.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
