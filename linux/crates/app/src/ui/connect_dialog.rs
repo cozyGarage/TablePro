@@ -600,6 +600,7 @@ impl ConnectDialog {
             tls: self.tls_config_for(driver),
             auth_mode: self.form.mode(),
             service_endpoint: None,
+            forwarded_socket_dir: None,
         }
     }
 

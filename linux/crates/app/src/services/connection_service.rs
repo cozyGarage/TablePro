@@ -47,6 +47,7 @@ pub async fn open_saved(
         },
         auth_mode,
         service_endpoint: None,
+        forwarded_socket_dir: None,
     };
 
     let (conn, tunnel) = establish(&*driver, opts.clone(), ssh_hops.clone()).await?;
@@ -75,16 +76,23 @@ pub async fn establish(
     ssh: Option<Vec<SshConfig>>,
 ) -> Result<(Box<dyn Connection>, Option<SshTunnel>), String> {
     check_auth_mode(opts.auth_mode, driver.supports_integrated_auth(), driver.display_name())?;
+    opts.forwarded_socket_dir = None;
 
     let tunnel = if let Some(hops) = ssh {
         if hops.is_empty() {
             return Err("ssh: jump chain is empty".into());
         }
         let remote = (std::mem::take(&mut opts.host), opts.port);
-        let tun = SshTunnel::open_chain(&hops, remote.0.clone(), remote.1)
-            .await
-            .map_err(|e| format!("ssh: {e}"))?;
-        redirect_through_tunnel(&mut opts, remote, (tun.local_host().to_string(), tun.local_port()));
+        let socket_name = forwarded_socket_name(driver, opts.tls.mode, remote.1);
+        let tun = match &socket_name {
+            Some(name) => SshTunnel::open_chain_socket(&hops, remote.0.clone(), remote.1, name).await,
+            None => SshTunnel::open_chain(&hops, remote.0.clone(), remote.1).await,
+        }
+        .map_err(|e| format!("ssh: {e}"))?;
+        match tun.socket_dir() {
+            Some(directory) => forward_through_socket(&mut opts, remote, directory.to_path_buf()),
+            None => redirect_through_tunnel(&mut opts, remote, (tun.local_host().to_string(), tun.local_port())),
+        }
         Some(tun)
     } else {
         None
@@ -100,6 +108,25 @@ fn redirect_through_tunnel(opts: &mut ConnectOptions, service_endpoint: (String,
     opts.service_endpoint = Some(service_endpoint);
     opts.host = dial_endpoint.0;
     opts.port = dial_endpoint.1;
+    opts.forwarded_socket_dir = None;
+}
+
+fn forward_through_socket(opts: &mut ConnectOptions, service_endpoint: (String, u16), directory: std::path::PathBuf) {
+    opts.host = service_endpoint.0.clone();
+    opts.port = service_endpoint.1;
+    opts.service_endpoint = Some(service_endpoint);
+    opts.forwarded_socket_dir = Some(directory);
+}
+
+fn forwarded_socket_name(
+    driver: &dyn tablepro_core::DatabaseDriver,
+    tls_mode: TlsMode,
+    service_port: u16,
+) -> Option<String> {
+    if !tls_mode.verifies_cert() {
+        return None;
+    }
+    driver.forwarded_socket_name(service_port)
 }
 
 fn check_auth_mode(mode: AuthMode, supports_integrated_auth: bool, driver_name: &str) -> Result<(), String> {
@@ -195,6 +222,130 @@ mod tests {
         assert_eq!(opts.host, "127.0.0.1");
         assert_eq!(opts.port, 54321);
         assert_eq!(opts.service_address(), ("sql.corp.example", 1433));
+    }
+
+    struct SocketDriver;
+
+    #[async_trait::async_trait]
+    impl tablepro_core::DatabaseDriver for SocketDriver {
+        fn id(&self) -> &'static str {
+            "socket"
+        }
+        fn display_name(&self) -> &'static str {
+            "Socket"
+        }
+        fn default_port(&self) -> u16 {
+            5432
+        }
+        fn forwarded_socket_name(&self, service_port: u16) -> Option<String> {
+            Some(format!(".s.PGSQL.{service_port}"))
+        }
+        async fn connect(
+            &self,
+            _opts: ConnectOptions,
+        ) -> Result<Box<dyn tablepro_core::Connection>, tablepro_core::DriverError> {
+            Err(tablepro_core::DriverError::Unsupported("test driver".into()))
+        }
+    }
+
+    struct TcpOnlyDriver;
+
+    #[async_trait::async_trait]
+    impl tablepro_core::DatabaseDriver for TcpOnlyDriver {
+        fn id(&self) -> &'static str {
+            "tcp-only"
+        }
+        fn display_name(&self) -> &'static str {
+            "TCP only"
+        }
+        fn default_port(&self) -> u16 {
+            3306
+        }
+        async fn connect(
+            &self,
+            _opts: ConnectOptions,
+        ) -> Result<Box<dyn tablepro_core::Connection>, tablepro_core::DriverError> {
+            Err(tablepro_core::DriverError::Unsupported("test driver".into()))
+        }
+    }
+
+    #[test]
+    fn socket_forwarding_applies_only_when_the_mode_verifies_certificates() {
+        assert_eq!(
+            forwarded_socket_name(&SocketDriver, TlsMode::VerifyFull, 5432).as_deref(),
+            Some(".s.PGSQL.5432")
+        );
+        assert_eq!(
+            forwarded_socket_name(&SocketDriver, TlsMode::VerifyCa, 5432).as_deref(),
+            Some(".s.PGSQL.5432")
+        );
+        assert!(forwarded_socket_name(&SocketDriver, TlsMode::Require, 5432).is_none());
+        assert!(forwarded_socket_name(&SocketDriver, TlsMode::Disabled, 5432).is_none());
+        assert!(forwarded_socket_name(&TcpOnlyDriver, TlsMode::VerifyFull, 3306).is_none());
+    }
+
+    #[test]
+    fn socket_forwarding_keeps_the_service_hostname_for_tls() {
+        let mut opts = ConnectOptions {
+            host: String::new(),
+            port: 5432,
+            tls: tls_config(TlsMode::VerifyFull),
+            ..Default::default()
+        };
+
+        forward_through_socket(
+            &mut opts,
+            ("db.corp.example".into(), 5432),
+            std::path::PathBuf::from("/run/user/1000/tablepro-ssh-abc"),
+        );
+
+        assert_eq!(opts.service_address(), ("db.corp.example", 5432));
+        assert_eq!(
+            opts.transport(),
+            tablepro_core::Transport::Socket {
+                directory: std::path::Path::new("/run/user/1000/tablepro-ssh-abc"),
+                identity_host: "db.corp.example",
+                identity_port: 5432,
+            }
+        );
+    }
+
+    #[test]
+    fn tcp_forwarding_clears_any_earlier_socket_directory() {
+        let mut opts = ConnectOptions {
+            host: "db.corp.example".into(),
+            port: 5432,
+            forwarded_socket_dir: Some(std::path::PathBuf::from("/run/user/1000/stale")),
+            ..Default::default()
+        };
+
+        redirect_through_tunnel(&mut opts, ("db.corp.example".into(), 5432), ("127.0.0.1".into(), 54321));
+
+        assert!(opts.forwarded_socket_dir.is_none());
+        assert_eq!(
+            opts.transport(),
+            tablepro_core::Transport::Tcp {
+                host: "127.0.0.1",
+                port: 54321
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn establish_never_reuses_a_socket_directory_from_an_earlier_attempt() {
+        let opts = ConnectOptions {
+            host: "db.corp.example".into(),
+            port: 5432,
+            forwarded_socket_dir: Some(std::path::PathBuf::from("/run/user/1000/removed")),
+            ..Default::default()
+        };
+
+        let error = establish(&SocketDriver, opts, None)
+            .await
+            .err()
+            .expect("test driver refuses to connect");
+
+        assert!(error.contains("test driver"), "unexpected error: {error}");
     }
 
     #[test]

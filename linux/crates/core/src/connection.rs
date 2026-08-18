@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use async_trait::async_trait;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
@@ -26,6 +28,7 @@ pub struct ConnectOptions {
     pub tls: TlsConfig,
     pub auth_mode: AuthMode,
     pub service_endpoint: Option<(String, u16)>,
+    pub forwarded_socket_dir: Option<PathBuf>,
 }
 
 impl ConnectOptions {
@@ -34,6 +37,36 @@ impl ConnectOptions {
             .as_ref()
             .map_or((self.host.as_str(), self.port), |(host, port)| (host.as_str(), *port))
     }
+
+    pub fn transport(&self) -> Transport<'_> {
+        match &self.forwarded_socket_dir {
+            Some(dir) => {
+                let (host, port) = self.service_address();
+                Transport::Socket {
+                    directory: dir.as_path(),
+                    identity_host: host,
+                    identity_port: port,
+                }
+            }
+            None => Transport::Tcp {
+                host: self.host.as_str(),
+                port: self.port,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transport<'a> {
+    Tcp {
+        host: &'a str,
+        port: u16,
+    },
+    Socket {
+        directory: &'a Path,
+        identity_host: &'a str,
+        identity_port: u16,
+    },
 }
 
 impl Default for ConnectOptions {
@@ -47,6 +80,7 @@ impl Default for ConnectOptions {
             tls: TlsConfig::disabled(),
             auth_mode: AuthMode::Password,
             service_endpoint: None,
+            forwarded_socket_dir: None,
         }
     }
 }
@@ -154,6 +188,44 @@ mod tests {
         };
 
         assert_eq!(options.service_address(), ("sql.corp.example", 1433));
+    }
+
+    #[test]
+    fn transport_uses_the_dial_address_without_socket_forwarding() {
+        let options = ConnectOptions {
+            host: "127.0.0.1".into(),
+            port: 54321,
+            service_endpoint: Some(("db.corp.example".into(), 5432)),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            options.transport(),
+            Transport::Tcp {
+                host: "127.0.0.1",
+                port: 54321
+            }
+        );
+    }
+
+    #[test]
+    fn transport_presents_service_identity_over_a_forwarded_socket() {
+        let options = ConnectOptions {
+            host: "db.corp.example".into(),
+            port: 5432,
+            service_endpoint: Some(("db.corp.example".into(), 5432)),
+            forwarded_socket_dir: Some(PathBuf::from("/run/user/1000/tablepro-ssh-abc")),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            options.transport(),
+            Transport::Socket {
+                directory: Path::new("/run/user/1000/tablepro-ssh-abc"),
+                identity_host: "db.corp.example",
+                identity_port: 5432,
+            }
+        );
     }
 
     #[test]

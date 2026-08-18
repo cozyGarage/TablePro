@@ -44,9 +44,11 @@ Cancellation is no longer a release blocker by itself. Release testing must stil
 
 ### PostgreSQL TLS through SSH and reconnect fixture
 
-There is no deterministic release fixture that covers the full PostgreSQL TLS, SSH tunnel, certificate identity, disconnect, and reconnect path. The model separates the physical tunnel endpoint from the database service identity, but the supported PostgreSQL connector path must prove hostname verification against the original service while dialing the forwarded endpoint.
+Closed on 2026-08-18. `tests/fixtures/postgres-release/` runs PostgreSQL 16 with TLS, an OpenSSH bastion, and Toxiproxy, and the database publishes no host port. The suite proves that a verifying connection succeeds against a hostname the certificate names, fails on a wrong hostname or an unrelated authority, reaches the database through the bastion, and recovers from a cut database path and a cut bastion path.
 
-The fixture must fail on a wrong hostname or untrusted certificate, pass with the expected certificate, survive the supported reconnect path, and confirm that verification is never lowered without an explicit user choice.
+A tunnelled verifying connection dials a private Unix socket bound by the tunnel's last hop, so certificate checks use the saved database hostname while the transport stays inside the tunnel. A TCP-forwarded tunnel still refuses to verify the local dial address rather than lowering verification.
+
+Release testing must still prove the installed GTK cancel flow and audit outcome behavior against this fixture, and the hosted `postgres-release` job is external confirmation.
 
 ### Targeted GTK safety tests
 
@@ -84,7 +86,6 @@ Not approved yet:
 
 - Trusted production mutations
 - Unattended MCP or agent writes
-- PostgreSQL `VerifyFull` through an SSH tunnel without the release fixture
 - Public stable package distribution
 
-Re-run this audit after the PostgreSQL TLS, SSH, and reconnect fixture, the GTK safety CI soak, and installed AUR or Omarchy package checks pass.
+Re-run this audit after the hosted PostgreSQL release fixture job, the GTK safety CI soak, and installed AUR or Omarchy package checks pass.

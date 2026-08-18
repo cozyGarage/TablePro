@@ -80,7 +80,7 @@ Only Toxiproxy publishes host ports, so the database is reachable through the pr
 bastion and either path can be cut during a test.
 
 The suite verifies certificate hostname and authority checks, tunnelled access to a database with no
-published port, that `VerifyFull` through SSH fails instead of verifying the local dial address,
+published port, that a tunnelled `VerifyFull` verifies the original database hostname while a TCP-forwarded one refuses to verify the local dial address,
 read-only denial of data-changing CTEs and administrative functions, batch and interactive rollback,
 activity and blocking-lock queries, and direct and SSH reconnect.
 
@@ -112,6 +112,8 @@ The suite verifies:
 1. Dismissing a production approval leaves SQLite unchanged.
 2. Approving once performs one mutation and prompts again for the next operation.
 3. Unavailable audit storage denies the mutation without showing an approval path around the failure.
+
+The harness sends synthetic keyboard events only to a focused push button, so a stray key cannot reach an approval dialog, and each denial assertion requires the row count to hold for a settle window rather than matching once.
 
 On Arch or Omarchy, install the harness dependencies with:
 

@@ -46,7 +46,9 @@ trip the SSH host-key mismatch check and the developer's own `known_hosts` is un
 - `VerifyFull` rejects an address the certificate does not name
 - `VerifyFull` and `VerifyCa` reject an unrelated certificate authority
 - An SSH tunnel reaches a database that publishes no port
-- `VerifyFull` through SSH fails instead of verifying the local dial address
+- `VerifyFull` through a socket-forwarded SSH tunnel verifies the original database hostname
+- `VerifyFull` through SSH rejects a service identity the certificate does not name
+- `VerifyFull` over a TCP-forwarded tunnel fails instead of verifying the local dial address
 - Read-only denies a data-changing CTE and an administrative function
 - Batch and interactive rollback leave no rows behind
 - Activity templates run, and the blocking-lock query reports a contended row

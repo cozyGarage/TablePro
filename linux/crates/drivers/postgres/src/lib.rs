@@ -10,7 +10,7 @@ use futures::stream::StreamExt;
 
 use tablepro_core::{
     ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, ForeignKeyInfo, IndexInfo,
-    MAX_QUERY_ROWS, OperationControl, QueryResult, TableInfo, Value,
+    MAX_QUERY_ROWS, OperationControl, QueryResult, TableInfo, Transport, Value,
 };
 
 pub struct PgDriver;
@@ -33,11 +33,24 @@ impl DatabaseDriver for PgDriver {
         true
     }
 
+    fn forwarded_socket_name(&self, service_port: u16) -> Option<String> {
+        Some(format!(".s.PGSQL.{service_port}"))
+    }
+
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
         use tablepro_core::TlsMode;
-        let mut pg_opts = PgConnectOptions::new()
-            .host(&opts.host)
-            .port(opts.port)
+        let mut pg_opts = match opts.transport() {
+            Transport::Tcp { host, port } => PgConnectOptions::new().host(host).port(port),
+            Transport::Socket {
+                directory,
+                identity_host,
+                identity_port,
+            } => PgConnectOptions::new()
+                .host(identity_host)
+                .port(identity_port)
+                .socket(directory),
+        };
+        pg_opts = pg_opts
             .database(&opts.database)
             .username(&opts.username)
             .password(opts.password.expose_secret())

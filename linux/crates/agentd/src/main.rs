@@ -144,6 +144,7 @@ impl ConnectionProvider for DaemonProvider {
             },
             auth_mode: saved.auth_mode,
             service_endpoint: None,
+            forwarded_socket_dir: None,
         };
         let raw = driver.connect(opts).await.map_err(|e| e.to_string())?;
         let ctx = GuardContext {

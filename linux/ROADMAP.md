@@ -26,7 +26,7 @@ Status terms:
 | Structure editor | Implemented | Tables, columns, indexes, and foreign keys |
 | Saved connections and libsecret | Implemented | Keyring failure UX needs hardening |
 | SSH and jump chains | Implemented | Jump chains are JSON-only in the current GTK form |
-| TLS modes | Partially integrated | Hostname and authority checks are release-verified; PostgreSQL `VerifyFull` through SSH fails rather than downgrading |
+| TLS modes | Integrated | Hostname and authority checks are release-verified, including PostgreSQL `VerifyFull` through SSH |
 | Query history | Implemented | MCP access must be isolated before being re-exposed |
 | CSV/JSON export | Implemented | CSV streams table pages; Parquet is unsupported |
 | Activity and EXPLAIN | Implemented | Administrative classification and numeric session-ID validation are covered |
@@ -79,12 +79,12 @@ Phase 2 is implemented, security-reviewed, and locally verified. PostgreSQL canc
 
 - [x] Add the deterministic PostgreSQL TLS, SSH, lock, and reconnect fixture
 - [x] Verify direct `VerifyFull`, wrong hostname, and unknown certificate authority
-- [x] Prove `VerifyFull` through SSH fails instead of verifying the local dial address
+- [x] Prove a TCP-forwarded `VerifyFull` never verifies the local dial address
 - [x] Implement and verify server-side cancellation, parameterized cancellation, rollback, and pool reuse
 - [x] Verify batch and interactive rollback, activity, blocking locks, direct reconnect, and SSH reconnect
-- [ ] Connect a tunnelled `VerifyFull` session using the original database hostname
+- [x] Connect a tunnelled `VerifyFull` session using the original database hostname
 
-The fixture runs from `./scripts/test-postgres-release.sh` and in the `postgres-release` CI job. The remaining item needs a PostgreSQL connection path that separates the TCP dial address from the TLS server name.
+The fixture runs from `./scripts/test-postgres-release.sh` and in the `postgres-release` CI job. PostgreSQL tunnels a verifying connection over a private Unix socket, so the TCP dial path and the TLS server name are independent.
 
 ### 4: GTK safety tests
 
@@ -134,4 +134,4 @@ The repository extraction completed on 2026-08-17. Product planning now follows 
 
 ## Next implementation target
 
-Close the last Phase 3 item: a PostgreSQL connection path that dials the SSH tunnel while presenting the original database hostname to TLS. Options are a supported sqlx API, a small reviewed sqlx change, or a connector that accepts a supplied stream. Production-write and agent-write workflows are not release-trusted until that item and the Phase 4 CI soak complete.
+Phase 3 is release-verified locally. The remaining gates are the hosted `postgres-release` job and the Phase 4 GTK soak. After those, Phase 5 documentation cleanup and Phase 6 editor productivity work follow.

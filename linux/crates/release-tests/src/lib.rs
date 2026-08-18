@@ -102,6 +102,41 @@ impl Fixture {
             .expect("open ssh tunnel to the fixture database")
     }
 
+    pub async fn open_socket_tunnel(&self, socket_name: &str) -> SshTunnel {
+        SshTunnel::open_chain_socket(
+            &[self.ssh_config()],
+            self.database_hostname.clone(),
+            self.database_port,
+            socket_name,
+        )
+        .await
+        .expect("open a socket-forwarded ssh tunnel to the fixture database")
+    }
+
+    pub fn socket_options(
+        &self,
+        tunnel: &SshTunnel,
+        identity_host: &str,
+        mode: TlsMode,
+        root_cert: Option<PathBuf>,
+    ) -> ConnectOptions {
+        ConnectOptions {
+            host: identity_host.to_string(),
+            port: self.database_port,
+            database: self.database.clone(),
+            username: self.username.clone(),
+            password: SecretString::new(self.password.clone().into()),
+            tls: TlsConfig {
+                mode,
+                root_cert,
+                ..Default::default()
+            },
+            service_endpoint: Some((identity_host.to_string(), self.database_port)),
+            forwarded_socket_dir: tunnel.socket_dir().map(|dir| dir.to_path_buf()),
+            ..Default::default()
+        }
+    }
+
     pub fn tunneled_options(&self, tunnel: &SshTunnel, mode: TlsMode, root_cert: Option<PathBuf>) -> ConnectOptions {
         ConnectOptions {
             host: tunnel.local_host().to_string(),

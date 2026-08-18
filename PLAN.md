@@ -80,9 +80,9 @@ Complete locally on 2026-08-13. Rust 1.93 CI is green, current stable Clippy pas
 - [x] Record upstream reconciliations from 2026-08-10 onward in a short sync log.
 - [x] Reconcile browser-origin, SSH host-key algorithm, and GitHub Action pinning fixes from upstream security work.
 
-## Known transport gap
+## Transport gap closed
 
-PostgreSQL through SSH cannot currently use a distinct TCP dial address and TLS server name through sqlx 0.8.6. `VerifyFull` through SSH therefore fails instead of downgrading, which the release fixture now proves. Resolve the functional gap through a supported sqlx API, a small reviewed sqlx change, or a PostgreSQL connector that accepts a supplied stream.
+PostgreSQL through SSH could not use a distinct TCP dial address and TLS server name, because sqlx derives both from one host field. Resolved on 2026-08-18 without patching sqlx: the last SSH hop binds a Unix socket in a private directory, and the driver passes that directory as the socket transport while the host field carries the service identity used for certificate checks. A TCP-forwarded connection still refuses to verify the local dial address.
 
 ## Acceptance criteria
 
@@ -237,7 +237,7 @@ Tests to add:
 
 ## Status
 
-In progress. The cancellable driver contract, PostgreSQL server cancellation, terminal audit outcomes, parameterized operations, interactive rollback, and post-cancel pool reuse are implemented and verified against PostgreSQL 16. The deterministic TLS, SSH, lock, and reconnect fixture landed on 2026-08-18 and passes locally. `VerifyFull` through SSH using the original database hostname remains the open release blocker.
+Release-verified locally on 2026-08-18. The cancellable driver contract, PostgreSQL server cancellation, terminal audit outcomes, parameterized operations, interactive rollback, and post-cancel pool reuse are verified against PostgreSQL 16. The deterministic TLS, SSH, lock, and reconnect fixture passes, including `VerifyFull` through SSH using the original database hostname. The hosted `postgres-release` job is the remaining external confirmation.
 
 ## Driver contract
 
@@ -258,8 +258,8 @@ The Docker Compose fixture lives in `linux/tests/fixtures/postgres-release/` and
 Required scenarios:
 
 - [x] Direct `VerifyFull`, wrong hostname, and unknown CA
-- [ ] `VerifyFull` through SSH using the original database hostname
-- [x] `VerifyFull` through SSH fails rather than verifying the local dial address
+- [x] `VerifyFull` through SSH using the original database hostname
+- [x] A TCP-forwarded `VerifyFull` fails rather than verifying the local dial address
 - [x] Read-only data-changing CTE denial
 - [x] Server-confirmed timeout and cancellation
 - [x] Interactive rollback after cancellation
@@ -273,7 +273,11 @@ Required scenarios:
 - [x] Cancelled/timed-out queries leave the server and receive terminal audit outcomes.
 - [x] Reconnect replaces the connection and tunnel and later queries succeed.
 - [x] The fixture runs as a release-candidate gate in CI.
-- [ ] A tunnelled `VerifyFull` session connects using the original database hostname. sqlx 0.8.6 derives both the dial address and the TLS server name from one host field, so this needs a supported sqlx API, a small reviewed sqlx change, or a PostgreSQL connector that accepts a supplied stream.
+- [x] A tunnelled `VerifyFull` session connects using the original database hostname. The tunnel's last hop binds a private Unix socket, and the PostgreSQL driver dials that socket while verifying the certificate against the saved hostname.
+
+## Follow-up transport work
+
+MySQL, SQL Server, and ClickHouse still forward TCP for every TLS mode. MySQL has the same sqlx limitation PostgreSQL had, so a verifying MySQL connection through SSH cannot yet check the original hostname. Closing that needs the socket transport in the MySQL driver and a MySQL release fixture with TLS and a bastion. Do not enable it without real-driver verification.
 
 ---
 
@@ -282,6 +286,8 @@ Required scenarios:
 ## Status
 
 Implemented and locally release-verified on 2026-08-17. The installed GTK suite is soaking in CI before it becomes a required PR check.
+
+A local soak on 2026-08-18 found one failure in 14 runs where the harness's keyboard fallback could send a stray Return into the approval dialog. The harness now sends synthetic keys only to a focused push button, checks that the dialog is still open before dismissing it, and requires the row count to hold for a settle window instead of matching once. Twelve further runs passed. Production approval routing was unchanged by this work.
 
 Foundation:
 

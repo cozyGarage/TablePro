@@ -64,5 +64,13 @@ pub trait DatabaseDriver: Send + Sync {
         false
     }
 
+    /// File name a forwarded Unix socket must use for this driver to
+    /// dial it while verifying TLS against the original service
+    /// hostname. `None` means the driver has no socket transport and an
+    /// SSH tunnel must forward TCP instead.
+    fn forwarded_socket_name(&self, _service_port: u16) -> Option<String> {
+        None
+    }
+
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError>;
 }

@@ -1,10 +1,11 @@
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream, UnixListener};
 use tokio_util::sync::CancellationToken;
 
 use russh::ChannelMsg;
@@ -68,16 +69,61 @@ pub enum SshError {
     Ssh(#[from] russh::Error),
 }
 
-/// Local TCP listener that forwards through one or more SSH sessions.
+/// Local listener that forwards through one or more SSH sessions.
+///
+/// The final hop binds either a loopback TCP port or a Unix socket in a
+/// private directory. A socket lets a driver dial the tunnel while TLS
+/// still verifies the original service hostname.
 ///
 /// For a jump chain, intermediate hops stay alive as nested
 /// [`SshTunnel`] values so each local forward remains reachable.
 pub struct SshTunnel {
     local_port: u16,
+    socket_dir: Option<LocalSocketDir>,
     cancel: CancellationToken,
     _task: tokio::task::JoinHandle<()>,
     /// Intermediate hop tunnels (dropped after this forwarder cancels).
     _upstream: Vec<SshTunnel>,
+}
+
+#[derive(Debug, Clone)]
+enum LocalBind {
+    Tcp,
+    Socket { name: String },
+}
+
+struct LocalSocketDir {
+    path: PathBuf,
+}
+
+impl LocalSocketDir {
+    fn create() -> Result<Self, SshError> {
+        let base = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let mut last_error = None;
+        for _ in 0..8 {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or_default();
+            let path = base.join(format!("tablepro-ssh-{}-{unique}", std::process::id()));
+            match std::fs::DirBuilder::new().recursive(false).mode(0o700).create(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => last_error = Some(error),
+                Err(error) => return Err(SshError::Bind(error)),
+            }
+        }
+        Err(SshError::Bind(last_error.unwrap_or_else(|| {
+            std::io::Error::other("could not create a private socket directory")
+        })))
+    }
+}
+
+impl Drop for LocalSocketDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
 }
 
 impl SshTunnel {
@@ -90,6 +136,36 @@ impl SshTunnel {
     /// goes there directly); `hops[n-1]` is the last jump before the
     /// database. Nested local forwards: hop0 → hop1:22 → … → remote.
     pub async fn open_chain(hops: &[SshConfig], remote_host: String, remote_port: u16) -> Result<Self, SshError> {
+        Self::open_chain_with(hops, remote_host, remote_port, LocalBind::Tcp).await
+    }
+
+    /// Multi-hop tunnel whose final local endpoint is a Unix socket
+    /// named `socket_name` inside a private directory. A driver that
+    /// reports a forwarded socket name dials that socket and keeps
+    /// verifying TLS against the original service hostname.
+    pub async fn open_chain_socket(
+        hops: &[SshConfig],
+        remote_host: String,
+        remote_port: u16,
+        socket_name: &str,
+    ) -> Result<Self, SshError> {
+        Self::open_chain_with(
+            hops,
+            remote_host,
+            remote_port,
+            LocalBind::Socket {
+                name: socket_name.to_string(),
+            },
+        )
+        .await
+    }
+
+    async fn open_chain_with(
+        hops: &[SshConfig],
+        remote_host: String,
+        remote_port: u16,
+        bind: LocalBind,
+    ) -> Result<Self, SshError> {
         if hops.is_empty() {
             return Err(SshError::EmptyChain);
         }
@@ -106,7 +182,8 @@ impl SshTunnel {
                 (hops[i + 1].host.as_str(), hops[i + 1].port)
             };
 
-            let mut tunnel = open_single(hop, &tcp_host, tcp_port, fwd_host.to_string(), fwd_port).await?;
+            let hop_bind = if is_last { bind.clone() } else { LocalBind::Tcp };
+            let mut tunnel = open_single(hop, &tcp_host, tcp_port, fwd_host.to_string(), fwd_port, hop_bind).await?;
 
             if is_last {
                 tunnel._upstream = upstream;
@@ -127,6 +204,12 @@ impl SshTunnel {
 
     pub fn local_host(&self) -> &'static str {
         LOCAL_BIND_HOST
+    }
+
+    /// Directory holding the forwarded Unix socket, when the tunnel was
+    /// opened with [`SshTunnel::open_chain_socket`].
+    pub fn socket_dir(&self) -> Option<&Path> {
+        self.socket_dir.as_ref().map(|dir| dir.path.as_path())
     }
 }
 
@@ -219,10 +302,10 @@ async fn open_single(
     tcp_port: u16,
     fwd_host: String,
     fwd_port: u16,
+    bind: LocalBind,
 ) -> Result<SshTunnel, SshError> {
     let session = Arc::new(connect_and_auth(cfg, tcp_host, tcp_port).await?);
-    let listener = TcpListener::bind((LOCAL_BIND_HOST, 0)).await.map_err(SshError::Bind)?;
-    let local_port = listener.local_addr().map_err(SshError::Bind)?.port();
+    let (listener, local_port, socket_dir) = bind_local(bind).await?;
 
     tracing::info!(
         ssh_host = %cfg.host,
@@ -230,6 +313,7 @@ async fn open_single(
         tcp_host,
         tcp_port,
         local_port,
+        forwarded_socket = socket_dir.is_some(),
         remote_host = %fwd_host,
         remote_port = fwd_port,
         "ssh tunnel listening"
@@ -240,10 +324,60 @@ async fn open_single(
 
     Ok(SshTunnel {
         local_port,
+        socket_dir,
         cancel,
         _task: task,
         _upstream: Vec::new(),
     })
+}
+
+const MAX_SOCKET_PATH_LEN: usize = 100;
+
+async fn bind_local(bind: LocalBind) -> Result<(LocalListener, u16, Option<LocalSocketDir>), SshError> {
+    match bind {
+        LocalBind::Tcp => {
+            let listener = TcpListener::bind((LOCAL_BIND_HOST, 0)).await.map_err(SshError::Bind)?;
+            let local_port = listener.local_addr().map_err(SshError::Bind)?.port();
+            Ok((LocalListener::Tcp(listener), local_port, None))
+        }
+        LocalBind::Socket { name } => {
+            let directory = LocalSocketDir::create()?;
+            let path = directory.path.join(&name);
+            if path.as_os_str().len() > MAX_SOCKET_PATH_LEN {
+                return Err(SshError::Bind(std::io::Error::other(format!(
+                    "forwarded socket path is too long: {} bytes",
+                    path.as_os_str().len()
+                ))));
+            }
+            let listener = UnixListener::bind(&path).map_err(SshError::Bind)?;
+            Ok((LocalListener::Socket(listener), 0, Some(directory)))
+        }
+    }
+}
+
+enum LocalListener {
+    Tcp(TcpListener),
+    Socket(UnixListener),
+}
+
+enum LocalStream {
+    Tcp(TcpStream),
+    Socket(tokio::net::UnixStream),
+}
+
+impl LocalListener {
+    async fn accept(&self) -> std::io::Result<(LocalStream, String, u32)> {
+        match self {
+            Self::Tcp(listener) => {
+                let (stream, peer) = listener.accept().await?;
+                Ok((LocalStream::Tcp(stream), peer.ip().to_string(), u32::from(peer.port())))
+            }
+            Self::Socket(listener) => {
+                let (stream, _) = listener.accept().await?;
+                Ok((LocalStream::Socket(stream), LOCAL_BIND_HOST.to_string(), 0))
+            }
+        }
+    }
 }
 
 async fn connect_and_auth(cfg: &SshConfig, tcp_host: &str, tcp_port: u16) -> Result<Handle<ClientHandler>, SshError> {
@@ -328,7 +462,7 @@ fn map_connect_error(
 }
 
 async fn forwarder_loop(
-    listener: TcpListener,
+    listener: LocalListener,
     session: Arc<Handle<ClientHandler>>,
     remote_host: String,
     remote_port: u16,
@@ -341,12 +475,20 @@ async fn forwarder_loop(
                 return;
             }
             accept = listener.accept() => match accept {
-                Ok((socket, peer)) => {
+                Ok((socket, originator_host, originator_port)) => {
                     let session = session.clone();
                     let remote_host = remote_host.clone();
                     let cancel = cancel.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = forward_one(session, socket, peer, remote_host, remote_port, cancel).await {
+                        let forwarded = match socket {
+                            LocalStream::Tcp(stream) => {
+                                forward_one(session, stream, originator_host, originator_port, remote_host, remote_port, cancel).await
+                            }
+                            LocalStream::Socket(stream) => {
+                                forward_one(session, stream, originator_host, originator_port, remote_host, remote_port, cancel).await
+                            }
+                        };
+                        if let Err(e) = forwarded {
                             tracing::warn!(error = %e, "ssh forward failed");
                         }
                     });
@@ -360,21 +502,20 @@ async fn forwarder_loop(
     }
 }
 
-async fn forward_one(
+async fn forward_one<S>(
     session: Arc<Handle<ClientHandler>>,
-    mut socket: TcpStream,
-    peer: std::net::SocketAddr,
+    mut socket: S,
+    originator_host: String,
+    originator_port: u32,
     remote_host: String,
     remote_port: u16,
     cancel: CancellationToken,
-) -> Result<(), russh::Error> {
+) -> Result<(), russh::Error>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
     let mut channel = session
-        .channel_open_direct_tcpip(
-            remote_host,
-            u32::from(remote_port),
-            peer.ip().to_string(),
-            u32::from(peer.port()),
-        )
+        .channel_open_direct_tcpip(remote_host, u32::from(remote_port), originator_host, originator_port)
         .await?;
 
     let mut buf = vec![0u8; 65536];

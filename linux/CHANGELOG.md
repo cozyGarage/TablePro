@@ -33,6 +33,7 @@
 - Arch/Omarchy Rust toolchain guidance and a traceable upstream Linux sync log
 - Installed GTK safety checks for approval dismissal, approve-once scope, and unavailable audit storage
 - Deterministic PostgreSQL release checks for TLS hostname and authority verification, tunnelled access, read-only denial, rollback, blocking locks, and reconnect
+- Verify Full for PostgreSQL over SSH, using the original database hostname for certificate checks
 
 ### Changed
 
@@ -54,6 +55,8 @@
 
 ### Fixed
 
+- Integer cells wider than 2^53 keep their exact value when edited instead of being rounded
+- CSV export reads from the connection that owns the table's tab instead of whichever connection is active
 - ClickHouse integration tests connect over plain HTTP instead of default VerifyFull HTTPS
 - Flatpak CI bootstraps Rust 1.93 via rustup so the GNOME 47 SDK's older rust-stable extension is not required
 - MCP write preview and other `begin()` paths now run statements through PolicyGuard instead of a raw driver transaction
