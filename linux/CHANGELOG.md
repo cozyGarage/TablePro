@@ -59,6 +59,7 @@
 
 ### Fixed
 
+- Saved connections are written so only the owner can read them, and a save that fails part way leaves the previous file intact
 - Query plans use the connected engine's own EXPLAIN form, and engines without a query plan statement say so instead of failing on malformed SQL
 - Reading a query plan through an agent no longer requires write access, while EXPLAIN ANALYZE stays governed as the write it performs
 - Agent CSV export quotes values containing separators, quotation marks, or line breaks instead of producing corrupt rows

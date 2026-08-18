@@ -1,3 +1,6 @@
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -153,9 +156,32 @@ pub(crate) async fn save_to(path: &Path, connections: &[SavedConnection]) -> Res
         connections: connections.to_vec(),
     };
     let json = serde_json::to_vec_pretty(&file)?;
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || write_atomically(&path, &json))
+        .await
+        .map_err(|error| StorageError::Schema(format!("saved connection task failed: {error}")))?
+}
+
+fn write_atomically(path: &Path, json: &[u8]) -> Result<(), StorageError> {
     let tmp = path.with_extension("json.tmp");
-    tokio::fs::write(&tmp, &json).await?;
-    tokio::fs::rename(&tmp, path).await?;
+    let mut handle = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    handle.write_all(json)?;
+    handle.sync_all()?;
+    drop(handle);
+    std::fs::rename(&tmp, path)?;
+    sync_parent(path)
+}
+
+fn sync_parent(path: &Path) -> Result<(), StorageError> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    File::open(parent)?.sync_all()?;
     Ok(())
 }
 
@@ -176,6 +202,8 @@ fn connections_path() -> Result<PathBuf, StorageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
     use tempfile::TempDir;
 
     fn sample_connection() -> SavedConnection {
@@ -221,6 +249,55 @@ mod tests {
         let path = dir.path().join("nested/dir/connections.json");
         save_to(&path, &[]).await.unwrap();
         assert!(path.exists());
+    }
+
+    #[tokio::test]
+    async fn a_saved_file_is_readable_only_by_its_owner() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        save_to(&path, &[sample_connection()]).await.unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[tokio::test]
+    async fn rewriting_an_existing_file_keeps_it_private() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        save_to(&path, &[]).await.unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        save_to(&path, &[sample_connection()]).await.unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[tokio::test]
+    async fn a_failed_save_leaves_the_previous_file_intact() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let original = vec![sample_connection()];
+        save_to(&path, &original).await.unwrap();
+
+        let tmp = path.with_extension("json.tmp");
+        std::fs::create_dir(&tmp).unwrap();
+        let failure = save_to(&path, &[]).await;
+        assert!(
+            failure.is_err(),
+            "a save that cannot write its temporary file must fail"
+        );
+        std::fs::remove_dir(&tmp).unwrap();
+
+        assert_eq!(load_from(&path).await.unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn a_truncated_file_is_refused_instead_of_loading_as_empty() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        save_to(&path, &[sample_connection()]).await.unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
+        assert!(load_from(&path).await.is_err());
     }
 
     #[tokio::test]
