@@ -14,6 +14,7 @@ path = "src/lib.rs"
 tablepro-core = { path = "../core" }
 tablepro-policy = { path = "../policy" }
 tablepro-ssh = { path = "../ssh" }
+tablepro-transport = { path = "../transport" }
 tablepro-driver-postgres = { path = "../drivers/postgres" }
 tablepro-storage = { path = "../storage" }
 tempfile.workspace = true
@@ -24,6 +25,5 @@ uuid.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tablepro-mcp = { path = "../mcp" }
-tablepro-transport = { path = "../transport" }
 async-trait.workspace = true
 serde_json.workspace = true

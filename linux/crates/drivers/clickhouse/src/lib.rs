@@ -1,5 +1,11 @@
 use std::time::Duration;
 
+mod tls;
+
+use hyper_util::client::legacy::Client as HyperClient;
+use hyper_util::rt::TokioExecutor;
+use tls::https_connector;
+
 use async_trait::async_trait;
 use secrecy::ExposeSecret;
 use serde::Deserialize;
@@ -45,12 +51,10 @@ impl DatabaseDriver for ClickhouseDriver {
     }
 
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
-        let scheme = match opts.tls.mode {
-            tablepro_core::TlsMode::Disabled => "http",
-            _ => "https",
-        };
+        let scheme = if opts.tls.mode.encrypts() { "https" } else { "http" };
         let url = format!("{scheme}://{}:{}", opts.host, opts.port);
-        let mut client = clickhouse::Client::default()
+        let http = HyperClient::builder(TokioExecutor::new()).build(https_connector(&opts.tls)?);
+        let mut client = clickhouse::Client::with_http_client(http)
             .with_url(url)
             .with_product_info("tablepro-linux", env!("CARGO_PKG_VERSION"))
             // `ALTER TABLE … UPDATE` and `DELETE FROM` are queued as

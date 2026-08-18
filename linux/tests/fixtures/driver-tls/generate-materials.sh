@@ -35,7 +35,7 @@ openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
 cat > server.ext <<EXT
 basicConstraints=CA:FALSE
 extendedKeyUsage=serverAuth
-subjectAltName=DNS:${SERVER_HOSTNAME},DNS:mongo.tablepro.test,DNS:redis.tablepro.test,DNS:mysql.tablepro.test,IP:127.0.0.1
+subjectAltName=DNS:${SERVER_HOSTNAME},DNS:mongo.tablepro.test,DNS:redis.tablepro.test,DNS:mysql.tablepro.test,DNS:clickhouse.tablepro.test,IP:127.0.0.1
 EXT
 
 openssl req -newkey rsa:2048 -nodes -keyout server.key -out server.csr \

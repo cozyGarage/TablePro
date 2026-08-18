@@ -10,7 +10,7 @@ users are not surprised by missing write or transaction paths.
 | MySQL | Stable | yes | yes | SQL | yes | yes | yes | DDL not transactional; TLS release-verified |
 | SQLite | Stable | yes | yes | SQL | yes | yes | yes | File-based |
 | SQL Server | Stable | yes | yes | SQL | yes | yes | no interactive begin | Tiberius; Verify Ca and Verify Full are identical |
-| ClickHouse | Stable | yes | yes | SQL | yes | yes | no | Async mutations; no row counts; TLS is on/off only |
+| ClickHouse | Stable | yes | yes | SQL | yes | yes | no | Async mutations; no row counts; TLS release-verified |
 | Redis | Experimental | yes | DBs / SCAN | Redis CLI | via query | no | no | TLS release-verified; Verify Ca behaves as Verify Full |
 | MongoDB | Experimental | yes | collections | find / aggregate | insertOne / deleteMany | no | no | TLS release-verified; Verify Ca behaves as Verify Full |
 | DuckDB | Experimental | yes | yes | SQL | yes | yes | no | Cargo feature `duckdb` (large build) |

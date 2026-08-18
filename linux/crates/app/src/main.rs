@@ -11,6 +11,7 @@ mod ui;
 const APP_ID: &str = "com.tablepro.linux";
 
 fn main() {
+    tablepro_transport::install_crypto_provider();
     i18n::init();
 
     tracing_subscriber::fmt()

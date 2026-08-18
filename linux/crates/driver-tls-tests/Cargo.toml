@@ -12,9 +12,11 @@ path = "src/lib.rs"
 
 [dependencies]
 tablepro-core = { path = "../core" }
+tablepro-transport = { path = "../transport" }
 secrecy.workspace = true
 
 [dev-dependencies]
+tablepro-driver-clickhouse = { path = "../drivers/clickhouse" }
 tablepro-driver-mongodb = { path = "../drivers/mongodb" }
 tablepro-driver-mysql = { path = "../drivers/mysql" }
 tablepro-driver-redis = { path = "../drivers/redis" }

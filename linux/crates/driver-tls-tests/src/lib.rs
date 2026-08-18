@@ -31,6 +31,7 @@ pub struct DriverTlsFixture {
     pub redis_port: u16,
     pub redis_plaintext_port: u16,
     pub mysql_port: u16,
+    pub clickhouse_port: u16,
     pub database: String,
     pub username: String,
     pub password: String,
@@ -39,7 +40,11 @@ pub struct DriverTlsFixture {
 }
 
 impl DriverTlsFixture {
+    /// Every test binary here links several drivers, so it is a composition
+    /// root and has to choose the rustls provider exactly as the application
+    /// does. See `tablepro_transport::install_crypto_provider`.
     pub fn from_env() -> Self {
+        tablepro_transport::install_crypto_provider();
         let materials = std::env::var("TABLEPRO_DRIVER_TLS_MATERIALS")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
@@ -52,6 +57,7 @@ impl DriverTlsFixture {
             redis_port: env_port("TABLEPRO_DRIVER_TLS_REDIS_PORT", 6380),
             redis_plaintext_port: env_port("TABLEPRO_DRIVER_TLS_REDIS_PLAINTEXT_PORT", 6381),
             mysql_port: env_port("TABLEPRO_DRIVER_TLS_MYSQL_PORT", 3307),
+            clickhouse_port: env_port("TABLEPRO_DRIVER_TLS_CLICKHOUSE_PORT", 8444),
             database: env_or("TABLEPRO_DRIVER_TLS_DB", "tablepro"),
             username: env_or("TABLEPRO_DRIVER_TLS_USER", "tablepro"),
             password: env_or("TABLEPRO_DRIVER_TLS_PASSWORD", "tablepro"),
@@ -102,5 +108,9 @@ impl DriverTlsFixture {
 
     pub fn mysql(&self, mode: TlsMode, root_cert: Option<PathBuf>) -> ConnectOptions {
         self.options(self.mysql_port, mode, root_cert)
+    }
+
+    pub fn clickhouse(&self, mode: TlsMode, root_cert: Option<PathBuf>) -> ConnectOptions {
+        self.options(self.clickhouse_port, mode, root_cert)
     }
 }

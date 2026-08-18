@@ -48,7 +48,7 @@ Two ideas carry most of the security weight:
 | MySQL | yes | no | n/a | all five | yes | no | pool acquire only |
 | SQL Server | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | no | no | 5 s |
 | SQLite | n/a | n/a (local file) | n/a | n/a | n/a | n/a | pool acquire only |
-| ClickHouse | n/a | no | yes | on/off only | no | no | 5 s probe |
+| ClickHouse | n/a | no | yes | Disabled / encrypt / verify (CA and Full identical) | yes | no | 5 s probe |
 | Redis | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | yes | no | 5 s |
 | MongoDB | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | yes | no | 5 s |
 | DuckDB | n/a | n/a (local file) | n/a | n/a | n/a | n/a | n/a |
@@ -118,16 +118,21 @@ and read by no driver. Mutual TLS and certificate pinning do not exist. A field
 that is stored and ignored is worse than an absent one, because a saved file can
 carry a setting the user believes is in force.
 
-### 5. TLS modes collapse on three drivers
+### 5. TLS modes collapse on SQL Server
 
-ClickHouse maps Prefer, Require, Verify Ca, and Verify Full to the same `https`
-URL and cannot use a certificate authority at all. SQL Server maps Verify Ca and
-Verify Full to the same configuration and has no authority setting either. On
-MongoDB and Redis the rustls backend offers no CA-only mode, so Verify Ca
-verifies the hostname as well; that is stricter than requested and is documented
-in both drivers. The remaining problem is ClickHouse and SQL Server, where the
-mode selector promises a distinction the driver does not make and a privately
-issued certificate cannot be trusted.
+**ClickHouse closed on 2026-08-19.** It now builds its own HTTP connector, so
+Prefer and Require encrypt without verifying, Verify Ca and Verify Full check
+the chain, and a saved certificate authority is honoured. Both halves of the
+defect were reproduced first: `VerifyFull` with the fixture authority failed
+because the driver could only use the bundled root store, and `Require` failed
+too, because asking for encrypt-only silently got full verification against
+roots that do not know a private certificate.
+
+SQL Server still maps Verify Ca and Verify Full to the same configuration and
+has no authority setting, so a privately issued certificate cannot be trusted
+there. On ClickHouse, MongoDB, and Redis the rustls backend offers no CA-only
+mode, so Verify Ca verifies the hostname as well; that is stricter than
+requested, never weaker, and is documented in each driver.
 
 ### 6. No connect timeout on the SSH path or on Oracle — fixed
 
@@ -138,7 +143,22 @@ bound has a sandbox regression test that connects to a listener which completes
 the TCP handshake and then never sends a banner; a refused port returns
 instantly and proves nothing.
 
-### 7. The Oracle driver does not compile under its own feature
+### 7. Two rustls providers left the default ambiguous — fixed
+
+**Closed on 2026-08-19.** The static drivers pull in both `ring` (MySQL, SQL
+Server, MongoDB) and `aws-lc-rs` (ClickHouse), so rustls could not choose a
+process-wide crypto provider. Any library that built a `ClientConfig` without
+naming one panicked at connect time: MySQL `Verify Ca` panicked in the real
+application, because the GUI links every driver. The condition predates the
+ClickHouse work and had never been visible, since no test binary linked both
+families until the driver TLS tier did.
+
+Every composition root now calls `install_crypto_provider` before connecting:
+the GUI, the agent daemon, and each test binary that links more than one driver.
+A driver that names its own provider, as ClickHouse now does, is unaffected
+either way.
+
+### 8. The Oracle driver does not compile under its own feature
 
 `cargo check -p tablepro-driver-oracle --features odpi` fails with three errors
 against `oracle` 0.6.3: `Statement::row_count` now returns a `Result` and is
@@ -203,7 +223,7 @@ Ordered by how much risk the gap carries.
 
 | Area | Current coverage |
 |---|---|
-| TLS on SQL Server and ClickHouse | none — the container tests connect in plaintext |
+| TLS on SQL Server | none — the container tests connect in plaintext |
 | TLS on Oracle | none |
 | Redis, MongoDB, DuckDB, Oracle, SQLite | no integration test file at all |
 | SSH jump chains of more than one hop | none — the fixture has a single bastion |

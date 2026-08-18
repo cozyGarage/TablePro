@@ -18,6 +18,18 @@ pub enum TransportError {
     Driver(#[from] DriverError),
 }
 
+/// Choose the process-wide rustls crypto provider.
+///
+/// The static drivers pull in both `ring` (MySQL, SQL Server, MongoDB) and
+/// `aws-lc-rs` (ClickHouse), which leaves rustls unable to pick a default on
+/// its own. Any library that builds a `ClientConfig` without naming a provider
+/// then panics at connect time. Every composition root, including test
+/// binaries that link more than one driver, must call this before connecting.
+/// Calling it more than once is harmless: the first call wins.
+pub fn install_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 pub fn tls_config(mode: TlsMode) -> TlsConfig {
     TlsConfig {
         mode,

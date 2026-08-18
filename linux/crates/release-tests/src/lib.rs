@@ -44,7 +44,11 @@ pub struct Fixture {
 }
 
 impl Fixture {
+    /// This crate's test binaries link several TLS stacks, so like the GUI and
+    /// the agent daemon they are composition roots and must choose the rustls
+    /// provider. See `tablepro_transport::install_crypto_provider`.
     pub fn from_env() -> Self {
+        tablepro_transport::install_crypto_provider();
         let materials = std::env::var("TABLEPRO_FIXTURE_MATERIALS")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {

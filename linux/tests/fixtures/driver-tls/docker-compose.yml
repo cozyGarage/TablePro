@@ -151,7 +151,19 @@ services:
       - --ssl-cert=/certs/server.crt
       - --ssl-key=/certs/server.key
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-utablepro", "-ptablepro"]
+      # `mysqladmin ping` reports the server alive before initialisation has
+      # created the application user, which lets tests start too early. Run a
+      # real authenticated query instead, over the local socket so that
+      # require_secure_transport does not apply to the probe itself.
+      test:
+        - CMD
+        - mysql
+        - --protocol=socket
+        - -utablepro
+        - -ptablepro
+        - -Dtablepro
+        - -e
+        - "SELECT 1"
       interval: 3s
       timeout: 5s
       retries: 60
@@ -161,6 +173,34 @@ services:
       fixture:
         aliases:
           - mysql.tablepro.test
+
+  clickhouse:
+    build:
+      context: .
+      dockerfile: clickhouse/Dockerfile
+    environment:
+      CLICKHOUSE_USER: tablepro
+      CLICKHOUSE_PASSWORD: tablepro
+      CLICKHOUSE_DB: tablepro
+    healthcheck:
+      test:
+        - CMD
+        - clickhouse-client
+        - --user
+        - tablepro
+        - --password
+        - tablepro
+        - --query
+        - "SELECT 1"
+      interval: 3s
+      timeout: 5s
+      retries: 40
+    ports:
+      - "127.0.0.1:8444:8443"
+    networks:
+      fixture:
+        aliases:
+          - clickhouse.tablepro.test
 
 networks:
   fixture:

@@ -14,6 +14,7 @@ path = "src/lib.rs"
 tablepro-core = { path = "../core" }
 tablepro-ssh = { path = "../ssh" }
 tablepro-storage = { path = "../storage" }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std"] }
 secrecy.workspace = true
 thiserror.workspace = true
 uuid.workspace = true

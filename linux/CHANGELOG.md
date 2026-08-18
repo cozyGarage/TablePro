@@ -94,6 +94,8 @@
 
 - The headless agent daemon opens a saved connection through its configured SSH chain and verifies the certificate against the real database hostname, instead of dialling the database directly
 - MongoDB connections honour the selected TLS mode and certificate authority instead of always connecting without encryption
+- MySQL Verify Ca connections no longer crash the application
+- ClickHouse connections distinguish encrypt-only from verifying TLS and can name a certificate authority, instead of always verifying against the bundled roots
 - Redis connections can use TLS, including a named certificate authority, instead of failing whenever encryption is selected
 - MongoDB and Redis connection attempts stop after five seconds instead of waiting on library defaults
 - SSH tunnels stop waiting on a host that accepts a connection and never answers, reporting which host and port timed out
