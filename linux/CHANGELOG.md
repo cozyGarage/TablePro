@@ -90,6 +90,7 @@
 
 ### Security
 
+- MySQL server-control functions and SQL Server extended and system procedures are recognised as administrative, so agents are denied them the same way they are on PostgreSQL
 - Agent write-scope checks classify SQL with the connected engine's dialect instead of always assuming PostgreSQL
 - MCP HTTP rejects untrusted browser origins before JSON-RPC dispatch
 - SSH host-key changes across key algorithms are treated as mismatches instead of first use

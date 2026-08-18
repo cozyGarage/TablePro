@@ -87,8 +87,7 @@ pub fn classify(sql: &str, driver_id: &str) -> StatementFacts {
     let mut contains_mutating_dml = false;
     let mut contains_unscoped_dml = false;
     let mut contains_unknown_write = false;
-    let contains_administrative_call =
-        driver_id == "postgres" && sql_contains_administrative_call(trimmed, dialect.as_ref());
+    let contains_administrative_call = sql_contains_administrative_call(trimmed, dialect.as_ref(), driver_id);
 
     for stmt in &statements {
         let facts = classify_statement(stmt);
@@ -136,11 +135,13 @@ pub fn classify(sql: &str, driver_id: &str) -> StatementFacts {
     }
 }
 
-/// Detect PostgreSQL administrative functions anywhere in a successfully parsed
-/// statement. Token inspection complements the AST walk so calls hidden in
-/// predicates, ordering expressions, or less-common expression wrappers still
-/// fail closed, while names inside literals and comments remain harmless.
-fn sql_contains_administrative_call(sql: &str, dialect: &dyn Dialect) -> bool {
+/// Detect administrative calls anywhere in a successfully parsed statement.
+/// Token inspection complements the AST walk so calls hidden in predicates,
+/// ordering expressions, or less-common expression wrappers still fail closed,
+/// while names inside literals and comments remain harmless. Function names
+/// must be followed by an opening parenthesis; stored procedures are invoked
+/// without one and are matched on the name alone.
+fn sql_contains_administrative_call(sql: &str, dialect: &dyn Dialect, driver_id: &str) -> bool {
     let Ok(tokens) = Tokenizer::new(dialect, sql).tokenize() else {
         return false;
     };
@@ -149,7 +150,12 @@ fn sql_contains_administrative_call(sql: &str, dialect: &dyn Dialect) -> bool {
         let Token::Word(word) = token else {
             return false;
         };
-        if !is_administrative_function_name(&word.value) {
+        if is_administrative_procedure_name(driver_id, &word.value) {
+            return true;
+        }
+        if !is_administrative_function_name(&word.value)
+            && !is_engine_administrative_function_name(driver_id, &word.value)
+        {
             return false;
         }
 
@@ -158,6 +164,26 @@ fn sql_contains_administrative_call(sql: &str, dialect: &dyn Dialect) -> bool {
             .find(|next| !matches!(next, Token::Whitespace(_)))
             .is_some_and(|next| matches!(next, Token::LParen))
     })
+}
+
+fn is_engine_administrative_function_name(driver_id: &str, name: &str) -> bool {
+    let lowered = name.to_ascii_lowercase();
+    if driver_id != "mysql" {
+        return false;
+    }
+    matches!(lowered.as_str(), "benchmark" | "load_file" | "sleep")
+}
+
+fn is_administrative_procedure_name(driver_id: &str, name: &str) -> bool {
+    if driver_id != "mssql" {
+        return false;
+    }
+    let lowered = name.to_ascii_lowercase();
+    lowered.starts_with("xp_")
+        || matches!(
+            lowered.as_str(),
+            "sp_addsrvrolemember" | "sp_configure" | "sp_lock" | "sp_password" | "sp_who" | "sp_who2"
+        )
 }
 
 fn dialect_for(driver_id: &str) -> Box<dyn Dialect> {
