@@ -341,9 +341,9 @@ Track capabilities as planned, implemented, integrated, release-verified, deferr
 
 ### Priority A: daily DBA and data-engineering workflows
 
-- Schema-aware SQL autocomplete
+- Schema-aware SQL autocomplete (implemented)
 - Named query parameters (implemented and release-verified)
-- Saved SQL favorites and quick switcher
+- Saved SQL favorites and quick switcher (implemented and release-verified)
 - SQL file open/save and external-change detection
 - Views, materialized views, triggers, routines, sequences, and extensions
 - PostgreSQL/MySQL users, roles, and privileges
@@ -386,11 +386,17 @@ Track capabilities as planned, implemented, integrated, release-verified, deferr
 
 In progress. Phases 1 through 4 are release-verified locally, so vertical slices have started.
 
-Named query parameters shipped on 2026-08-18. `:name` placeholders are rewritten to the driver's positional placeholders and bound as values. The scanner leaves literals, quoted identifiers, comments, dollar-quoted bodies, PostgreSQL casts, and existing placeholders alone. Evidence: core scanner unit tests, app binding tests, three PostgreSQL fixture tests including a SQL payload that stays data, and an installed GTK scenario that writes the bound value.
+Slice 1 shipped on 2026-08-18: named parameters, schema-aware completion, favorites, and Open Quickly.
+
+Named query parameters: `:name` placeholders are rewritten to the driver's positional placeholders and bound as values. The scanner leaves literals, quoted identifiers, comments, dollar-quoted bodies, PostgreSQL casts, and existing placeholders alone. Evidence: core scanner unit tests, app binding tests, three PostgreSQL fixture tests including a SQL payload that stays data, and an installed GTK scenario that writes the bound value.
+
+Completion: the editor recomputes candidates on every cursor move and edit. After FROM or JOIN it offers tables, a `alias.` or `table.` prefix narrows to that table's columns, and otherwise it offers the columns of tables named in the statement. Columns for a referenced table are fetched once through the policy-gated connection. Evidence: scanner and scope unit tests covering aliases, schema qualifiers, literals, and statement boundaries.
+
+Favorites and Open Quickly: favorites live in `favorites.json` with name-based replacement, a 500-entry cap, and recency ranking. Open Quickly ranks exact, prefix, substring, statement, and initials matches over favorites, open tabs, and saved connections. Evidence: storage and ranking unit tests plus an installed GTK scenario that saves a favorite with Ctrl+D, finds it with Ctrl+P, opens it, and checks the recorded use.
 
 Deliver in small vertical slices. The first post-safety slice stays editor productivity because it has the highest daily value:
 
-1. SQL autocomplete, parameters, favorites, and quick switcher (parameters done)
+1. SQL autocomplete, parameters, favorites, and quick switcher (complete)
 2. PostgreSQL object browser and administration
 3. Import/export and backup/restore
 4. Connection organization and reusable transport profiles

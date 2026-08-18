@@ -13,6 +13,7 @@ mod history_dialog;
 mod mcp_preferences;
 mod parameters_dialog;
 mod preferences;
+mod quick_switcher_dialog;
 mod row_object;
 mod sidebar_row;
 mod ssh_section;

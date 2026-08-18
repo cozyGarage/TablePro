@@ -1,7 +1,9 @@
 mod browse;
 mod connection;
+mod favorites;
 mod msg;
 mod row_ops;
+mod schema_index;
 mod shortcuts;
 mod status_pages;
 mod structure;
@@ -94,6 +96,12 @@ pub struct App {
     workspace_tabs: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<Uuid, WorkspaceTab>>>,
     dialog: Option<Controller<ConnectDialog>>,
     schema_buffer: gtk::TextBuffer,
+    favorites: Vec<tablepro_storage::SavedQuery>,
+    /// Tables and their columns for schema-aware editor completion.
+    schema_index: std::rc::Rc<std::cell::RefCell<crate::ui::editor::SchemaIndex>>,
+    /// Tables whose columns are already requested, so cursor movement
+    /// does not re-issue the same fetch.
+    requested_columns: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
     history_dialog: Option<Controller<HistoryDialog>>,
     welcome_view: Controller<WelcomeView>,
     /// Driver id is connection-wide, not per-tab.
@@ -848,6 +856,9 @@ impl SimpleComponent for App {
             workspace_tabs: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
             dialog: None,
             schema_buffer: build_schema_buffer(),
+            favorites: Vec::new(),
+            schema_index: std::rc::Rc::new(std::cell::RefCell::new(crate::ui::editor::SchemaIndex::default())),
+            requested_columns: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
             history_dialog: None,
             welcome_view,
             current_driver_id: None,
@@ -899,6 +910,8 @@ impl SimpleComponent for App {
             });
             glib::ControlFlow::Continue
         });
+
+        model.load_favorites(sender.clone());
 
         ComponentParts { model, widgets }
     }
@@ -1039,6 +1052,15 @@ impl SimpleComponent for App {
             AppMsg::NewEditorTab => self.append_editor_tab(None, sender),
             AppMsg::EditorTabRunStateChanged(id, running) => self.on_editor_tab_run_state_changed(id, running),
             AppMsg::EditorTabQueryChanged(id, text) => self.on_editor_tab_query_changed(id, text),
+            AppMsg::EditorNeedsColumns(tables) => self.on_editor_needs_columns(tables, sender),
+            AppMsg::SchemaColumnsFetched(table, columns) => self.on_schema_columns_fetched(table, columns),
+            AppMsg::FavoritesLoaded(favorites) => self.on_favorites_loaded(favorites),
+            AppMsg::PersistFavorite(favorite) => self.on_persist_favorite(favorite, sender),
+            AppMsg::FavoriteSaved => self.show_toast(&crate::tr!("Saved as favorite")),
+            AppMsg::FavoriteSaveFailed(reason) => self.show_toast(&reason),
+            AppMsg::SaveQueryAsFavorite => self.on_save_query_as_favorite(sender),
+            AppMsg::ShowQuickSwitcher => self.on_show_quick_switcher(sender),
+            AppMsg::QuickSwitcherChose(target) => self.on_quick_switcher_chose(target, sender),
             AppMsg::ShowHistory => self.on_show_history(sender),
             AppMsg::OpenHistoryQuery(text) => {
                 if self.connected {

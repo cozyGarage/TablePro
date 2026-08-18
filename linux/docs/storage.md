@@ -73,3 +73,7 @@ When changing storage behavior:
 4. Test missing files, malformed or unsupported data, round trips, and migration behavior.
 5. Keep audit failures fail-closed for governed writes.
 6. Update this document from the implementation, not from planned APIs.
+
+## Query favorites
+
+`$XDG_CONFIG_HOME/tablepro/favorites.json` holds saved queries as `{version, favorites[]}`, written through a temporary file and a rename. Each entry keeps an id, name, statement, optional driver and connection ids, a creation time, and a last-used time. Saving a name that already exists replaces that entry's statement and keeps its id. The file is capped at 500 entries, and a name or statement that is only whitespace is rejected.

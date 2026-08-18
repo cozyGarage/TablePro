@@ -113,6 +113,7 @@ The suite verifies:
 2. Approving once performs one mutation and prompts again for the next operation.
 3. Unavailable audit storage denies the mutation without showing an approval path around the failure.
 4. A named `:parameter` in the editor prompts for a value and writes the bound value, not the placeholder text.
+5. Ctrl+D saves the editor query as a favorite, and Ctrl+P finds it, opens it, and records the use.
 
 Each scenario declares its own fixture shape through `environment` and `audit_available` attributes, so a scenario can run against a local or production saved connection.
 

@@ -11,6 +11,10 @@ pub(super) fn primary_menu_model() -> gio::Menu {
     disconnect_item.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
     connection_section.append_item(&disconnect_item);
     menu.append_section(None, &connection_section);
+    let query_section = gio::Menu::new();
+    query_section.append(Some(&crate::tr!("Open Quickly")), Some("win.open-quickly"));
+    query_section.append(Some(&crate::tr!("Save Query as Favorite")), Some("win.save-favorite"));
+    menu.append_section(None, &query_section);
     let history_section = gio::Menu::new();
     history_section.append(Some(&crate::tr!("Query History")), Some("win.show-history"));
     history_section.append(Some(&crate::tr!("Server activity")), Some("win.show-activity"));
@@ -65,6 +69,8 @@ pub(super) fn install_window_actions(
         input_action!("redo-change", AppMsg::RedoActiveBrowseTab),
         input_action!("reopen-closed-tab", AppMsg::ReopenClosedTab),
         input_action!("open-filter", AppMsg::ShowFilterDialog),
+        input_action!("open-quickly", AppMsg::ShowQuickSwitcher),
+        input_action!("save-favorite", AppMsg::SaveQueryAsFavorite),
     ]);
     window.insert_action_group("win", Some(&group));
     let disconnect_action = group
@@ -90,6 +96,8 @@ pub(super) fn install_window_shortcuts(window: &adw::ApplicationWindow) {
         ("<Primary>f", "win.open-filter"),
         ("<Primary>comma", "win.preferences"),
         ("<Primary>h", "win.show-history"),
+        ("<Primary>p", "win.open-quickly"),
+        ("<Primary>d", "win.save-favorite"),
         ("<Primary>s", "win.save-changes"),
         ("<Primary>z", "win.undo-change"),
         ("<Primary>y", "win.redo-change"),
@@ -120,6 +128,8 @@ pub(super) fn build_shortcuts_window(parent: &adw::ApplicationWindow) -> gtk::Sh
         ("F5", crate::tr!("Refresh table")),
         ("<Primary>comma", crate::tr!("Open Preferences")),
         ("<Primary>h", crate::tr!("Open Query History")),
+        ("<Primary>p", crate::tr!("Open Quickly: favorites and open tabs")),
+        ("<Primary>d", crate::tr!("Save the editor query as a favorite")),
         ("<Primary>s", crate::tr!("Save pending changes")),
         ("<Primary>z", crate::tr!("Undo pending change")),
         ("<Primary>y", crate::tr!("Redo pending change")),

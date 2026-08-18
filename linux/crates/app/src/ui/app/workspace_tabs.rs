@@ -156,17 +156,20 @@ impl App {
         let workspace_tabs_for_create = self.workspace_tabs.clone();
         let tab_view_for_create = tab_view.clone();
         let schema_buffer_for_create = self.schema_buffer.clone();
+        let schema_index_for_create = self.schema_index.clone();
         let sender_for_create = sender.clone();
         tab_overview.connect_create_tab(move |_| {
             let tab_id = Uuid::new_v4();
             let editor = SqlEditor::builder()
                 .launch(SqlEditorInit {
                     schema_buffer: schema_buffer_for_create.clone(),
+                    schema_index: schema_index_for_create.clone(),
                     initial_query: None,
                 })
                 .forward(sender_for_create.input_sender(), move |out| match out {
                     SqlEditorOutput::RunStateChanged(running) => AppMsg::EditorTabRunStateChanged(tab_id, running),
                     SqlEditorOutput::QueryChanged(text) => AppMsg::EditorTabQueryChanged(tab_id, text),
+                    SqlEditorOutput::NeedColumns(tables) => AppMsg::EditorNeedsColumns(tables),
                 });
             let page = tab_view_for_create.append(editor.widget());
             let editor_count = workspace_tabs_for_create
@@ -494,11 +497,13 @@ impl App {
         let editor = SqlEditor::builder()
             .launch(SqlEditorInit {
                 schema_buffer: self.schema_buffer.clone(),
+                schema_index: self.schema_index.clone(),
                 initial_query,
             })
             .forward(sender.input_sender(), move |out| match out {
                 SqlEditorOutput::RunStateChanged(running) => AppMsg::EditorTabRunStateChanged(tab_id, running),
                 SqlEditorOutput::QueryChanged(text) => AppMsg::EditorTabQueryChanged(tab_id, text),
+                SqlEditorOutput::NeedColumns(tables) => AppMsg::EditorNeedsColumns(tables),
             });
         let page = tab_view.append(editor.widget());
         let label = match query.trim().is_empty() {
@@ -822,21 +827,6 @@ impl App {
         let id = self.selected_browse_tab_id()?;
         let tabs = self.workspace_tabs.borrow();
         tabs.get(&id)?.browse_controller()?.model().connection_id()
-    }
-
-    pub(super) fn rebuild_schema_buffer(&self) {
-        let mut words: Vec<String> = self.table_names.clone();
-        let tabs = self.workspace_tabs.borrow();
-        for tab in tabs.values() {
-            if let Some(controller) = tab.browse_controller() {
-                for col in controller.model().columns() {
-                    words.push(col.name.clone());
-                }
-            }
-        }
-        words.sort_unstable();
-        words.dedup();
-        crate::ui::editor::update_schema_buffer(&self.schema_buffer, &words);
     }
 
     pub(super) fn sidebar_schemas_distinct(&self) -> usize {

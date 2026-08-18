@@ -1,3 +1,4 @@
+mod completion;
 mod outcomes;
 mod schema;
 mod sql_text;
@@ -16,6 +17,7 @@ use tablepro_storage::query_history::{self, NewEntry, Outcome};
 
 use crate::services::database_service::{self, ConnectionMetadata};
 
+pub use completion::{SchemaIndex, candidate_words, referenced_tables, table_key};
 pub use schema::{SQL_KEYWORDS, build_schema_buffer, derive_tab_label, update_schema_buffer};
 
 use outcomes::{ScriptRunResult, clear_box, render_outcomes, run_statements, summary_label};
@@ -37,6 +39,7 @@ pub struct SqlEditor {
 
 pub struct SqlEditorInit {
     pub schema_buffer: gtk::TextBuffer,
+    pub schema_index: std::rc::Rc<std::cell::RefCell<SchemaIndex>>,
     pub initial_query: Option<String>,
 }
 
@@ -76,6 +79,7 @@ pub enum SqlEditorInput {
 pub enum SqlEditorOutput {
     RunStateChanged(bool),
     QueryChanged(String),
+    NeedColumns(Vec<String>),
 }
 
 #[relm4::component(pub)]
@@ -225,13 +229,28 @@ impl SimpleComponent for SqlEditor {
             .buffer()
             .connect_cursor_position_notify(move |_| update_cursor());
 
+        let refresh_completion = build_completion_refresh(
+            widgets.source_view.clone(),
+            init.schema_buffer.clone(),
+            init.schema_index.clone(),
+            sender.clone(),
+        );
+        refresh_completion();
+        let refresh_on_cursor = refresh_completion.clone();
+        widgets
+            .source_view
+            .buffer()
+            .connect_cursor_position_notify(move |_| refresh_on_cursor());
+
         let view_for_change = widgets.source_view.clone();
         let sender_for_change = sender.clone();
+        let refresh_on_change = refresh_completion.clone();
         widgets.source_view.buffer().connect_changed(move |_| {
             let buffer = view_for_change.buffer();
             let (start, end) = buffer.bounds();
             let text = buffer.text(&start, &end, false).to_string();
             let _ = sender_for_change.output(SqlEditorOutput::QueryChanged(text));
+            refresh_on_change();
         });
 
         let run_shortcut = gtk::Shortcut::builder()
@@ -615,4 +634,32 @@ impl SqlEditor {
             }
         });
     }
+}
+
+fn build_completion_refresh(
+    view: sourceview5::View,
+    schema_buffer: gtk::TextBuffer,
+    schema_index: std::rc::Rc<std::cell::RefCell<SchemaIndex>>,
+    sender: ComponentSender<SqlEditor>,
+) -> std::rc::Rc<dyn Fn()> {
+    std::rc::Rc::new(move || {
+        let buffer = view.buffer();
+        let (start, end) = buffer.bounds();
+        let sql = buffer.text(&start, &end, false).to_string();
+        let cursor_chars = buffer.iter_at_mark(&buffer.get_insert()).offset() as usize;
+        let cursor_byte: usize = sql.chars().take(cursor_chars).map(char::len_utf8).sum();
+        let Ok(index) = schema_index.try_borrow() else {
+            return;
+        };
+        let words = candidate_words(&sql, cursor_byte, &index);
+        let missing: Vec<String> = referenced_tables(&sql, cursor_byte)
+            .into_iter()
+            .filter(|table| !index.knows_columns(table))
+            .collect();
+        drop(index);
+        update_schema_buffer(&schema_buffer, &words);
+        if !missing.is_empty() {
+            let _ = sender.output(SqlEditorOutput::NeedColumns(missing));
+        }
+    })
 }

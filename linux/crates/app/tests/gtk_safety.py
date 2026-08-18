@@ -161,7 +161,7 @@ def wait_for_focus(node, timeout=2.0):
     return False
 
 
-def press_x11_key(name):
+def press_x11_key(name, modifiers=()):
     class XWindowAttributes(ctypes.Structure):
         _fields_ = [
             ("x", ctypes.c_int),
@@ -248,8 +248,19 @@ def press_x11_key(name):
             x11.XSetInputFocus(display, focus_window, 2, 0)
         finally:
             x11.XFree(children)
+        modifier_codes = []
+        for modifier in modifiers:
+            modifier_keysym = x11.XStringToKeysym(modifier.encode("ascii"))
+            modifier_code = x11.XKeysymToKeycode(display, modifier_keysym)
+            if modifier_code == 0:
+                raise AssertionError(f"X11 modifier is unavailable: {modifier}")
+            modifier_codes.append(modifier_code)
+        for modifier_code in modifier_codes:
+            xtst.XTestFakeKeyEvent(display, modifier_code, 1, 0)
         xtst.XTestFakeKeyEvent(display, keycode, 1, 0)
         xtst.XTestFakeKeyEvent(display, keycode, 0, 0)
+        for modifier_code in reversed(modifier_codes):
+            xtst.XTestFakeKeyEvent(display, modifier_code, 0, 0)
         x11.XFlush(display)
     finally:
         x11.XCloseDisplay(display)
@@ -439,7 +450,7 @@ def run_scenario(binary, scenario):
         )
         process = start_application(binary, environment)
         open_editor()
-        scenario(database)
+        scenario(database, base)
     except Exception as error:
         failure = error
     finally:
@@ -450,7 +461,7 @@ def run_scenario(binary, scenario):
         raise AssertionError(f"{failure}\napplication stderr:\n{stderr}") from failure
 
 
-def dismissed_approval_denies(database):
+def dismissed_approval_denies(database, _base):
     run_sql("INSERT INTO safety_items(id) VALUES (1)")
     wait_for_node(name="Approve once", role=pyatspi.ROLE_PUSH_BUTTON)
     time.sleep(SETTLE_SECONDS / 3)
@@ -461,7 +472,7 @@ def dismissed_approval_denies(database):
     assert_database_count_stable(database, 0)
 
 
-def approve_once_prompts_again(database):
+def approve_once_prompts_again(database, _base):
     run_sql("INSERT INTO safety_items(id) VALUES (1)")
     invoke(wait_for_node(name="Approve once", role=pyatspi.ROLE_PUSH_BUTTON))
     wait_for_node(name="Approve once", present=False)
@@ -474,7 +485,7 @@ def approve_once_prompts_again(database):
     assert_database_count_stable(database, 1)
 
 
-def audit_failure_denies(database):
+def audit_failure_denies(database, _base):
     run_sql("INSERT INTO safety_items(id) VALUES (1)")
     wait_for_node(name="Approve once", present=False, timeout=2)
     assert_database_count_stable(database, 0)
@@ -483,7 +494,7 @@ def audit_failure_denies(database):
 audit_failure_denies.audit_available = False
 
 
-def named_parameter_binds_a_value(database):
+def named_parameter_binds_a_value(database, _base):
     run_sql("INSERT INTO safety_items(id) VALUES (:id)")
     wait_for_node(name=":id")
     set_text_by_name(":id", "7")
@@ -494,6 +505,64 @@ def named_parameter_binds_a_value(database):
 
 
 named_parameter_binds_a_value.environment = "local"
+
+
+def press_x11_text(text):
+    for character in text:
+        name = {" ": "space", "_": "underscore", "-": "minus"}.get(character, character)
+        press_x11_key(name)
+        time.sleep(POLL_SECONDS)
+
+
+def favorites_path(base):
+    return base / "config" / "tablepro" / "favorites.json"
+
+
+def wait_for_favorites(base, predicate, description, timeout=WAIT_SECONDS):
+    deadline = time.monotonic() + timeout
+    path = favorites_path(base)
+    last = None
+    while time.monotonic() < deadline:
+        if path.exists():
+            try:
+                last = json.loads(path.read_text(encoding="utf-8")).get("favorites", [])
+            except json.JSONDecodeError:
+                last = None
+            if last is not None and predicate(last):
+                return last
+        time.sleep(POLL_SECONDS)
+    raise AssertionError(f"{description}; favorites file held {last!r}")
+
+
+def favorite_round_trips_through_open_quickly(_database, base):
+    set_editor_text("SELECT 42 AS answer")
+    press_x11_key("d", modifiers=["Control_L"])
+    wait_for_node(name="Name")
+    set_text_by_name("Name", "smoke favorite")
+    invoke(wait_for_node(name="Save", role=pyatspi.ROLE_PUSH_BUTTON))
+
+    saved = wait_for_favorites(
+        base,
+        lambda favorites: any(entry["name"] == "smoke favorite" for entry in favorites),
+        "the favorite was not written",
+    )
+    entry = next(item for item in saved if item["name"] == "smoke favorite")
+    assert entry["sql"] == "SELECT 42 AS answer", f"unexpected statement: {entry['sql']!r}"
+    assert "last_used_at" not in entry, "a new favorite must not look used"
+
+    press_x11_key("p", modifiers=["Control_L"])
+    wait_for_node(name="smoke favorite")
+    press_x11_text("smoke")
+    wait_for_node(name="smoke favorite")
+    press_x11_key("Return")
+    wait_for_favorites(
+        base,
+        lambda favorites: any(item.get("last_used_at") for item in favorites),
+        "opening the favorite did not record a use",
+    )
+
+
+favorite_round_trips_through_open_quickly.environment = "local"
 
 
 def main():
@@ -507,6 +576,7 @@ def main():
         approve_once_prompts_again,
         audit_failure_denies,
         named_parameter_binds_a_value,
+        favorite_round_trips_through_open_quickly,
     ]:
         run_scenario(binary, scenario)
         print(f"passed: {scenario.__name__}")

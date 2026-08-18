@@ -113,7 +113,8 @@ Phase 5 documentation is current as of 2026-08-18. Keeping it current is a stand
 ### 6: DBA and data-engineering depth
 
 - [x] Named query parameters bound by the driver, release-verified against PostgreSQL and in the installed GTK suite
-- [ ] Schema-aware SQL autocomplete, saved favorites, and a quick switcher
+- [x] Schema-aware editor completion, saved favorites, and Open Quickly, release-verified in the installed GTK suite
+- [ ] SQL file open/save with external-change detection
 - [ ] PostgreSQL objects, users/roles, and administration
 - [ ] Import/export and backup/restore
 - [ ] Connection organization and reusable transport profiles

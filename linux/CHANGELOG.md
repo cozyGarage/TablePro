@@ -35,6 +35,9 @@
 - Deterministic PostgreSQL release checks for TLS hostname and authority verification, tunnelled access, read-only denial, rollback, blocking locks, and reconnect
 - Verify Full for PostgreSQL over SSH, using the original database hostname for certificate checks
 - Named `:parameter` placeholders in the SQL editor, with a per-value type choice, sent to the database as bound parameters
+- Schema-aware editor completion that offers tables after FROM and JOIN, and the columns of the tables in the statement, including through table aliases
+- Saved query favorites in `favorites.json`, saved with Ctrl+D
+- Open Quickly (Ctrl+P) over favorites, open tabs, and saved connections
 
 ### Changed
 
