@@ -6535,9 +6535,12 @@ dependencies = [
 name = "tablepro-release-tests"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "secrecy",
+ "serde_json",
  "tablepro-core",
  "tablepro-driver-postgres",
+ "tablepro-mcp",
  "tablepro-policy",
  "tablepro-ssh",
  "tablepro-storage",
