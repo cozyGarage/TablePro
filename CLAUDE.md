@@ -101,6 +101,7 @@ Every test belongs to exactly one tier, and every tier has one script and one ga
 | unit | `--lib --bins` across the workspace | `linux/scripts/preflight.sh` | CI `preflight` and `fast` |
 | sandbox | Integration targets needing no Docker, no database service, and no display | `linux/scripts/test-sandbox.sh` | CI `preflight` |
 | driver | `crates/drivers/*/tests/integration.rs` against a container | none | CI `integration` |
+| driver-tls | `crates/driver-tls-tests` against network servers holding a privately issued certificate | `linux/scripts/test-driver-tls.sh` | CI `driver-tls` |
 | release | `crates/release-tests` against the PostgreSQL fixture | `linux/scripts/test-postgres-release.sh` | CI `postgres-release` |
 | gtk | `crates/app/tests/gtk_safety.py` on an installed build | `linux/scripts/test-gtk-safety.sh` | CI `fast` |
 

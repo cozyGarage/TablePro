@@ -6491,6 +6491,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tablepro-driver-tls-tests"
+version = "0.1.0"
+dependencies = [
+ "secrecy",
+ "tablepro-core",
+ "tablepro-driver-mongodb",
+ "tokio",
+]
+
+[[package]]
 name = "tablepro-mcp"
 version = "0.1.0"
 dependencies = [

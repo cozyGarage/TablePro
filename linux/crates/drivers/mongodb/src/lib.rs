@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use mongodb::bson::{Bson, Document, doc};
-use mongodb::options::ClientOptions;
+use mongodb::options::{ClientOptions, Tls, TlsOptions};
 use mongodb::{Client, Database};
 use secrecy::ExposeSecret;
 
@@ -35,10 +36,7 @@ impl DatabaseDriver for MongodbDriver {
     }
 
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
-        let scheme = match opts.tls.mode {
-            tablepro_core::TlsMode::Disabled => "mongodb",
-            _ => "mongodb",
-        };
+        let scheme = "mongodb";
         let password = opts.password.expose_secret();
         let auth = if !opts.username.is_empty() {
             format!("{}:{}@", encode_uri(&opts.username), encode_uri(password))
@@ -53,6 +51,9 @@ impl DatabaseDriver for MongodbDriver {
         let uri = format!("{scheme}://{auth}{}:{}{db_path}", opts.host, opts.port);
         let mut client_opts = ClientOptions::parse(&uri).await.map_err(map_mongo_error)?;
         client_opts.app_name = Some("TablePro".into());
+        client_opts.tls = Some(tls_for(&opts.tls));
+        client_opts.connect_timeout = Some(CONNECT_TIMEOUT);
+        client_opts.server_selection_timeout = Some(CONNECT_TIMEOUT);
         let client = Client::with_options(client_opts).map_err(map_mongo_error)?;
         let database_name = if opts.database.is_empty() {
             "test".into()
@@ -66,6 +67,26 @@ impl DatabaseDriver for MongodbDriver {
             .map_err(map_mongo_error)?;
         Ok(Box::new(MongodbConnection { client, database_name }))
     }
+}
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Map the shared TLS modes onto what the rustls-backed MongoDB driver can
+/// express. It has no CA-only mode, so `VerifyCa` verifies the hostname too,
+/// which is stricter than requested and never weaker.
+fn tls_for(config: &tablepro_core::TlsConfig) -> Tls {
+    use tablepro_core::TlsMode;
+    if config.mode == TlsMode::Disabled {
+        return Tls::Disabled;
+    }
+    let mut options = TlsOptions::default();
+    if let Some(path) = &config.root_cert {
+        options.ca_file_path = Some(path.clone());
+    }
+    if !config.mode.verifies_cert() {
+        options.allow_invalid_certificates = Some(true);
+    }
+    Tls::Enabled(options)
 }
 
 struct MongodbConnection {

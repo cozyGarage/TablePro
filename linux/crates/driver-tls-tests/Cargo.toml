@@ -1,0 +1,19 @@
+[package]
+name = "tablepro-driver-tls-tests"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "tablepro_driver_tls_tests"
+path = "src/lib.rs"
+
+[dependencies]
+tablepro-core = { path = "../core" }
+secrecy.workspace = true
+
+[dev-dependencies]
+tablepro-driver-mongodb = { path = "../drivers/mongodb" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

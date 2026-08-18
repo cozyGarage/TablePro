@@ -50,7 +50,7 @@ Two ideas carry most of the security weight:
 | SQLite | n/a | n/a (local file) | n/a | n/a | n/a | n/a | pool acquire only |
 | ClickHouse | n/a | no | yes | on/off only | no | no | 5 s probe |
 | Redis | yes | no | n/a | **none — see below** | no | no | none |
-| MongoDB | yes | no | n/a | **none — see below** | no | no | none |
+| MongoDB | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | yes | no | 5 s |
 | DuckDB | n/a | n/a (local file) | n/a | n/a | n/a | n/a | n/a |
 | Oracle | yes | no | n/a | not applied | no | no | none |
 
@@ -81,13 +81,15 @@ container integration tests that connect in plaintext.
 
 Confirmed by reading the source. Ordered by severity.
 
-### 1. MongoDB silently ignores the TLS setting
+### 1. MongoDB silently ignores the TLS setting — fixed
 
-Both arms of the scheme match produce `mongodb://`, and the URI never sets
-`tls=true`. A user who selects Verify Full gets an unencrypted connection, and
-the username and password are sent in the clear. The setting is presented in the
-UI and has no effect. This is a silent downgrade, which is the worst failure
-shape for a TLS control.
+**Closed on 2026-08-19.** The driver now sets the client's TLS options from the
+selected mode and honours a saved certificate authority. Because the rustls
+backend has no CA-only mode, `VerifyCa` verifies the hostname as well, which is
+stricter than requested and never weaker. The defect was reproduced first: a
+`VerifyFull` connection to a TLS-only server failed with `unexpected end of
+file`, proving the client was speaking plaintext. Release-verified by the
+driver TLS tier.
 
 ### 2. Redis cannot use TLS at all, and defaults to trying
 
@@ -204,8 +206,7 @@ Fixing the silent failures first, then the missing capability, then the coverage
 that would have caught both.
 
 1. ~~**Root certificate on saved connections.**~~ Done on 2026-08-19.
-2. **MongoDB TLS.** Set `tls=true` on the URI and map the verification modes.
-   This is a silent downgrade and should be treated as a security fix.
+2. ~~**MongoDB TLS.**~~ Done on 2026-08-19.
 3. **Redis TLS.** Either enable the `tls-rustls` feature and map the modes, or
    refuse a TLS mode the driver cannot honour with an error that says so. Do not
    leave the default configuration failing.

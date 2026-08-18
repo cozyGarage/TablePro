@@ -93,6 +93,7 @@
 ### Security
 
 - The headless agent daemon opens a saved connection through its configured SSH chain and verifies the certificate against the real database hostname, instead of dialling the database directly
+- MongoDB connections honour the selected TLS mode and certificate authority instead of always connecting without encryption
 - MySQL server-control functions and SQL Server extended and system procedures are recognised as administrative, so agents are denied them the same way they are on PostgreSQL
 - Agent write-scope checks classify SQL with the connected engine's dialect instead of always assuming PostgreSQL
 - MCP HTTP rejects untrusted browser origins before JSON-RPC dispatch

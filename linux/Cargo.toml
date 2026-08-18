@@ -10,6 +10,7 @@ members = [
     "crates/ssh",
     "crates/storage",
     "crates/transport",
+    "crates/driver-tls-tests",
     "crates/drivers/clickhouse",
     "crates/drivers/duckdb",
     "crates/drivers/mongodb",
