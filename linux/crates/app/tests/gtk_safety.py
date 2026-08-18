@@ -17,6 +17,7 @@ APP_NAME = "TablePro"
 CONNECTION_NAME = "Safety SQLite"
 WAIT_SECONDS = 15
 POLL_SECONDS = 0.05
+SETTLE_SECONDS = 3.0
 
 
 def descendants(node):
@@ -121,13 +122,43 @@ def invoke(node):
         except Exception:
             continue
     for candidate in candidates:
+        if not node_is_focusable_button(candidate):
+            continue
         try:
-            if candidate.queryComponent().grabFocus():
-                pyatspi.Registry.generateKeyboardEvent(0, "Return", pyatspi.KEY_SYM)
-                return
+            if not candidate.queryComponent().grabFocus():
+                continue
         except Exception:
             continue
+        if not wait_for_focus(candidate):
+            continue
+        pyatspi.Registry.generateKeyboardEvent(0, "Return", pyatspi.KEY_SYM)
+        return
     raise AssertionError(f"no invokable action for {node_name(node)!r}")
+
+
+def node_is_focusable_button(node):
+    if node_role(node) != pyatspi.ROLE_PUSH_BUTTON:
+        return False
+    try:
+        return node.getState().contains(pyatspi.STATE_FOCUSABLE)
+    except Exception:
+        return False
+
+
+def node_has_focus(node):
+    try:
+        return node.getState().contains(pyatspi.STATE_FOCUSED)
+    except Exception:
+        return False
+
+
+def wait_for_focus(node, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if node_has_focus(node):
+            return True
+        time.sleep(POLL_SECONDS)
+    return False
 
 
 def press_x11_key(name):
@@ -259,6 +290,15 @@ def wait_for_database_count(path, expected, timeout=WAIT_SECONDS):
     raise AssertionError(f"expected {expected} database rows, found {actual}")
 
 
+def assert_database_count_stable(path, expected, seconds=SETTLE_SECONDS):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        actual = database_row_count(path)
+        if actual != expected:
+            raise AssertionError(f"expected {expected} database rows for {seconds}s, found {actual}")
+        time.sleep(POLL_SECONDS)
+
+
 def write_fixture(base, audit_available=True):
     home = base / "home"
     config = base / "config"
@@ -386,9 +426,12 @@ def run_scenario(binary, scenario):
 def dismissed_approval_denies(database):
     run_sql("INSERT INTO safety_items(id) VALUES (1)")
     wait_for_node(name="Approve once", role=pyatspi.ROLE_PUSH_BUTTON)
+    time.sleep(SETTLE_SECONDS / 3)
+    if find_node(name="Approve once", role=pyatspi.ROLE_PUSH_BUTTON) is None:
+        raise AssertionError("the approval dialog closed before the harness dismissed it")
     press_x11_key("Escape")
     wait_for_node(name="Approve once", present=False)
-    wait_for_database_count(database, 0)
+    assert_database_count_stable(database, 0)
 
 
 def approve_once_prompts_again(database):
@@ -401,13 +444,13 @@ def approve_once_prompts_again(database):
     wait_for_node(name="Approve once", role=pyatspi.ROLE_PUSH_BUTTON)
     invoke(wait_for_node(name="Deny", role=pyatspi.ROLE_PUSH_BUTTON))
     wait_for_node(name="Approve once", present=False)
-    wait_for_database_count(database, 1)
+    assert_database_count_stable(database, 1)
 
 
 def audit_failure_denies(database):
     run_sql("INSERT INTO safety_items(id) VALUES (1)")
     wait_for_node(name="Approve once", present=False, timeout=2)
-    wait_for_database_count(database, 0)
+    assert_database_count_stable(database, 0)
 
 
 def main():
