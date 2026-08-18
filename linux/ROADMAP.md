@@ -27,12 +27,12 @@ Status terms:
 | SQL editor and multiple result tabs | Integrated | PostgreSQL timeout and cancel stop the server query and wait for terminal audit state |
 | Structure editor | Implemented | Tables, columns, indexes, and foreign keys |
 | Saved connections and libsecret | Implemented | Keyring failure UX needs hardening |
-| SSH and jump chains | Integrated | A verifying PostgreSQL connection forwards through a private Unix socket and is release-verified; jump chains are JSON-only in the current GTK form |
+| SSH and jump chains | Integrated | A verifying PostgreSQL connection forwards through a private Unix socket and is release-verified, headlessly as well as in the GUI; jump chains are JSON-only in the current GTK form |
 | TLS modes | Integrated | Hostname and authority checks are release-verified, including PostgreSQL `VerifyFull` through SSH |
 | Query history | Implemented | MCP access must be isolated before being re-exposed |
 | CSV/JSON export | Implemented | CSV streams table pages from the exporting tab's own connection; Parquet is unsupported |
 | Activity and EXPLAIN | Implemented | Administrative classification and numeric session-ID validation are covered |
-| Policy, MCP, and agentd | Integrated | Approval and audit failures deny governed operations; read-only denial is release-verified against PostgreSQL |
+| Policy, MCP, and agentd | Integrated | Approval and audit failures deny governed operations; read-only denial is release-verified against PostgreSQL; the GUI and agentd share one connection transport, release-verified through the fixture bastion |
 | Audit journal | Integrated | Durable intent/outcome records, recovery, private mode, and cross-process locking are locally verified |
 | AUR, Debian, Flatpak | Scaffolded | Not release-verified or ready for a public stable package |
 | i18n and accessibility | Infrastructure | English strings/checklist exist; end-user verification is incomplete |

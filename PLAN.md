@@ -470,6 +470,40 @@ Removed material included retired application source, tests, project files, runt
 
 ---
 
+# Agent surface
+
+Agents are a supported surface, not a bolt-on. Every agent-facing capability
+composes the same layers in the same order:
+
+```
+saved connection ─▶ tablepro-transport ─▶ raw driver connection
+                                              │
+                          PolicyGuard ◀───────┘   (always, no exceptions)
+                                              │
+       ┌──────────────────────────────────────┼──────────────────┐
+    GTK app                            tablepro-mcp          agentd
+                                    (scopes + allowlist)   (composition)
+```
+
+Rules that follow from this shape:
+
+- `tablepro-transport` is the only place that turns a saved connection into a
+  live driver connection. The GUI and `agentd` connect identically, so a
+  connection that requires a bastion requires it headlessly too, and TLS is
+  always verified against the real database hostname.
+- No surface hands out a raw driver connection. `PolicyGuard` wraps every
+  handle before it leaves the provider.
+- Token scope, connection allowlist, and `PolicyGuard` remain three
+  independent checks. None substitutes for another.
+- A new agent capability is a tool in `tablepro-mcp` over this transport, not
+  a new connection path.
+- Built-in AI chat stays a deferred product feature. This is the integration
+  surface, not a chat client.
+
+Known seam: saved connections carry no custom certificate authority or client
+certificate, so a private CA is unusable on every surface. That is tracked as
+a Priority A capability, not a defect in this shape.
+
 # First trusted Linux release gate
 
 Run from `linux/`:
@@ -478,6 +512,7 @@ Run from `linux/`:
 cargo fmt --all -- --check
 cargo clippy --workspace --exclude tablepro-driver-duckdb --all-targets -- -D warnings
 cargo test --workspace --exclude tablepro-driver-duckdb --lib --bins
+./scripts/test-sandbox.sh
 cargo deny check
 cargo audit
 

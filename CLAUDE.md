@@ -31,6 +31,7 @@ The workspace manifest is `linux/Cargo.toml`.
 - `linux/crates/policy`: statement classification, rules, approvals, masking, blast-radius checks, and audit types. It depends on `core` only.
 - `linux/crates/storage`: saved connections, Secret Service access, query history, and the audit journal.
 - `linux/crates/ssh`: SSH tunnels through `russh`.
+- `linux/crates/transport`: connection assembly. Turns a saved connection into driver options, resolves its SSH chain, opens the tunnel, and preserves the service endpoint used for certificate verification. The GUI and `agentd` both connect through it.
 - `linux/crates/mcp`: MCP authentication, scopes, connection allowlists, rate limits, tools, and transport.
 - `linux/crates/agentd`: headless MCP process and composition root without GTK.
 - `linux/crates/drivers/*`: one static crate per database engine. Driver crates implement `core` traits and do not depend on the app.
@@ -90,6 +91,22 @@ Policy or MCP changes must test denied and allowed cases. They must also test sc
 UI logic should be extracted into testable services. For GTK-only behavior that cannot run reliably in automation, describe manual steps and include light and dark screenshots in the pull request.
 
 Never change a test to accept incorrect behavior. Fix the implementation or correct an invalid expectation with a clear reason.
+
+### Regression tiers
+
+Every test belongs to exactly one tier, and every tier has one script and one gate.
+
+| Tier | Contents | Script | Gate |
+|---|---|---|---|
+| unit | `--lib --bins` across the workspace | `linux/scripts/preflight.sh` | CI `preflight` and `fast` |
+| sandbox | Integration targets needing no Docker, no database service, and no display | `linux/scripts/test-sandbox.sh` | CI `preflight` |
+| driver | `crates/drivers/*/tests/integration.rs` against a container | none | CI `integration` |
+| release | `crates/release-tests` against the PostgreSQL fixture | `linux/scripts/test-postgres-release.sh` | CI `postgres-release` |
+| gtk | `crates/app/tests/gtk_safety.py` on an installed build | `linux/scripts/test-gtk-safety.sh` | CI `fast` |
+
+The sandbox script selects targets with `--tests` rather than by name, so a new integration file is gated as soon as it is added. Adding a crate to the workspace means adding it to the crate lists in `preflight.sh` and `test-sandbox.sh`.
+
+Every fixed defect gets a regression test in the lowest tier that can reproduce it, and the fix and its test land in the same commit. Before relying on a new regression test, confirm it fails against the unfixed code.
 
 ## File-size guard
 
