@@ -11,6 +11,8 @@ pub const TOOL_NAMES: &[&str] = &[
 ];
 
 use serde_json::{Value as JsonValue, json};
+use tablepro_core::export::{write_csv_header, write_csv_row};
+use tablepro_core::sql_dialect::explain_statement;
 use uuid::Uuid;
 
 use crate::bridge::{McpBridge, WriteOutcome};
@@ -120,7 +122,9 @@ pub async fn dispatch(bridge: &McpBridge, token: &McpToken, name: &str, args: Js
                 .and_then(|v| v.as_str())
                 .ok_or("missing sql")?
                 .to_string();
-            let explain = format!("EXPLAIN {sql}");
+            let driver_id = bridge.driver_id_for(token, id).await?;
+            let explain = explain_statement(&driver_id, &sql)
+                .ok_or_else(|| format!("explain is not supported for the {driver_id} driver"))?;
             let result = bridge.execute_query(token, id, &explain).await?;
             Ok(json!({
                 "plan_rows": result.rows.iter().map(|r| {
@@ -139,22 +143,13 @@ pub async fn dispatch(bridge: &McpBridge, token: &McpToken, name: &str, args: Js
             let result = bridge.execute_query(token, id, &sql).await?;
             match format {
                 "csv" => {
-                    let mut out = String::new();
-                    out.push_str(
-                        &result
-                            .columns
-                            .iter()
-                            .map(|c| c.name.clone())
-                            .collect::<Vec<_>>()
-                            .join(","),
-                    );
-                    out.push('\n');
+                    let mut out: Vec<u8> = Vec::new();
+                    write_csv_header(&mut out, &result.columns).map_err(|e| e.to_string())?;
                     for row in &result.rows {
-                        let cells: Vec<String> = row.iter().map(|v| format!("{}", value_to_json(v))).collect();
-                        out.push_str(&cells.join(","));
-                        out.push('\n');
+                        write_csv_row(&mut out, row).map_err(|e| e.to_string())?;
                     }
-                    Ok(json!({"format": "csv", "content": out}))
+                    let content = String::from_utf8(out).map_err(|e| e.to_string())?;
+                    Ok(json!({"format": "csv", "content": content}))
                 }
                 _ => Ok(json!({
                     "format": "json",

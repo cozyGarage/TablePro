@@ -94,6 +94,17 @@ impl McpBridge {
         f(conn).await
     }
 
+    pub(crate) async fn driver_id_for(&self, token: &McpToken, connection_id: Uuid) -> Result<String, String> {
+        self.ensure_connection_allowed(token, connection_id)?;
+        self.provider
+            .list_saved_connections()
+            .await?
+            .into_iter()
+            .find(|c| c.id == connection_id)
+            .map(|c| c.driver_id)
+            .ok_or_else(|| format!("connection {connection_id} not found"))
+    }
+
     pub async fn list_tables(&self, token: &McpToken, connection_id: Uuid) -> Result<Vec<TableInfo>, String> {
         self.with_connection(token, connection_id, |conn| {
             Box::pin(async move { conn.list_tables().await.map_err(|e| e.to_string()) })
@@ -103,7 +114,8 @@ impl McpBridge {
 
     pub async fn execute_query(&self, token: &McpToken, connection_id: Uuid, sql: &str) -> Result<QueryResult, String> {
         authorize_scopes(token.permissions, McpScope::ToolsRead)?;
-        if sql_looks_like_write(sql) {
+        let driver_id = self.driver_id_for(token, connection_id).await?;
+        if sql_looks_like_write(sql, &driver_id) {
             authorize_scopes(token.permissions, McpScope::ToolsWrite)?;
         }
         let max_rows = self.max_rows;
@@ -186,7 +198,7 @@ fn operation_control(timeout_secs: u64) -> OperationControl {
     )
 }
 
-fn sql_looks_like_write(sql: &str) -> bool {
-    let facts = tablepro_policy::classify(sql, "postgres");
+fn sql_looks_like_write(sql: &str, driver_id: &str) -> bool {
+    let facts = tablepro_policy::classify(sql, driver_id);
     facts.writes
 }

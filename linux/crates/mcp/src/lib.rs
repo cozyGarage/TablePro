@@ -18,4 +18,4 @@ pub use bridge::{ConnectionProvider, McpBridge};
 pub use rate_limit::RateLimiter;
 pub use server::{McpServerConfig, serve_stdio, serve_streamable_http};
 pub use tokens::{McpToken, TokenStore, generate_token};
-pub use tools::TOOL_NAMES;
+pub use tools::{TOOL_NAMES, dispatch};
