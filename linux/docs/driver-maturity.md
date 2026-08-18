@@ -7,7 +7,7 @@ users are not surprised by missing write or transaction paths.
 | Driver | Maturity | Connect | Browse | Query | Writes | Params | `begin` / MCP preview | Notes |
 |---|---|---|---|---|---|---|---|---|
 | PostgreSQL | Stable | yes | yes | SQL | yes | yes | yes | all five TLS modes, release-verified |
-| MySQL | Stable | yes | yes | SQL | yes | yes | yes | DDL not transactional; TLS modes mapped but untested |
+| MySQL | Stable | yes | yes | SQL | yes | yes | yes | DDL not transactional; TLS release-verified |
 | SQLite | Stable | yes | yes | SQL | yes | yes | yes | File-based |
 | SQL Server | Stable | yes | yes | SQL | yes | yes | no interactive begin | Tiberius; Verify Ca and Verify Full are identical |
 | ClickHouse | Stable | yes | yes | SQL | yes | yes | no | Async mutations; no row counts; TLS is on/off only |

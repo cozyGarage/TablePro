@@ -27,7 +27,10 @@ fn env_port(key: &str, fallback: u16) -> u16 {
 pub struct DriverTlsFixture {
     pub host: String,
     pub mongo_port: u16,
+    pub mongo_plaintext_port: u16,
     pub redis_port: u16,
+    pub redis_plaintext_port: u16,
+    pub mysql_port: u16,
     pub database: String,
     pub username: String,
     pub password: String,
@@ -45,7 +48,10 @@ impl DriverTlsFixture {
         Self {
             host: env_or("TABLEPRO_DRIVER_TLS_HOST", "localhost"),
             mongo_port: env_port("TABLEPRO_DRIVER_TLS_MONGO_PORT", 27018),
+            mongo_plaintext_port: env_port("TABLEPRO_DRIVER_TLS_MONGO_PLAINTEXT_PORT", 27019),
             redis_port: env_port("TABLEPRO_DRIVER_TLS_REDIS_PORT", 6380),
+            redis_plaintext_port: env_port("TABLEPRO_DRIVER_TLS_REDIS_PLAINTEXT_PORT", 6381),
+            mysql_port: env_port("TABLEPRO_DRIVER_TLS_MYSQL_PORT", 3307),
             database: env_or("TABLEPRO_DRIVER_TLS_DB", "tablepro"),
             username: env_or("TABLEPRO_DRIVER_TLS_USER", "tablepro"),
             password: env_or("TABLEPRO_DRIVER_TLS_PASSWORD", "tablepro"),
@@ -74,6 +80,10 @@ impl DriverTlsFixture {
         self.options(self.mongo_port, mode, root_cert)
     }
 
+    pub fn mongo_plaintext(&self) -> ConnectOptions {
+        self.options(self.mongo_plaintext_port, TlsMode::Disabled, None)
+    }
+
     /// Redis takes its database as a numeric index and authenticates with a
     /// password only, so the shared options are narrowed here.
     pub fn redis(&self, mode: TlsMode, root_cert: Option<PathBuf>) -> ConnectOptions {
@@ -81,5 +91,16 @@ impl DriverTlsFixture {
         options.database = "0".into();
         options.username = String::new();
         options
+    }
+
+    pub fn redis_plaintext(&self) -> ConnectOptions {
+        let mut options = self.options(self.redis_plaintext_port, TlsMode::Disabled, None);
+        options.database = "0".into();
+        options.username = String::new();
+        options
+    }
+
+    pub fn mysql(&self, mode: TlsMode, root_cert: Option<PathBuf>) -> ConnectOptions {
+        self.options(self.mysql_port, mode, root_cert)
     }
 }

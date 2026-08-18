@@ -121,11 +121,13 @@ carry a setting the user believes is in force.
 ### 5. TLS modes collapse on three drivers
 
 ClickHouse maps Prefer, Require, Verify Ca, and Verify Full to the same `https`
-URL. SQL Server maps Verify Ca and Verify Full to the same configuration. Redis
-and MongoDB map everything to one branch. On these drivers the mode selector
-promises a distinction the driver does not make, in both directions: a user who
-asks for encrypt-only gets full verification on ClickHouse, and a user who asks
-for full verification gets CA-level checking on SQL Server.
+URL and cannot use a certificate authority at all. SQL Server maps Verify Ca and
+Verify Full to the same configuration and has no authority setting either. On
+MongoDB and Redis the rustls backend offers no CA-only mode, so Verify Ca
+verifies the hostname as well; that is stricter than requested and is documented
+in both drivers. The remaining problem is ClickHouse and SQL Server, where the
+mode selector promises a distinction the driver does not make and a privately
+issued certificate cannot be trusted.
 
 ### 6. No connect timeout on the SSH path or on Oracle
 
@@ -187,8 +189,8 @@ Ordered by how much risk the gap carries.
 
 | Area | Current coverage |
 |---|---|
-| TLS on MySQL, SQL Server, ClickHouse | none — the container tests connect in plaintext |
-| TLS on Redis, MongoDB, Oracle | none, and the code paths above are wrong or absent |
+| TLS on SQL Server and ClickHouse | none — the container tests connect in plaintext |
+| TLS on Oracle | none |
 | Redis, MongoDB, DuckDB, Oracle, SQLite | no integration test file at all |
 | SSH jump chains of more than one hop | none — the fixture has a single bastion |
 | SSH password and passphrase authentication | none — every test uses an unencrypted private key |

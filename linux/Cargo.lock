@@ -6500,6 +6500,7 @@ dependencies = [
  "secrecy",
  "tablepro-core",
  "tablepro-driver-mongodb",
+ "tablepro-driver-mysql",
  "tablepro-driver-redis",
  "tokio",
 ]

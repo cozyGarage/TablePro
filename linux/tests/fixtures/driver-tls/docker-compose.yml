@@ -90,6 +90,78 @@ services:
         aliases:
           - redis.tablepro.test
 
+  mongo-plain:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: tablepro
+      MONGO_INITDB_ROOT_PASSWORD: tablepro
+      MONGO_INITDB_DATABASE: tablepro
+    volumes:
+      - ./seed:/docker-entrypoint-initdb.d:ro
+    command: ["mongod", "--bind_ip_all"]
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --host
+        - localhost
+        - -u
+        - tablepro
+        - -p
+        - tablepro
+        - --authenticationDatabase
+        - admin
+        - --eval
+        - "db.adminCommand('ping')"
+      interval: 3s
+      timeout: 5s
+      retries: 40
+    ports:
+      - "127.0.0.1:27019:27017"
+    networks:
+      - fixture
+
+  redis-plain:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "tablepro"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "tablepro", "--no-auth-warning", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+    ports:
+      - "127.0.0.1:6381:6379"
+    networks:
+      - fixture
+
+  mysql:
+    build:
+      context: .
+      dockerfile: mysql/Dockerfile
+    environment:
+      MYSQL_ROOT_PASSWORD: tablepro
+      MYSQL_DATABASE: tablepro
+      MYSQL_USER: tablepro
+      MYSQL_PASSWORD: tablepro
+    command:
+      - mysqld
+      - --require_secure_transport=ON
+      - --ssl-ca=/certs/ca.crt
+      - --ssl-cert=/certs/server.crt
+      - --ssl-key=/certs/server.key
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-utablepro", "-ptablepro"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+    ports:
+      - "127.0.0.1:3307:3306"
+    networks:
+      fixture:
+        aliases:
+          - mysql.tablepro.test
+
 networks:
   fixture:
     driver: bridge
