@@ -17,7 +17,7 @@ on:
 
 jobs:
   preflight:
-    name: Preflight (no GTK app)
+    name: Preflight and sandbox tier (no GTK app)
     runs-on: ubuntu-24.04
     defaults:
       run:

@@ -53,8 +53,8 @@ cargo clippy "${PKG_ARGS[@]}" --all-targets -- -D warnings
 echo "==> cargo test --lib (non-GTK crates)"
 cargo test "${PKG_ARGS[@]}" --lib
 
-echo "==> cargo test -p tablepro-mcp --test enforce_policy"
-cargo test -p tablepro-mcp --test enforce_policy
+echo "==> sandbox integration tier"
+"$ROOT/scripts/test-sandbox.sh"
 
 echo "Preflight passed. Next:"
 echo "  ./scripts/ci-local.sh        # full workspace incl. GTK app"
