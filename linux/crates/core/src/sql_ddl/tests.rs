@@ -1,5 +1,6 @@
 use crate::query::{ColumnInfo, ForeignKeyInfo, IndexInfo};
 
+use super::diff::diff_to_ops;
 use super::types::{validate_safe_default, validate_safe_type};
 use super::{
     BuildDdlError, DraftColumn, StructureOp, build_add_column, build_add_foreign_key, build_alter_column,
@@ -972,4 +973,67 @@ fn materialize_ops_mssql_orders_rename_alter_then_add() {
     assert!(stmts[1].contains("DROP CONSTRAINT"));
     assert_eq!(stmts[2], "ALTER TABLE [new_t] ADD DEFAULT ('x') FOR [x]");
     assert_eq!(stmts[3], "ALTER TABLE [new_t] ADD [flag] BIT NOT NULL");
+}
+
+fn existing(name: &str, data_type: &str) -> ColumnInfo {
+    ColumnInfo {
+        name: name.into(),
+        data_type: data_type.into(),
+        nullable: true,
+        primary_key: false,
+        is_auto_increment: false,
+        default_value: None,
+        is_generated: false,
+    }
+}
+
+#[test]
+fn a_renamed_column_emits_the_rename_before_its_alters() {
+    let original = vec![existing("label", "text")];
+    let mut draft = DraftColumn::from_info(original[0].clone());
+    draft.name = "title".into();
+    draft.nullable = false;
+
+    let ops = diff_to_ops(None, "t", "t", &original, &[draft], &[], &[], &[], &[]);
+    let rename_at = ops
+        .iter()
+        .position(|op| matches!(op, StructureOp::RenameColumn { .. }))
+        .expect("a renamed column must emit a rename op");
+    let alter_at = ops
+        .iter()
+        .position(|op| matches!(op, StructureOp::AlterColumn { .. }))
+        .expect("the attribute change must still emit an alter op");
+    assert!(rename_at < alter_at, "the rename must precede the alter: {ops:?}");
+
+    let stmts = materialize_ops(&ops, "postgres").unwrap();
+    assert_eq!(stmts[0], "ALTER TABLE \"t\" RENAME COLUMN \"label\" TO \"title\"");
+    assert!(
+        stmts[1..].iter().all(|s| !s.contains("\"label\"")),
+        "later statements must address the new name: {stmts:?}"
+    );
+    assert!(stmts.iter().any(|s| s.contains("SET NOT NULL")));
+}
+
+#[test]
+fn a_pure_column_rename_emits_only_the_rename() {
+    let original = vec![existing("label", "text")];
+    let mut draft = DraftColumn::from_info(original[0].clone());
+    draft.name = "title".into();
+
+    let ops = diff_to_ops(None, "t", "t", &original, &[draft], &[], &[], &[], &[]);
+    let stmts = materialize_ops(&ops, "postgres").unwrap();
+    assert_eq!(
+        stmts,
+        vec!["ALTER TABLE \"t\" RENAME COLUMN \"label\" TO \"title\"".to_string()]
+    );
+}
+
+#[test]
+fn an_unrenamed_column_emits_no_rename() {
+    let original = vec![existing("label", "text")];
+    let mut draft = DraftColumn::from_info(original[0].clone());
+    draft.nullable = false;
+
+    let ops = diff_to_ops(None, "t", "t", &original, &[draft], &[], &[], &[], &[]);
+    assert!(!ops.iter().any(|op| matches!(op, StructureOp::RenameColumn { .. })));
 }

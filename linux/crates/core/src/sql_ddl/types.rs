@@ -205,6 +205,12 @@ pub enum StructureOp {
         old_name: String,
         new_name: String,
     },
+    RenameColumn {
+        schema: Option<String>,
+        table: String,
+        old_name: String,
+        new_name: String,
+    },
     AddColumn {
         schema: Option<String>,
         table: String,

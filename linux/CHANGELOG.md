@@ -62,6 +62,7 @@
 - Query plans use the connected engine's own EXPLAIN form, and engines without a query plan statement say so instead of failing on malformed SQL
 - Reading a query plan through an agent no longer requires write access, while EXPLAIN ANALYZE stays governed as the write it performs
 - Agent CSV export quotes values containing separators, quotation marks, or line breaks instead of producing corrupt rows
+- Renaming a column in the structure editor applies the rename instead of failing, and the column's other edits apply to the new name
 - Integer cells wider than 2^53 keep their exact value when edited instead of being rounded
 - CSV export reads from the connection that owns the table's tab instead of whichever connection is active
 - ClickHouse integration tests connect over plain HTTP instead of default VerifyFull HTTPS

@@ -1,6 +1,6 @@
 use crate::query::{ColumnInfo, ForeignKeyInfo, IndexInfo};
 
-use super::column::{build_add_column, build_alter_column, build_drop_column};
+use super::column::{build_add_column, build_alter_column, build_drop_column, build_rename_column};
 use super::index_fk::{build_add_foreign_key, build_create_index, build_drop_foreign_key, build_drop_index};
 use super::table::{build_create_table, build_rename_table};
 use super::types::{BuildDdlError, DraftColumn, StructureOp};
@@ -87,6 +87,22 @@ pub fn diff_to_ops(
                 schema: schema_owned.clone(),
                 table: table.clone(),
                 column_name: orig.name.clone(),
+            });
+        }
+    }
+
+    // Rename columns before altering them: the alter builders address
+    // the column by its drafted name, so the rename has to land first.
+    for col in current_columns {
+        if let Some(orig) = &col.original
+            && orig.name != col.name
+            && !col.name.trim().is_empty()
+        {
+            ops.push(StructureOp::RenameColumn {
+                schema: schema_owned.clone(),
+                table: table.clone(),
+                old_name: orig.name.clone(),
+                new_name: col.name.clone(),
             });
         }
     }
@@ -197,6 +213,23 @@ pub fn materialize_ops(ops: &[StructureOp], driver_id: &str) -> Result<Vec<Strin
         } = op
         {
             out.push(build_drop_column(driver_id, schema.as_deref(), table, column_name)?);
+        }
+    }
+    for op in ops {
+        if let StructureOp::RenameColumn {
+            schema,
+            table,
+            old_name,
+            new_name,
+        } = op
+        {
+            out.push(build_rename_column(
+                driver_id,
+                schema.as_deref(),
+                table,
+                old_name,
+                new_name,
+            )?);
         }
     }
     for op in ops {
