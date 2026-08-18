@@ -6532,6 +6532,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tablepro-release-tests"
+version = "0.1.0"
+dependencies = [
+ "secrecy",
+ "tablepro-core",
+ "tablepro-driver-postgres",
+ "tablepro-policy",
+ "tablepro-ssh",
+ "tablepro-storage",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "tablepro-ssh"
 version = "0.1.0"
 dependencies = [

@@ -8,7 +8,7 @@
 - Environment field on saved connections (Local / Dev / Staging / Prod)
 - Hash-chained audit journal at `$XDG_DATA_HOME/tablepro/audit.jsonl`
 - Interactive `Connection::begin` transactions (PostgreSQL, MySQL, SQLite)
-- TLS modes including VerifyFull default for new TLS connections
+- TLS modes including VerifyFull default for new TLS connections, with certificate hostname and authority failures reported as TLS errors
 - MCP bridge (stdio + loopback HTTP) with scoped tokens and rate limiting
 - Headless `tablepro-agentd` with required `--policy` and systemd user unit
 - GTK approval dialog for policy `RequireApproval` decisions
@@ -32,6 +32,7 @@
 - Weekly and manually dispatched full-workspace Clippy on current stable Rust, alongside the Rust 1.93 MSRV gate
 - Arch/Omarchy Rust toolchain guidance and a traceable upstream Linux sync log
 - Installed GTK safety checks for approval dismissal, approve-once scope, and unavailable audit storage
+- Deterministic PostgreSQL release checks for TLS hostname and authority verification, tunnelled access, read-only denial, rollback, blocking locks, and reconnect
 
 ### Changed
 

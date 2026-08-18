@@ -4,6 +4,7 @@ members = [
     "crates/app",
     "crates/core",
     "crates/policy",
+    "crates/release-tests",
     "crates/mcp",
     "crates/agentd",
     "crates/ssh",

@@ -66,6 +66,27 @@ These tests require Docker or a compatible Podman API socket. Keep each containe
 
 PostgreSQL integration coverage includes controlled cancellation and timeout against a real server. The tests confirm the query appears in `pg_stat_activity`, trigger cancellation or a deadline, confirm the query leaves server activity, and verify that the pool remains usable. Transaction cancellation is followed by rollback and a data check.
 
+## PostgreSQL release fixture
+
+Run the Phase 3 release gate with:
+
+```bash
+./scripts/test-postgres-release.sh
+```
+
+The script generates fixture certificates and SSH keys, starts PostgreSQL 16 with TLS, an OpenSSH
+bastion, and Toxiproxy, then runs `tablepro-release-tests` with `--include-ignored --test-threads=1`.
+Only Toxiproxy publishes host ports, so the database is reachable through the proxied path or the
+bastion and either path can be cut during a test.
+
+The suite verifies certificate hostname and authority checks, tunnelled access to a database with no
+published port, that `VerifyFull` through SSH fails instead of verifying the local dial address,
+read-only denial of data-changing CTEs and administrative functions, batch and interactive rollback,
+activity and blocking-lock queries, and direct and SSH reconnect.
+
+`tests/fixtures/postgres-release/README.md` documents the topology, generated materials, and
+`TABLEPRO_FIXTURE_KEEP_UP=1` for keeping the containers running.
+
 ## Local PostgreSQL smoke test
 
 For a PostgreSQL server you already run:
@@ -110,8 +131,9 @@ For ordinary UI changes, test the affected flow manually and include before and 
 2. GTK formatting, Clippy, and `cargo test --workspace --exclude tablepro-driver-duckdb --lib --bins` in Ubuntu 25.10.
 3. Installed GTK safety flows under Xvfb and PyAT-SPI, non-blocking during the soak period.
 4. PostgreSQL, MySQL, SQL Server, and ClickHouse integration tests on Docker.
-5. Scheduled and manually triggered Clippy on current stable Rust.
-6. Supply-chain checks with `cargo deny` and `cargo audit` in the GTK job.
+5. The PostgreSQL release fixture with TLS, an SSH bastion, and Toxiproxy on Docker.
+6. Scheduled and manually triggered Clippy on current stable Rust.
+7. Supply-chain checks with `cargo deny` and `cargo audit` in the GTK job.
 
 The Ubuntu 25.10 container provides the GLib version required by the selected libadwaita and Relm4 features.
 

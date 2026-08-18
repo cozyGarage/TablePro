@@ -1,0 +1,66 @@
+name: tablepro-postgres-release
+
+services:
+  db:
+    build:
+      context: .
+      dockerfile: db/Dockerfile
+    environment:
+      POSTGRES_DB: tablepro
+      POSTGRES_USER: tablepro
+      POSTGRES_PASSWORD: tablepro
+    volumes:
+      - ./seed:/docker-entrypoint-initdb.d:ro
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/certs/server.crt
+      - -c
+      - ssl_key_file=/certs/server.key
+      - -c
+      - max_connections=200
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tablepro -d tablepro"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      fixture:
+        aliases:
+          - db.tablepro.test
+
+  bastion:
+    build:
+      context: .
+      dockerfile: bastion/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 22"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - fixture
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    depends_on:
+      bastion:
+        condition: service_healthy
+    volumes:
+      - ./toxiproxy/toxiproxy.json:/config/toxiproxy.json:ro
+    ports:
+      - "127.0.0.1:8474:8474"
+      - "127.0.0.1:5433:5432"
+      - "127.0.0.1:2223:2222"
+    networks:
+      - fixture
+
+networks:
+  fixture:
+    driver: bridge

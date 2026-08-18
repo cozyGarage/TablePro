@@ -1,6 +1,6 @@
 # TablePro Linux development plan
 
-Last audited: 2026-08-17
+Last audited: 2026-08-18
 
 This plan is the source of truth for the Linux application. It separates:
 
@@ -17,7 +17,7 @@ Audited branch state:
 
 - Safety baseline HEAD before repository extraction: `17a108b1`
 - Tracking branch: `fork/linux`
-- Rust workspace: 16 crates, 134 Rust source files, and 42,539 lines of Rust
+- Rust workspace: 17 crates, 139 Rust source files, and 43,235 lines of Rust
 - Stable drivers: PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse
 - Experimental drivers: Redis, MongoDB, DuckDB, Oracle
 - No Linux account, subscription, receipt, license-key, or entitlement checks
@@ -82,7 +82,7 @@ Complete locally on 2026-08-13. Rust 1.93 CI is green, current stable Clippy pas
 
 ## Known transport gap
 
-PostgreSQL through SSH cannot currently use a distinct TCP dial address and TLS server name through sqlx 0.8.6. Do not downgrade `VerifyFull` silently. Resolve this in Phase 3 through a supported sqlx API, a small reviewed sqlx change, or a PostgreSQL connector that accepts a supplied stream.
+PostgreSQL through SSH cannot currently use a distinct TCP dial address and TLS server name through sqlx 0.8.6. `VerifyFull` through SSH therefore fails instead of downgrading, which the release fixture now proves. Resolve the functional gap through a supported sqlx API, a small reviewed sqlx change, or a PostgreSQL connector that accepts a supplied stream.
 
 ## Acceptance criteria
 
@@ -237,7 +237,7 @@ Tests to add:
 
 ## Status
 
-In progress. The cancellable driver contract, PostgreSQL server cancellation, terminal audit outcomes, parameterized operations, interactive rollback, and post-cancel pool reuse are implemented and verified against PostgreSQL 16. The deterministic TLS, SSH, lock, and reconnect fixture remains a release blocker.
+In progress. The cancellable driver contract, PostgreSQL server cancellation, terminal audit outcomes, parameterized operations, interactive rollback, and post-cancel pool reuse are implemented and verified against PostgreSQL 16. The deterministic TLS, SSH, lock, and reconnect fixture landed on 2026-08-18 and passes locally. `VerifyFull` through SSH using the original database hostname remains the open release blocker.
 
 ## Driver contract
 
@@ -245,31 +245,35 @@ The driver boundary now accepts cancellation tokens and deadlines. PostgreSQL ho
 
 ## Deterministic fixture
 
-Add one Docker Compose fixture under `linux/tests/fixtures/postgres-release/` containing:
+The Docker Compose fixture lives in `linux/tests/fixtures/postgres-release/` and contains:
 
-- PostgreSQL 16 with TLS and a hostname-specific certificate
-- SSH bastion with deterministic keys
-- An SSH-only database network path
-- Toxiproxy or equivalent for reconnect tests
-- Seed data and lock-test helpers
+- [x] PostgreSQL 16 with TLS and a hostname-specific certificate
+- [x] SSH bastion with deterministic keys
+- [x] A database with no published port, reachable through the bastion or the proxied path
+- [x] Toxiproxy for reconnect tests
+- [x] Seed data and lock-test helpers
+
+`linux/scripts/test-postgres-release.sh` generates materials, starts the fixture, and runs `tablepro-release-tests`. The Linux workflow runs it in the `postgres-release` job.
 
 Required scenarios:
 
-- Direct `VerifyFull`, wrong hostname, and unknown CA
-- `VerifyFull` through SSH using the original database hostname
-- Read-only data-changing CTE denial
+- [x] Direct `VerifyFull`, wrong hostname, and unknown CA
+- [ ] `VerifyFull` through SSH using the original database hostname
+- [x] `VerifyFull` through SSH fails rather than verifying the local dial address
+- [x] Read-only data-changing CTE denial
 - [x] Server-confirmed timeout and cancellation
 - [x] Interactive rollback after cancellation
-- [ ] Batch rollback in the release fixture
-- Activity and blocking-lock queries
-- Direct and SSH reconnect
+- [x] Batch rollback in the release fixture
+- [x] Activity and blocking-lock queries
+- [x] Direct and SSH reconnect
 
 ## Acceptance criteria
 
-- No TLS hostname downgrade occurs through SSH.
-- Cancelled/timed-out queries leave the server and receive terminal audit outcomes.
-- Reconnect replaces the connection and tunnel and later queries succeed.
-- The fixture runs as a required release-candidate gate.
+- [x] No TLS hostname downgrade occurs through SSH. Certificate hostname and authority failures now surface as TLS errors instead of internal driver errors.
+- [x] Cancelled/timed-out queries leave the server and receive terminal audit outcomes.
+- [x] Reconnect replaces the connection and tunnel and later queries succeed.
+- [x] The fixture runs as a release-candidate gate in CI.
+- [ ] A tunnelled `VerifyFull` session connects using the original database hostname. sqlx 0.8.6 derives both the dial address and the TLS server name from one host field, so this needs a supported sqlx API, a small reviewed sqlx change, or a PostgreSQL connector that accepts a supplied stream.
 
 ---
 

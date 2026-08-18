@@ -957,6 +957,18 @@ fn pg_action_char_to_keyword(code: &str) -> Option<String> {
     }
 }
 
+fn is_certificate_failure(err: &std::io::Error) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(current) = source {
+        let text = current.to_string().to_ascii_lowercase();
+        if text.contains("certificate") || text.contains("tls handshake") {
+            return true;
+        }
+        source = current.source();
+    }
+    false
+}
+
 fn map_sqlx_error(err: sqlx::Error) -> DriverError {
     use sqlx::Error::*;
     match err {
@@ -965,6 +977,7 @@ fn map_sqlx_error(err: sqlx::Error) -> DriverError {
             sqlstate: e.code().map(|c| c.to_string()),
         },
         Io(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => DriverError::ConnectionRefused,
+        Io(e) if is_certificate_failure(&e) => DriverError::Tls(e.to_string()),
         Tls(e) => DriverError::Tls(e.to_string()),
         PoolClosed | PoolTimedOut => DriverError::Disconnected,
         other => DriverError::Internal(format!("{other}")),
@@ -974,6 +987,21 @@ fn map_sqlx_error(err: sqlx::Error) -> DriverError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_certificate_failure_returns_tls_error() {
+        let err = sqlx::Error::Io(std::io::Error::other(
+            "invalid peer certificate: certificate not valid for name \"127.0.0.1\"",
+        ));
+        let mapped = map_sqlx_error(err);
+        assert!(matches!(mapped, DriverError::Tls(detail) if detail.contains("certificate")));
+    }
+
+    #[test]
+    fn map_plain_io_failure_stays_internal() {
+        let err = sqlx::Error::Io(std::io::Error::other("connection reset by peer"));
+        assert!(matches!(map_sqlx_error(err), DriverError::Internal(_)));
+    }
 
     #[test]
     fn map_io_refused_returns_connection_refused() {

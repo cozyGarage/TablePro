@@ -1,0 +1,14 @@
+[
+  {
+    "name": "postgres",
+    "listen": "0.0.0.0:5432",
+    "upstream": "db.tablepro.test:5432",
+    "enabled": true
+  },
+  {
+    "name": "bastion",
+    "listen": "0.0.0.0:2222",
+    "upstream": "bastion:22",
+    "enabled": true
+  }
+]

@@ -1,6 +1,6 @@
 # TablePro Linux roadmap
 
-Last audited: 2026-08-17
+Last audited: 2026-08-18
 
 The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Linux capability backlog. This file is the concise status view.
 
@@ -26,7 +26,7 @@ Status terms:
 | Structure editor | Implemented | Tables, columns, indexes, and foreign keys |
 | Saved connections and libsecret | Implemented | Keyring failure UX needs hardening |
 | SSH and jump chains | Implemented | Jump chains are JSON-only in the current GTK form |
-| TLS modes | Partially integrated | PostgreSQL `VerifyFull` through SSH remains unresolved |
+| TLS modes | Partially integrated | Hostname and authority checks are release-verified; PostgreSQL `VerifyFull` through SSH fails rather than downgrading |
 | Query history | Implemented | MCP access must be isolated before being re-exposed |
 | CSV/JSON export | Implemented | CSV streams table pages; Parquet is unsupported |
 | Activity and EXPLAIN | Implemented | Administrative classification and numeric session-ID validation are covered |
@@ -77,10 +77,14 @@ Phase 2 is implemented, security-reviewed, and locally verified. PostgreSQL canc
 
 ### 3: PostgreSQL release safety
 
-- [ ] Verify direct and SSH `VerifyFull`
+- [x] Add the deterministic PostgreSQL TLS, SSH, lock, and reconnect fixture
+- [x] Verify direct `VerifyFull`, wrong hostname, and unknown certificate authority
+- [x] Prove `VerifyFull` through SSH fails instead of verifying the local dial address
 - [x] Implement and verify server-side cancellation, parameterized cancellation, rollback, and pool reuse
-- [ ] Verify rollback, activity, locks, reconnect, and SSH reconnect
-- [ ] Add deterministic PostgreSQL release fixture
+- [x] Verify batch and interactive rollback, activity, blocking locks, direct reconnect, and SSH reconnect
+- [ ] Connect a tunnelled `VerifyFull` session using the original database hostname
+
+The fixture runs from `./scripts/test-postgres-release.sh` and in the `postgres-release` CI job. The remaining item needs a PostgreSQL connection path that separates the TCP dial address from the TLS server name.
 
 ### 4: GTK safety tests
 
@@ -130,4 +134,4 @@ The repository extraction completed on 2026-08-17. Product planning now follows 
 
 ## Next implementation target
 
-Continue Phase 3 with the deterministic PostgreSQL TLS, SSH, lock, and reconnect fixture. Production-write and agent-write workflows are not release-trusted until Phases 1–4 pass their real-driver and GTK tests.
+Close the last Phase 3 item: a PostgreSQL connection path that dials the SSH tunnel while presenting the original database hostname to TLS. Options are a supported sqlx API, a small reviewed sqlx change, or a connector that accepts a supplied stream. Production-write and agent-write workflows are not release-trusted until that item and the Phase 4 CI soak complete.
