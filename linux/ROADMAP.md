@@ -23,7 +23,8 @@ Status terms:
 | Area | Status | Notes |
 |---|---|---|
 | PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse | Implemented | PostgreSQL is release-verified through the fixture; the other engines have container integration tests only |
-| Redis, MongoDB, DuckDB, Oracle | Implemented | Experimental; DuckDB/Oracle require Cargo/native features |
+| Redis, MongoDB, DuckDB | Implemented | Experimental; DuckDB requires a Cargo feature. Redis and MongoDB TLS is release-verified |
+| Oracle | Broken | Does not compile under its `odpi` feature against oracle 0.6.3 |
 | Browse/edit/filter/sort/pagination | Implemented | Keyset helper exists; integers wider than 2^53 edit exactly; large-result behavior needs release tests |
 | SQL editor and multiple result tabs | Integrated | PostgreSQL timeout and cancel stop the server query and wait for terminal audit state |
 | Structure editor | Implemented | Tables, columns, indexes, and foreign keys |

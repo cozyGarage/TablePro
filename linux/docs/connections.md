@@ -52,7 +52,7 @@ Two ideas carry most of the security weight:
 | Redis | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | yes | no | 5 s |
 | MongoDB | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | yes | no | 5 s |
 | DuckDB | n/a | n/a (local file) | n/a | n/a | n/a | n/a | n/a |
-| Oracle | yes | no | n/a | not applied | no | no | none |
+| Oracle | yes | no | n/a | not applied | no | no | 15 s (does not compile, see below) |
 
 "Pool acquire only" means the driver bounds how long it waits for a pooled
 connection but does not bound the initial TCP or TLS handshake.
@@ -129,11 +129,25 @@ in both drivers. The remaining problem is ClickHouse and SQL Server, where the
 mode selector promises a distinction the driver does not make and a privately
 issued certificate cannot be trusted.
 
-### 6. No connect timeout on the SSH path or on Oracle
+### 6. No connect timeout on the SSH path or on Oracle — fixed
 
-`tablepro-ssh` applies no timeout to the TCP connect, the handshake, or the
-authentication exchange. Oracle applies none either. Redis and MongoDB were
-bounded at five seconds on 2026-08-19. A host
+**Closed on 2026-08-19.** The SSH handshake is bounded at ten seconds and
+authentication at twenty, each failing with an error that names the host and
+port. Oracle is bounded at fifteen seconds, MongoDB and Redis at five. The SSH
+bound has a sandbox regression test that connects to a listener which completes
+the TCP handshake and then never sends a banner; a refused port returns
+instantly and proves nothing.
+
+### 7. The Oracle driver does not compile under its own feature
+
+`cargo check -p tablepro-driver-oracle --features odpi` fails with three errors
+against `oracle` 0.6.3: `Statement::row_count` now returns a `Result` and is
+cast directly to `u64` in two places, and `SqlValue` no longer implements
+`FromSql`, which the row reader depends on. The driver is registered only when
+the feature is on, so nothing catches this: the default build compiles a stub
+that returns `Unsupported`. Every claim that Oracle works "with Instant Client"
+is therefore untested and currently false. The value-mapping error cannot be
+fixed blind; it needs a real Oracle to verify against. A host
 that accepts a connection and then goes silent — a dropped packet filter, a
 half-open NAT entry, a hung bastion — leaves the attempt hanging on whatever the
 underlying library defaults to. The GUI keeps this off the main thread, so the
@@ -198,6 +212,7 @@ Ordered by how much risk the gap carries.
 | Custom certificate authority from a saved connection | not expressible, so not testable |
 | Client certificates and pinned fingerprints | not implemented |
 | Reconnect on any driver but PostgreSQL | none |
+| The Oracle driver under its `odpi` feature | does not compile |
 | Cancellation on any driver but PostgreSQL | none |
 | Concurrent connections to the same host over one tunnel | none |
 | IPv6 literals on any driver | none |

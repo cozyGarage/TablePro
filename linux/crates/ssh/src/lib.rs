@@ -1,6 +1,7 @@
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
@@ -67,6 +68,25 @@ pub enum SshError {
     KnownHosts(String),
     #[error("ssh: {0}")]
     Ssh(#[from] russh::Error),
+    #[error("{stage} to {host}:{port} did not complete within {seconds} seconds")]
+    Timeout {
+        stage: &'static str,
+        host: String,
+        port: u16,
+        seconds: u64,
+    },
+}
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const AUTH_TIMEOUT: Duration = Duration::from_secs(20);
+
+fn timeout_error(stage: &'static str, cfg: &SshConfig, limit: Duration) -> SshError {
+    SshError::Timeout {
+        stage,
+        host: cfg.host.clone(),
+        port: cfg.port,
+        seconds: limit.as_secs(),
+    }
 }
 
 /// Local listener that forwards through one or more SSH sessions.
@@ -395,9 +415,11 @@ async fn connect_and_auth(cfg: &SshConfig, tcp_host: &str, tcp_port: u16) -> Res
         nodelay: true,
         ..Default::default()
     });
-    let mut session = match client::connect(config, (tcp_host, tcp_port), handler).await {
-        Ok(s) => s,
-        Err(e) => return Err(map_connect_error(e, &cfg.host, cfg.port, &known_hosts_path, &outcome)),
+    let connecting = client::connect(config, (tcp_host, tcp_port), handler);
+    let mut session = match tokio::time::timeout(CONNECT_TIMEOUT, connecting).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return Err(map_connect_error(e, &cfg.host, cfg.port, &known_hosts_path, &outcome)),
+        Err(_) => return Err(timeout_error("ssh handshake", cfg, CONNECT_TIMEOUT)),
     };
 
     match outcome.lock().ok().and_then(|s| s.clone()) {
@@ -413,23 +435,29 @@ async fn connect_and_auth(cfg: &SshConfig, tcp_host: &str, tcp_port: u16) -> Res
         None => {}
     }
 
-    let auth = match &cfg.auth {
-        SshAuth::Password { password } => {
-            session
+    let authenticating = async {
+        match &cfg.auth {
+            SshAuth::Password { password } => session
                 .authenticate_password(&cfg.username, password.expose_secret())
-                .await?
+                .await
+                .map_err(SshError::Ssh),
+            SshAuth::PrivateKey { path, passphrase } => {
+                let pp = passphrase.as_ref().map(|s| s.expose_secret().to_string());
+                let key = load_secret_key(path, pp.as_deref()).map_err(|e| SshError::Key {
+                    path: path.clone(),
+                    source: e,
+                })?;
+                let hash = session.best_supported_rsa_hash().await?.flatten();
+                session
+                    .authenticate_publickey(&cfg.username, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
+                    .await
+                    .map_err(SshError::Ssh)
+            }
         }
-        SshAuth::PrivateKey { path, passphrase } => {
-            let pp = passphrase.as_ref().map(|s| s.expose_secret().to_string());
-            let key = load_secret_key(path, pp.as_deref()).map_err(|e| SshError::Key {
-                path: path.clone(),
-                source: e,
-            })?;
-            let hash = session.best_supported_rsa_hash().await?.flatten();
-            session
-                .authenticate_publickey(&cfg.username, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
-                .await?
-        }
+    };
+    let auth = match tokio::time::timeout(AUTH_TIMEOUT, authenticating).await {
+        Ok(result) => result?,
+        Err(_) => return Err(timeout_error("ssh authentication", cfg, AUTH_TIMEOUT)),
     };
 
     if !auth.success() {

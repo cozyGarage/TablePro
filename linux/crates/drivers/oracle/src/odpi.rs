@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use secrecy::ExposeSecret;
@@ -6,6 +7,8 @@ use secrecy::ExposeSecret;
 use tablepro_core::{
     ColumnInfo, ConnectOptions, Connection, DriverError, ExecResult, MAX_QUERY_ROWS, QueryResult, TableInfo, Value,
 };
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub async fn connect(opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
     let connect_string = if opts.database.contains('=') || opts.database.starts_with('(') {
@@ -15,13 +18,15 @@ pub async fn connect(opts: ConnectOptions) -> Result<Box<dyn Connection>, Driver
     };
     let username = opts.username.clone();
     let password = opts.password.expose_secret().to_string();
-    let conn = tokio::task::spawn_blocking(move || {
+    let connecting = tokio::task::spawn_blocking(move || {
         oracle::Connector::new(&username, &password, &connect_string)
             .connect()
             .map_err(map_oracle_error)
-    })
-    .await
-    .map_err(|e| DriverError::Internal(format!("oracle connect join: {e}")))??;
+    });
+    let conn = match tokio::time::timeout(CONNECT_TIMEOUT, connecting).await {
+        Ok(joined) => joined.map_err(|e| DriverError::Internal(format!("oracle connect join: {e}")))??,
+        Err(_) => return Err(DriverError::ConnectionRefused),
+    };
     Ok(Box::new(OracleConnection {
         conn: Arc::new(Mutex::new(conn)),
     }))

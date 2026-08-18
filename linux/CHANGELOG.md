@@ -96,6 +96,7 @@
 - MongoDB connections honour the selected TLS mode and certificate authority instead of always connecting without encryption
 - Redis connections can use TLS, including a named certificate authority, instead of failing whenever encryption is selected
 - MongoDB and Redis connection attempts stop after five seconds instead of waiting on library defaults
+- SSH tunnels stop waiting on a host that accepts a connection and never answers, reporting which host and port timed out
 - MySQL server-control functions and SQL Server extended and system procedures are recognised as administrative, so agents are denied them the same way they are on PostgreSQL
 - Agent write-scope checks classify SQL with the connected engine's dialect instead of always assuming PostgreSQL
 - MCP HTTP rejects untrusted browser origins before JSON-RPC dispatch
