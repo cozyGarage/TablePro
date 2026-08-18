@@ -15,7 +15,9 @@ linux/
 │   ├── mcp/                 MCP transport, tokens, allowlists, and rate limits
 │   ├── storage/             connections, secrets, query history, and audit journal
 │   ├── ssh/                 SSH tunnels and jump chains
+│   ├── release-tests/       deterministic release checks against the PostgreSQL fixture
 │   └── drivers/             one crate per database engine
+├── tests/fixtures/          container fixtures for release checks
 ├── packaging/               AUR and Debian package files
 ├── flatpak/                 later Flatpak packaging work
 └── scripts/                 local checks, integration tests, and package helpers
@@ -29,7 +31,11 @@ The workspace currently has these driver crates: PostgreSQL, MySQL, SQLite, SQL 
 
 Driver crates implement the core traits. They do not depend on GTK. `tablepro-policy` applies authorization and audit rules around core connections. `tablepro-storage` owns saved connections, Secret Service access, query history, and the audit journal. `tablepro-mcp` combines core, policy, and storage behavior for MCP clients.
 
-`tablepro-app` and `tablepro-agentd` are composition roots. They register drivers and assemble policy, storage, transport, and connection services for their process.
+`tablepro-app` and `tablepro-agentd` are composition roots. They register drivers and assemble policy, storage, transport, and connection services for their process. `tablepro-release-tests` is a test-only consumer that assembles core, policy, SSH, storage, and the PostgreSQL driver against the release fixture.
+
+## Transport and service identity
+
+`ConnectOptions` separates the address a driver dials from the service identity TLS must verify. A direct connection dials its own host. An SSH tunnel keeps the saved host and port as the service identity and supplies the local endpoint separately: a loopback TCP port for modes that do not verify certificates, or a Unix socket in a private directory when the driver reports a forwarded socket name. The socket form is what lets a verifying PostgreSQL connection check the certificate against the original database hostname while the bytes travel through the tunnel. A driver that reports no socket name only ever receives a TCP endpoint, and verification then fails rather than accepting the local address.
 
 ```mermaid
 graph TD

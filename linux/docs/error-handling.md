@@ -61,6 +61,7 @@ fn map_sqlx_error(err: sqlx::Error) -> DriverError {
             sqlstate: e.code().map(|c| c.to_string()),
         },
         Io(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => DriverError::ConnectionRefused,
+        Io(e) if is_certificate_failure(&e) => DriverError::Tls(e.to_string()),
         Tls(e) => DriverError::Tls(e.to_string()),
         PoolClosed | PoolTimedOut => DriverError::Disconnected,
         other => DriverError::Internal(format!("{other}")),
@@ -69,6 +70,8 @@ fn map_sqlx_error(err: sqlx::Error) -> DriverError {
 ```
 
 The driver does not pass through `sqlx::Error` to callers. Callers see only `DriverError`.
+
+Certificate verification failures reach sqlx as I/O errors, so the PostgreSQL driver walks the error chain and reports a hostname or authority mismatch as `DriverError::Tls`. Reporting them as `Internal` would tell the user "internal driver error" for a wrong hostname or an untrusted CA.
 
 ## UI display
 

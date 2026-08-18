@@ -8,7 +8,17 @@ The GTK application supports PostgreSQL, MySQL, SQLite, SQL Server, and ClickHou
 
 Current workflows include saved connections, SSH tunnels, browse and SQL tabs, structure editing, inline row changes, query history, policy checks, MCP access, and the headless `tablepro-agentd` process. See [ROADMAP.md](ROADMAP.md), [docs/driver-maturity.md](docs/driver-maturity.md), and [docs/production-audit.md](docs/production-audit.md) for current limits.
 
-The application is suitable for development and personal testing. Release fixtures for PostgreSQL TLS over SSH and reconnect behavior, plus targeted GTK safety tests, are still required before trusted production writes or unattended agents are approved.
+The application is suitable for development and personal testing. The PostgreSQL release fixture and the installed GTK safety flows pass locally: certificate hostname and authority checks, verified TLS through an SSH tunnel, read-only denial, rollback, blocking locks, reconnect, approval dismissal, approve-once scope, and unavailable audit storage. Trusted production writes and unattended agents still wait on hosted confirmation of those suites and on packaging verification.
+
+## Named query parameters
+
+Write `:name` anywhere a value belongs:
+
+```sql
+SELECT * FROM orders WHERE customer = :customer AND total > :minimum;
+```
+
+Running the statement asks for one value per name and sends them as driver-bound parameters. Each value has a type choice: `Auto` (whole numbers and decimals are detected, everything else is text), `Text`, `Integer`, `Decimal`, `Boolean`, or `Null`. Placeholders inside string literals, quoted identifiers, comments, dollar-quoted bodies, PostgreSQL `::` casts, and existing `$1` or `?` placeholders are left alone.
 
 ## Stack
 

@@ -8,6 +8,8 @@ Every shipped feature is free to use. TablePro has no account, license, subscrip
 
 The Linux client is under active development. It includes database browsing, SQL editing, structure editing, inline row changes, query history, SSH tunnels, policy checks, audit records, MCP access, and a headless MCP process.
 
+PostgreSQL is the furthest along: server-confirmed cancellation, certificate hostname and authority verification, verified TLS through an SSH tunnel, read-only denial, rollback, blocking-lock reporting, and reconnect run as deterministic container checks. Other engines have container integration tests but no release fixture yet. Packaging is not release-verified. [`linux/ROADMAP.md`](linux/ROADMAP.md) states, per area, whether behavior is implemented, integrated, or release-verified.
+
 Database support is provided by static Rust crates compiled into the app:
 
 | Database | Status |
@@ -61,6 +63,15 @@ bash linux/scripts/check-file-size.sh
 cargo fmt --manifest-path linux/Cargo.toml --all -- --check
 cargo clippy --manifest-path linux/Cargo.toml --workspace --exclude tablepro-driver-duckdb --all-targets -- -D warnings
 cargo test --manifest-path linux/Cargo.toml --workspace --exclude tablepro-driver-duckdb --lib --bins
+```
+
+Deeper gates, run from `linux/`:
+
+```bash
+./scripts/ci-local.sh integration          # container driver tests
+./scripts/test-postgres-release.sh         # PostgreSQL TLS, SSH, lock, and reconnect fixture
+./scripts/test-gtk-safety.sh               # installed GTK approval and audit flows
+./scripts/ci-local.sh release              # all three in sequence
 ```
 
 Container-backed driver tests and more setup details are in [`linux/docs/testing.md`](linux/docs/testing.md).

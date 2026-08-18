@@ -309,7 +309,7 @@ Promote the installed test to a required PR check after 30 retry-free scheduled 
 
 ## Status
 
-In progress.
+In progress. The documentation audit is current as of 2026-08-18. The capability backlog below is the remaining tracking work.
 
 ## Documentation cleanup
 
@@ -319,7 +319,8 @@ In progress.
 - [x] Correct workspace size, CI jobs, drivers, XDG locations, TLS limitations, audit behavior, cancellation behavior, and packaging maturity.
 - [x] Remove retired product documentation and automation that described source no longer present in this repository.
 - [x] Retain `external-audit.md` as advisory planning research while keeping this plan and current test evidence authoritative.
-- [ ] Keep user-facing changes in `linux/CHANGELOG.md` under `[Unreleased]`.
+- [x] Distinguish implementation from release verification in every product claim across the root README, `linux/README.md`, `ROADMAP.md`, `ARCHITECTURE.md`, and `docs/`.
+- [ ] Keep user-facing changes in `linux/CHANGELOG.md` under `[Unreleased]`. This is a standing rule for every change, not a task that closes.
 
 ## Linux capability backlog
 
@@ -341,7 +342,7 @@ Track capabilities as planned, implemented, integrated, release-verified, deferr
 ### Priority A: daily DBA and data-engineering workflows
 
 - Schema-aware SQL autocomplete
-- Named query parameters
+- Named query parameters (implemented and release-verified)
 - Saved SQL favorites and quick switcher
 - SQL file open/save and external-change detection
 - Views, materialized views, triggers, routines, sequences, and extensions
@@ -383,11 +384,13 @@ Track capabilities as planned, implemented, integrated, release-verified, deferr
 
 ## Status
 
-Not started. Begin only after Phases 1–4 are release-safe.
+In progress. Phases 1 through 4 are release-verified locally, so vertical slices have started.
+
+Named query parameters shipped on 2026-08-18. `:name` placeholders are rewritten to the driver's positional placeholders and bound as values. The scanner leaves literals, quoted identifiers, comments, dollar-quoted bodies, PostgreSQL casts, and existing placeholders alone. Evidence: core scanner unit tests, app binding tests, three PostgreSQL fixture tests including a SQL payload that stays data, and an installed GTK scenario that writes the bound value.
 
 Deliver in small vertical slices. The first post-safety slice stays editor productivity because it has the highest daily value:
 
-1. SQL autocomplete, parameters, favorites, and quick switcher
+1. SQL autocomplete, parameters, favorites, and quick switcher (parameters done)
 2. PostgreSQL object browser and administration
 3. Import/export and backup/restore
 4. Connection organization and reusable transport profiles

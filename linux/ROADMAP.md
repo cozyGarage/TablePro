@@ -6,7 +6,9 @@ The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequenci
 
 ## Current state
 
-TablePro Linux is a substantial GTK4/libadwaita database client, not a prototype. Its core daily-driver workflows are implemented, but production approval, audit enforcement, PostgreSQL cancellation/TLS verification, and release-level testing still block a trusted release.
+TablePro Linux is a substantial GTK4/libadwaita database client, not a prototype. Its core daily-driver workflows are implemented. Production approval, fail-closed audit, PostgreSQL cancellation, and PostgreSQL TLS, SSH, lock, and reconnect behavior are release-verified locally. What still blocks a trusted release is external confirmation in hosted CI, the installed GTK soak, and packaging verification.
+
+Every claim below states whether it is implemented, integrated, or release-verified. A feature with unit tests only is never described as verified.
 
 Status terms:
 
@@ -19,18 +21,18 @@ Status terms:
 
 | Area | Status | Notes |
 |---|---|---|
-| PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse | Implemented | Stable driver label; release matrix is incomplete |
+| PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse | Implemented | PostgreSQL is release-verified through the fixture; the other engines have container integration tests only |
 | Redis, MongoDB, DuckDB, Oracle | Implemented | Experimental; DuckDB/Oracle require Cargo/native features |
-| Browse/edit/filter/sort/pagination | Implemented | Keyset helper exists; large-result behavior needs release tests |
+| Browse/edit/filter/sort/pagination | Implemented | Keyset helper exists; integers wider than 2^53 edit exactly; large-result behavior needs release tests |
 | SQL editor and multiple result tabs | Integrated | PostgreSQL timeout and cancel stop the server query and wait for terminal audit state |
 | Structure editor | Implemented | Tables, columns, indexes, and foreign keys |
 | Saved connections and libsecret | Implemented | Keyring failure UX needs hardening |
-| SSH and jump chains | Implemented | Jump chains are JSON-only in the current GTK form |
+| SSH and jump chains | Integrated | A verifying PostgreSQL connection forwards through a private Unix socket and is release-verified; jump chains are JSON-only in the current GTK form |
 | TLS modes | Integrated | Hostname and authority checks are release-verified, including PostgreSQL `VerifyFull` through SSH |
 | Query history | Implemented | MCP access must be isolated before being re-exposed |
-| CSV/JSON export | Implemented | CSV streams table pages; Parquet is unsupported |
+| CSV/JSON export | Implemented | CSV streams table pages from the exporting tab's own connection; Parquet is unsupported |
 | Activity and EXPLAIN | Implemented | Administrative classification and numeric session-ID validation are covered |
-| Policy, MCP, and agentd | Integrated | Approval and audit failures deny governed operations; release fixtures remain open |
+| Policy, MCP, and agentd | Integrated | Approval and audit failures deny governed operations; read-only denial is release-verified against PostgreSQL |
 | Audit journal | Integrated | Durable intent/outcome records, recovery, private mode, and cross-process locking are locally verified |
 | AUR, Debian, Flatpak | Scaffolded | Not release-verified or ready for a public stable package |
 | i18n and accessibility | Infrastructure | English strings/checklist exist; end-user verification is incomplete |
@@ -104,11 +106,14 @@ Phase 4 is implemented and locally release-verified. The installed suite remains
 - [x] Synchronize the production audit with server-side PostgreSQL cancellation evidence
 - [x] Replace source-parity tracking with a Linux capability backlog
 - [x] Keep external planning research advisory rather than authoritative
-- [ ] Distinguish implementation from release verification in every product claim
+- [x] Distinguish implementation from release verification in every product claim
+
+Phase 5 documentation is current as of 2026-08-18. Keeping it current is a standing rule for every change, not a one-time task.
 
 ### 6: DBA and data-engineering depth
 
-- [ ] SQL autocomplete, parameters, favorites, and quick switcher
+- [x] Named query parameters bound by the driver, release-verified against PostgreSQL and in the installed GTK suite
+- [ ] Schema-aware SQL autocomplete, saved favorites, and a quick switcher
 - [ ] PostgreSQL objects, users/roles, and administration
 - [ ] Import/export and backup/restore
 - [ ] Connection organization and reusable transport profiles

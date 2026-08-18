@@ -112,6 +112,9 @@ The suite verifies:
 1. Dismissing a production approval leaves SQLite unchanged.
 2. Approving once performs one mutation and prompts again for the next operation.
 3. Unavailable audit storage denies the mutation without showing an approval path around the failure.
+4. A named `:parameter` in the editor prompts for a value and writes the bound value, not the placeholder text.
+
+Each scenario declares its own fixture shape through `environment` and `audit_available` attributes, so a scenario can run against a local or production saved connection.
 
 The harness sends synthetic keyboard events only to a focused push button, so a stray key cannot reach an approval dialog, and each denial assertion requires the row count to hold for a settle window rather than matching once.
 
