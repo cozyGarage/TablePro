@@ -59,6 +59,7 @@
 
 ### Fixed
 
+- The headless agent daemon reuses one database session per connection instead of opening a new one on every tool call
 - The agent rate limiter forgets idle callers instead of growing for the lifetime of the process
 - Saved connections are written so only the owner can read them, and a save that fails part way leaves the previous file intact
 - Query plans use the connected engine's own EXPLAIN form, and engines without a query plan statement say so instead of failing on malformed SQL
@@ -90,6 +91,7 @@
 
 ### Security
 
+- The headless agent daemon opens a saved connection through its configured SSH chain and verifies the certificate against the real database hostname, instead of dialling the database directly
 - MySQL server-control functions and SQL Server extended and system procedures are recognised as administrative, so agents are denied them the same way they are on PostgreSQL
 - Agent write-scope checks classify SQL with the connected engine's dialect instead of always assuming PostgreSQL
 - MCP HTTP rejects untrusted browser origins before JSON-RPC dispatch

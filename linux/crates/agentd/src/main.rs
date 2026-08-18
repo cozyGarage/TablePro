@@ -18,15 +18,11 @@ use drivers_oracle::OracleDriver;
 use drivers_postgres::PgDriver;
 use drivers_redis::RedisDriver;
 use drivers_sqlite::SqliteDriver;
-use tablepro_core::{AuthMode, ConnectOptions, Connection, DriverRegistry, TlsConfig};
-use tablepro_mcp::{
-    ConnectionProvider, McpBridge, McpServerConfig, TokenPermissions, TokenStore, serve_stdio, serve_streamable_http,
-};
-use tablepro_policy::{
-    ApprovalOutcome, ApprovalRequest, ApprovalSink, AuditState, DenyApprovalSink, GuardContext, PolicyConfig,
-    PolicyGuard, Principal, load_from_path,
-};
-use tablepro_storage::{AuditJournal, SavedConnection, load_connections, load_password};
+use tablepro_agentd::DaemonProvider;
+use tablepro_core::DriverRegistry;
+use tablepro_mcp::{McpBridge, McpServerConfig, TokenPermissions, TokenStore, serve_stdio, serve_streamable_http};
+use tablepro_policy::{ApprovalOutcome, ApprovalRequest, ApprovalSink, AuditState, DenyApprovalSink, load_from_path};
+use tablepro_storage::{AuditJournal, SavedConnection, load_connections};
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
@@ -88,78 +84,6 @@ impl ApprovalSink for TtyApprovalSink {
             Ok(_) if line.trim().eq_ignore_ascii_case("y") => ApprovalOutcome::AllowOnce,
             _ => ApprovalOutcome::Deny,
         }
-    }
-}
-
-struct DaemonProvider {
-    registry: Arc<DriverRegistry>,
-    policy: Arc<PolicyConfig>,
-    audit: Arc<dyn tablepro_policy::AuditSink>,
-    audit_state: Arc<AuditState>,
-    approval: Arc<dyn tablepro_policy::ApprovalSink>,
-}
-
-#[async_trait]
-impl ConnectionProvider for DaemonProvider {
-    async fn list_saved_connections(&self) -> Result<Vec<SavedConnection>, String> {
-        load_connections().await.map_err(|e| e.to_string())
-    }
-
-    async fn connection(&self, connection_id: Uuid, principal: Principal) -> Result<Arc<dyn Connection>, String> {
-        let saved = load_connections()
-            .await
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .find(|c| c.id == connection_id)
-            .ok_or_else(|| format!("connection {connection_id} not found"))?;
-
-        let driver = self
-            .registry
-            .get(&saved.driver_id)
-            .ok_or_else(|| format!("driver {} not registered", saved.driver_id))?;
-        let password = match saved.auth_mode {
-            AuthMode::Password => load_password(saved.id)
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| secrecy::SecretString::new(String::new().into())),
-            AuthMode::Kerberos => secrecy::SecretString::new(String::new().into()),
-        };
-        if saved.auth_mode == AuthMode::Kerberos && !driver.supports_integrated_auth() {
-            return Err(format!(
-                "the {} driver does not support Windows (Kerberos) authentication",
-                driver.display_name()
-            ));
-        }
-
-        let opts = ConnectOptions {
-            host: saved.host.clone(),
-            port: saved.port,
-            database: saved.database.clone(),
-            username: saved.username.clone(),
-            password,
-            tls: TlsConfig {
-                mode: saved.effective_tls_mode(),
-                ..Default::default()
-            },
-            auth_mode: saved.auth_mode,
-            service_endpoint: None,
-            forwarded_socket_dir: None,
-        };
-        let raw = driver.connect(opts).await.map_err(|e| e.to_string())?;
-        let ctx = GuardContext {
-            connection_id: saved.id,
-            connection_name: saved.name.clone(),
-            driver_id: saved.driver_id.clone(),
-            environment: saved.environment,
-            read_only: saved.read_only,
-            principal,
-            policy: self.policy.clone(),
-            approval: self.approval.clone(),
-            audit: self.audit.clone(),
-            audit_state: self.audit_state.clone(),
-        };
-        Ok(Arc::new(PolicyGuard::new(Arc::from(raw), ctx)) as Arc<dyn Connection>)
     }
 }
 
@@ -228,13 +152,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let audit: Arc<dyn tablepro_policy::AuditSink> = Arc::new(journal);
 
-    let provider = Arc::new(DaemonProvider {
-        registry: Arc::new(build_registry()),
+    let provider = Arc::new(DaemonProvider::new(
+        Arc::new(build_registry()),
         policy,
         audit,
-        audit_state: Arc::new(AuditState::new()),
+        Arc::new(AuditState::new()),
         approval,
-    });
+    ));
     let bridge = Arc::new(McpBridge::new(provider, tokens));
 
     match args.transport {
