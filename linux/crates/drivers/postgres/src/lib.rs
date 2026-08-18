@@ -356,8 +356,8 @@ impl Connection for PgConnection {
                 fn_class.relname AS ref_table,
                 fn_ns.nspname AS ref_schema,
                 array_agg(fa.attname ORDER BY kf.ordinality) AS ref_columns,
-                c.confdeltype,
-                c.confupdtype
+                c.confdeltype::text AS on_delete_code,
+                c.confupdtype::text AS on_update_code
             FROM pg_catalog.pg_constraint c
             JOIN pg_catalog.pg_class t ON t.oid = c.conrelid
             JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
