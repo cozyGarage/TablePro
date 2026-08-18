@@ -10,7 +10,7 @@ The quick non-GTK gate is:
 ./scripts/preflight.sh
 ```
 
-It runs the file-size guard, formatting, Clippy for the non-GTK package list, library tests for those packages, and the MCP policy integration test.
+It runs the file-size guard, formatting, Clippy for the non-GTK package list, library tests for those packages, and the sandbox regression tier (`./scripts/test-sandbox.sh`), which covers every integration target that needs no Docker, database service, or display.
 
 The current full default workspace gate is:
 

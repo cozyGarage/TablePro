@@ -6,7 +6,7 @@ TablePro is a Linux-only database client built with Rust, GTK4, libadwaita, and 
 
 The GTK application supports PostgreSQL, MySQL, SQLite, SQL Server, and ClickHouse. Redis and MongoDB are experimental. DuckDB and Oracle require the `duckdb` and `odpi` Cargo features.
 
-Current workflows include saved connections, SSH tunnels, browse and SQL tabs, structure editing, inline row changes, query history, policy checks, MCP access, and the headless `tablepro-agentd` process. See [ROADMAP.md](ROADMAP.md), [docs/driver-maturity.md](docs/driver-maturity.md), and [docs/production-audit.md](docs/production-audit.md) for current limits.
+Current workflows include saved connections, SSH tunnels, browse and SQL tabs, structure editing, inline row changes, query history, policy checks, MCP access, and the headless `tablepro-agentd` process. See [ROADMAP.md](ROADMAP.md), [docs/connections.md](docs/connections.md), [docs/driver-maturity.md](docs/driver-maturity.md), and [docs/production-audit.md](docs/production-audit.md) for current limits.
 
 The application is suitable for development and personal testing. The PostgreSQL release fixture and the installed GTK safety flows pass locally: certificate hostname and authority checks, verified TLS through an SSH tunnel, read-only denial, rollback, blocking locks, reconnect, approval dismissal, approve-once scope, and unavailable audit storage. Trusted production writes and unattended agents still wait on hosted confirmation of those suites and on packaging verification.
 
@@ -120,6 +120,7 @@ Debian package and Flatpak files exist for development. Flatpak publication is p
 | Adding a database driver | [docs/adding-drivers.md](docs/adding-drivers.md) |
 | Driver maturity | [docs/driver-maturity.md](docs/driver-maturity.md) |
 | State management | [docs/state-management.md](docs/state-management.md) |
+| Connection handling | [docs/connections.md](docs/connections.md) |
 | Storage | [docs/storage.md](docs/storage.md) |
 | Error handling | [docs/error-handling.md](docs/error-handling.md) |
 | Testing | [docs/testing.md](docs/testing.md) |

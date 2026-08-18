@@ -352,6 +352,7 @@ Track capabilities as planned, implemented, integrated, release-verified, deferr
 - SQL dump export and true large-result streaming
 - Connection URL import, groups, tags, and favorites
 - Reusable SSH profiles and custom CA/client certificates
+- Connection-layer defects and coverage gaps tracked in `linux/docs/connections.md`: MongoDB ignores its TLS setting, Redis cannot negotiate TLS at all, saved connections cannot carry a certificate authority, the SSH handshake has no timeout, and local Unix socket connections are not expressible
 
 ### Priority B: platform transports and data systems
 

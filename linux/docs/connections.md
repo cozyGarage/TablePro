@@ -1,0 +1,222 @@
+# Connection handling
+
+Last audited: 2026-08-18
+
+TablePro is a connection engine before it is a grid. This document records what
+the connection layer actually does today, what is proven, what is known to be
+wrong, and what has never been exercised. Every claim below was read out of the
+source at the audit date. Status terms match [ROADMAP.md](../ROADMAP.md):
+**implemented** means the code and unit tests exist, **integrated** means every
+production entry point uses it, **release-verified** means a deterministic
+real-service test proves it.
+
+## The layers
+
+A connection is assembled in one direction, and every surface uses the same path.
+
+```
+saved connection
+   │
+   ├─ tablepro-transport   resolve secrets, build ConnectOptions,
+   │                       resolve the SSH chain, open the tunnel,
+   │                       set the service endpoint
+   │
+   ├─ driver.connect()     choose the wire transport, negotiate TLS,
+   │                       authenticate, open the pool
+   │
+   └─ PolicyGuard          classify, evaluate, approve, mask, audit
+```
+
+Two ideas carry most of the security weight:
+
+- **Dial address and service identity are separate.** `ConnectOptions.host` is
+  where bytes go. `service_endpoint` is who the server must prove it is. A
+  tunnel rewrites the first and never the second, so `VerifyFull` through SSH
+  still checks the certificate against the real database hostname. See
+  `ConnectOptions::service_address` and `ConnectOptions::transport`.
+- **Verifying connections prefer a Unix socket over a local TCP port.** When the
+  TLS mode verifies certificates and the driver supplies a socket name, the SSH
+  chain forwards to a private directory (mode `0700`) instead of a loopback
+  port. Nothing else on the machine can reach the forwarded database, and the
+  TLS server name cannot be confused with `127.0.0.1`.
+
+## Transport support by driver
+
+| Driver | TCP | Unix socket | HTTP(S) | TLS modes honoured | Custom CA | Client cert | Connect timeout |
+|---|---|---|---|---|---|---|---|
+| PostgreSQL | yes | via SSH forward only | n/a | all five | yes | no | pool acquire only |
+| MySQL | yes | no | n/a | all five | yes | no | pool acquire only |
+| SQL Server | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | no | no | 5 s |
+| SQLite | n/a | n/a (local file) | n/a | n/a | n/a | n/a | pool acquire only |
+| ClickHouse | n/a | no | yes | on/off only | no | no | 5 s probe |
+| Redis | yes | no | n/a | **none — see below** | no | no | none |
+| MongoDB | yes | no | n/a | **none — see below** | no | no | none |
+| DuckDB | n/a | n/a (local file) | n/a | n/a | n/a | n/a | n/a |
+| Oracle | yes | no | n/a | not applied | no | no | none |
+
+"Pool acquire only" means the driver bounds how long it waits for a pooled
+connection but does not bound the initial TCP or TLS handshake.
+
+## What is release-verified
+
+Only PostgreSQL, and only through the fixture in
+`tests/fixtures/postgres-release`. That fixture proves, against a real server:
+
+- `VerifyFull` succeeds against the certificate hostname and fails against a
+  hostname outside the certificate.
+- `VerifyCa` and `VerifyFull` both reject an unknown certificate authority.
+- A TCP-forwarded `VerifyFull` never verifies the local dial address.
+- A verifying session through SSH forwards over a private Unix socket and uses
+  the original database hostname.
+- An SSH tunnel reaches a database with no published port.
+- Cutting the database path and cutting the bastion path both fail queries, and
+  a fresh connection recovers in each case.
+- The shared transport carries a tunnelled session for the GUI and the agent
+  daemon identically, and fails closed when the bastion is unreachable.
+
+Everything else in the table above is implemented and, at best, covered by
+container integration tests that connect in plaintext.
+
+## Known problems
+
+Confirmed by reading the source. Ordered by severity.
+
+### 1. MongoDB silently ignores the TLS setting
+
+Both arms of the scheme match produce `mongodb://`, and the URI never sets
+`tls=true`. A user who selects Verify Full gets an unencrypted connection, and
+the username and password are sent in the clear. The setting is presented in the
+UI and has no effect. This is a silent downgrade, which is the worst failure
+shape for a TLS control.
+
+### 2. Redis cannot use TLS at all, and defaults to trying
+
+The `redis` dependency is built with `default-features = false` and no
+`tls-rustls` or `tls-native-tls` feature, so a `rediss://` URL is rejected by the
+client with "can't connect with TLS, the feature is not enabled". Because new
+connections default to Verify Full, **a new Redis connection fails until the user
+switches TLS to Disabled**, and the error text does not say why. This fails
+closed, which is the right direction, but the capability is advertised and
+absent.
+
+### 3. A private certificate authority is unusable on every driver
+
+`SavedConnection` has no field for a root certificate, so `connect_options_for`
+can never populate `TlsConfig.root_cert`. PostgreSQL and MySQL read that field
+and would use it; nothing can set it. Any server whose certificate is issued by
+an internal CA cannot be reached with Verify Ca or Verify Full from a saved
+connection, on any surface. This was demonstrated during the release-test work:
+a tunnelled fixture connection failed with `UnknownIssuer` until the test passed
+the CA path directly, bypassing the saved-connection layer.
+
+### 4. `TlsConfig` advertises three capabilities that nothing implements
+
+`client_cert`, `client_key`, and `pinned_fingerprint` are defined, serialized,
+and read by no driver. Mutual TLS and certificate pinning do not exist. A field
+that is stored and ignored is worse than an absent one, because a saved file can
+carry a setting the user believes is in force.
+
+### 5. TLS modes collapse on three drivers
+
+ClickHouse maps Prefer, Require, Verify Ca, and Verify Full to the same `https`
+URL. SQL Server maps Verify Ca and Verify Full to the same configuration. Redis
+and MongoDB map everything to one branch. On these drivers the mode selector
+promises a distinction the driver does not make, in both directions: a user who
+asks for encrypt-only gets full verification on ClickHouse, and a user who asks
+for full verification gets CA-level checking on SQL Server.
+
+### 6. No connect timeout on the SSH path or on three drivers
+
+`tablepro-ssh` applies no timeout to the TCP connect, the handshake, or the
+authentication exchange. Redis, MongoDB, and Oracle apply none either. A host
+that accepts a connection and then goes silent — a dropped packet filter, a
+half-open NAT entry, a hung bastion — leaves the attempt hanging on whatever the
+underlying library defaults to. The GUI keeps this off the main thread, so the
+window stays responsive, but the connection attempt itself may never resolve.
+The existing regression tests use a refused port, which returns immediately and
+does not exercise this path.
+
+### 7. No local Unix socket connections
+
+A Unix socket is only reachable as the far end of an SSH forward. A local
+PostgreSQL or MySQL on the same machine, which on most Linux distributions is
+listening on `/var/run/postgresql` and often configured for peer
+authentication, cannot be connected to at all. For a Linux-first database client
+this is a notable gap: the most common local setup is the one that is not
+expressible.
+
+### 8. The agent daemon and the GUI recover differently
+
+The GUI runs a monitor that pings every 30 seconds and reconnects with backoff
+from 5 to 60 seconds. The agent daemon's session cache validates with a ping on
+use and reconnects lazily, with no monitor and no backoff. A tool call that
+arrives during an outage retries as fast as the caller retries, bounded only by
+the MCP rate limiter.
+
+## Potential problems
+
+Not confirmed. Listed so they are not rediscovered as surprises.
+
+- **Connection pool identity.** PostgreSQL opens a four-connection pool plus a
+  one-connection cancellation pool. Session state set on one pooled connection
+  (`SET`, temporary tables, advisory locks, `search_path`) is not guaranteed to
+  be visible to the next query. Anything that assumes session continuity across
+  two calls may be relying on luck.
+- **Tunnel lifetime versus pool lifetime.** The tunnel is held beside the
+  connection and dropped with it. If a pool reconnects internally after the
+  tunnel is gone, the failure mode has not been characterised.
+- **IPv6 and bracketed literals.** Host strings are formatted into URLs by the
+  ClickHouse, Redis, and MongoDB drivers without bracketing. An IPv6 literal
+  will almost certainly produce a malformed URL.
+- **Hostname handling in the SSH chain.** Known-host learning is keyed on host
+  and port. Whether a chain that reaches the same host through different jumps
+  is treated consistently has not been examined.
+- **Credential exposure in URLs.** Redis, MongoDB, and ClickHouse place the
+  password in a URL string. Those strings are not logged today, but a future
+  error path that includes the URL would leak the secret.
+- **Kerberos and TLS interaction on SQL Server.** Integrated authentication runs
+  on a blocking task with its own timeout. Its behaviour under a verifying TLS
+  mode is untested.
+
+## Untested areas
+
+Ordered by how much risk the gap carries.
+
+| Area | Current coverage |
+|---|---|
+| TLS on MySQL, SQL Server, ClickHouse | none — the container tests connect in plaintext |
+| TLS on Redis, MongoDB, Oracle | none, and the code paths above are wrong or absent |
+| Redis, MongoDB, DuckDB, Oracle, SQLite | no integration test file at all |
+| SSH jump chains of more than one hop | none — the fixture has a single bastion |
+| SSH password and passphrase authentication | none — every test uses an unencrypted private key |
+| Unreachable-but-silent hosts | none — tests use refused ports, which return immediately |
+| Custom certificate authority from a saved connection | not expressible, so not testable |
+| Client certificates and pinned fingerprints | not implemented |
+| Reconnect on any driver but PostgreSQL | none |
+| Cancellation on any driver but PostgreSQL | none |
+| Concurrent connections to the same host over one tunnel | none |
+| IPv6 literals on any driver | none |
+
+## Recommended order
+
+Fixing the silent failures first, then the missing capability, then the coverage
+that would have caught both.
+
+1. **MongoDB TLS.** Set `tls=true` on the URI and map the verification modes.
+   This is a silent downgrade and should be treated as a security fix.
+2. **Redis TLS.** Either enable the `tls-rustls` feature and map the modes, or
+   refuse a TLS mode the driver cannot honour with an error that says so. Do not
+   leave the default configuration failing.
+3. **Root certificate on saved connections.** Add the field, thread it through
+   `connect_options_for`, expose it in the connect dialog, and honour it on
+   every driver that can. This unblocks every internally-issued certificate and
+   makes items 1 and 2 testable against a fixture.
+4. **Connect timeouts.** Bound the SSH handshake and the three drivers that have
+   none. Add a fixture case that black-holes packets rather than refusing them.
+5. **Remove or implement the dead TLS fields.** `client_cert`, `client_key`, and
+   `pinned_fingerprint` should either work or not exist.
+6. **Local Unix socket connections.** A saved connection should be able to name a
+   socket directory directly, not only as the output of an SSH forward.
+7. **A TLS fixture per network driver.** The PostgreSQL fixture is the model.
+   Until MySQL, SQL Server, and ClickHouse have one, their TLS behaviour is
+   asserted only by reading the code — which is how items 1, 2, and 5 survived.

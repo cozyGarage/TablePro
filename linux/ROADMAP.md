@@ -16,6 +16,7 @@ Status terms:
 - **Integrated**: all intended production entry points use it.
 - **Release-verified**: deterministic real-driver, UI, or installed-package tests prove it.
 - **Complete**: all phase acceptance criteria are release-verified.
+- **Partial**: release-verified on some drivers or paths and unproven or absent on others.
 
 ## Verified inventory
 
@@ -28,7 +29,7 @@ Status terms:
 | Structure editor | Implemented | Tables, columns, indexes, and foreign keys |
 | Saved connections and libsecret | Implemented | Keyring failure UX needs hardening |
 | SSH and jump chains | Integrated | A verifying PostgreSQL connection forwards through a private Unix socket and is release-verified, headlessly as well as in the GUI; jump chains are JSON-only in the current GTK form |
-| TLS modes | Integrated | Hostname and authority checks are release-verified, including PostgreSQL `VerifyFull` through SSH |
+| TLS modes | Partial | Release-verified on PostgreSQL, including `VerifyFull` through SSH. Mapped but untested on MySQL and SQL Server, collapsed to on/off on ClickHouse, ignored on MongoDB, and unavailable on Redis. Saved connections cannot carry a custom certificate authority. See [docs/connections.md](docs/connections.md) |
 | Query history | Implemented | MCP access must be isolated before being re-exposed |
 | CSV/JSON export | Implemented | CSV streams table pages from the exporting tab's own connection; Parquet is unsupported |
 | Activity and EXPLAIN | Implemented | Administrative classification and numeric session-ID validation are covered |
