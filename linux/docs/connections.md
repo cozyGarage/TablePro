@@ -49,7 +49,7 @@ Two ideas carry most of the security weight:
 | SQL Server | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | no | no | 5 s |
 | SQLite | n/a | n/a (local file) | n/a | n/a | n/a | n/a | pool acquire only |
 | ClickHouse | n/a | no | yes | on/off only | no | no | 5 s probe |
-| Redis | yes | no | n/a | **none — see below** | no | no | none |
+| Redis | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | yes | no | 5 s |
 | MongoDB | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | yes | no | 5 s |
 | DuckDB | n/a | n/a (local file) | n/a | n/a | n/a | n/a | n/a |
 | Oracle | yes | no | n/a | not applied | no | no | none |
@@ -91,15 +91,14 @@ stricter than requested and never weaker. The defect was reproduced first: a
 file`, proving the client was speaking plaintext. Release-verified by the
 driver TLS tier.
 
-### 2. Redis cannot use TLS at all, and defaults to trying
+### 2. Redis cannot use TLS at all, and defaults to trying — fixed
 
-The `redis` dependency is built with `default-features = false` and no
-`tls-rustls` or `tls-native-tls` feature, so a `rediss://` URL is rejected by the
-client with "can't connect with TLS, the feature is not enabled". Because new
-connections default to Verify Full, **a new Redis connection fails until the user
-switches TLS to Disabled**, and the error text does not say why. This fails
-closed, which is the right direction, but the capability is advertised and
-absent.
+**Closed on 2026-08-19.** The dependency now enables `tls-rustls`, a verifying
+mode reads the connection's certificate authority through `build_with_tls`, and
+an encrypt-only mode uses the client's `#insecure` form. The defect was
+reproduced first against a TLS-only server: `can't connect with TLS, the feature
+is not enabled`. Release-verified by the driver TLS tier. The connect attempt is
+now bounded at five seconds as well.
 
 ### 3. A private certificate authority is unusable on every driver — fixed
 
@@ -128,10 +127,11 @@ promises a distinction the driver does not make, in both directions: a user who
 asks for encrypt-only gets full verification on ClickHouse, and a user who asks
 for full verification gets CA-level checking on SQL Server.
 
-### 6. No connect timeout on the SSH path or on three drivers
+### 6. No connect timeout on the SSH path or on Oracle
 
 `tablepro-ssh` applies no timeout to the TCP connect, the handshake, or the
-authentication exchange. Redis, MongoDB, and Oracle apply none either. A host
+authentication exchange. Oracle applies none either. Redis and MongoDB were
+bounded at five seconds on 2026-08-19. A host
 that accepts a connection and then goes silent — a dropped packet filter, a
 half-open NAT entry, a hung bastion — leaves the attempt hanging on whatever the
 underlying library defaults to. The GUI keeps this off the main thread, so the
@@ -207,11 +207,10 @@ that would have caught both.
 
 1. ~~**Root certificate on saved connections.**~~ Done on 2026-08-19.
 2. ~~**MongoDB TLS.**~~ Done on 2026-08-19.
-3. **Redis TLS.** Either enable the `tls-rustls` feature and map the modes, or
-   refuse a TLS mode the driver cannot honour with an error that says so. Do not
-   leave the default configuration failing.
-4. **Connect timeouts.** Bound the SSH handshake and the three drivers that have
-   none. Add a fixture case that black-holes packets rather than refusing them.
+3. ~~**Redis TLS.**~~ Done on 2026-08-19.
+4. **Connect timeouts.** Bound the SSH handshake and Oracle; MongoDB and Redis
+   are now bounded at five seconds. Add a fixture case that black-holes packets
+   rather than refusing them.
 5. **Remove or implement the dead TLS fields.** `client_cert`, `client_key`, and
    `pinned_fingerprint` should either work or not exist.
 6. **Local Unix socket connections.** A saved connection should be able to name a

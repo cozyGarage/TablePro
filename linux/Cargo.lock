@@ -4833,9 +4833,12 @@ dependencies = [
  "itoa",
  "percent-encoding",
  "pin-project-lite",
+ "rustls",
+ "rustls-native-certs",
  "ryu",
  "socket2",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
  "url",
  "xxhash-rust",
@@ -6497,6 +6500,7 @@ dependencies = [
  "secrecy",
  "tablepro-core",
  "tablepro-driver-mongodb",
+ "tablepro-driver-redis",
  "tokio",
 ]
 

@@ -1,6 +1,8 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use redis::aio::ConnectionManager;
-use redis::{AsyncCommands, Client, RedisError, Value as RedisValue};
+use redis::{AsyncCommands, Client, RedisError, TlsCertificates, Value as RedisValue};
 use secrecy::ExposeSecret;
 use tokio::sync::Mutex;
 
@@ -43,14 +45,52 @@ impl DatabaseDriver for RedisDriver {
             String::new()
         };
         let db_index = opts.database.parse::<u8>().unwrap_or(0);
-        let url = format!("{scheme}://{auth}{}:{}/{}", opts.host, opts.port, db_index);
-        let client = Client::open(url).map_err(map_redis_error)?;
-        let manager = ConnectionManager::new(client).await.map_err(map_redis_error)?;
+        let verifies = opts.tls.mode.verifies_cert();
+        let suffix = if opts.tls.mode.encrypts() && !verifies {
+            "#insecure"
+        } else {
+            ""
+        };
+        let url = format!("{scheme}://{auth}{}:{}/{}{suffix}", opts.host, opts.port, db_index);
+        let client = match root_certificate(&opts.tls, verifies)? {
+            Some(root_cert) => Client::build_with_tls(
+                url,
+                TlsCertificates {
+                    client_tls: None,
+                    root_cert: Some(root_cert),
+                },
+            )
+            .map_err(map_redis_error)?,
+            None => Client::open(url).map_err(map_redis_error)?,
+        };
+        let manager = match tokio::time::timeout(CONNECT_TIMEOUT, ConnectionManager::new(client)).await {
+            Ok(result) => result.map_err(map_redis_error)?,
+            Err(_) => return Err(DriverError::ConnectionRefused),
+        };
         Ok(Box::new(RedisConnection {
             conn: Mutex::new(manager),
             db_count: 16,
         }))
     }
+}
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Read the certificate authority the connection names. Only a verifying mode
+/// consults it, so an encrypt-only session never fails on a path it ignores.
+fn root_certificate(config: &tablepro_core::TlsConfig, verifies: bool) -> Result<Option<Vec<u8>>, DriverError> {
+    if !verifies {
+        return Ok(None);
+    }
+    let Some(path) = &config.root_cert else {
+        return Ok(None);
+    };
+    std::fs::read(path).map(Some).map_err(|error| {
+        DriverError::Tls(format!(
+            "cannot read the certificate authority at {}: {error}",
+            path.display()
+        ))
+    })
 }
 
 struct RedisConnection {

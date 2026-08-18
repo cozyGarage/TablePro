@@ -27,6 +27,7 @@ fn env_port(key: &str, fallback: u16) -> u16 {
 pub struct DriverTlsFixture {
     pub host: String,
     pub mongo_port: u16,
+    pub redis_port: u16,
     pub database: String,
     pub username: String,
     pub password: String,
@@ -44,6 +45,7 @@ impl DriverTlsFixture {
         Self {
             host: env_or("TABLEPRO_DRIVER_TLS_HOST", "localhost"),
             mongo_port: env_port("TABLEPRO_DRIVER_TLS_MONGO_PORT", 27018),
+            redis_port: env_port("TABLEPRO_DRIVER_TLS_REDIS_PORT", 6380),
             database: env_or("TABLEPRO_DRIVER_TLS_DB", "tablepro"),
             username: env_or("TABLEPRO_DRIVER_TLS_USER", "tablepro"),
             password: env_or("TABLEPRO_DRIVER_TLS_PASSWORD", "tablepro"),
@@ -70,5 +72,14 @@ impl DriverTlsFixture {
 
     pub fn mongo(&self, mode: TlsMode, root_cert: Option<PathBuf>) -> ConnectOptions {
         self.options(self.mongo_port, mode, root_cert)
+    }
+
+    /// Redis takes its database as a numeric index and authenticates with a
+    /// password only, so the shared options are narrowed here.
+    pub fn redis(&self, mode: TlsMode, root_cert: Option<PathBuf>) -> ConnectOptions {
+        let mut options = self.options(self.redis_port, mode, root_cert);
+        options.database = "0".into();
+        options.username = String::new();
+        options
     }
 }

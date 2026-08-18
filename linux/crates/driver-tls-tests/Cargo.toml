@@ -16,4 +16,5 @@ secrecy.workspace = true
 
 [dev-dependencies]
 tablepro-driver-mongodb = { path = "../drivers/mongodb" }
+tablepro-driver-redis = { path = "../drivers/redis" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -29,7 +29,7 @@ Status terms:
 | Structure editor | Implemented | Tables, columns, indexes, and foreign keys |
 | Saved connections and libsecret | Implemented | Keyring failure UX needs hardening |
 | SSH and jump chains | Integrated | A verifying PostgreSQL connection forwards through a private Unix socket and is release-verified, headlessly as well as in the GUI; jump chains are JSON-only in the current GTK form |
-| TLS modes | Partial | Release-verified on PostgreSQL, including `VerifyFull` through SSH. Mapped but untested on MySQL and SQL Server, collapsed to on/off on ClickHouse, ignored on MongoDB, and unavailable on Redis. Saved connections cannot carry a custom certificate authority. See [docs/connections.md](docs/connections.md) |
+| TLS modes | Partial | Release-verified on PostgreSQL, including `VerifyFull` through SSH. Release-verified on MongoDB and Redis through the driver TLS fixture. Mapped but untested on MySQL and SQL Server, and collapsed to on/off on ClickHouse. Saved connections carry a certificate authority. See [docs/connections.md](docs/connections.md) |
 | Query history | Implemented | MCP access must be isolated before being re-exposed |
 | CSV/JSON export | Implemented | CSV streams table pages from the exporting tab's own connection; Parquet is unsupported |
 | Activity and EXPLAIN | Implemented | Administrative classification and numeric session-ID validation are covered |
