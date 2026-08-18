@@ -1,5 +1,5 @@
-//! EXPLAIN plan dialog. Runs `EXPLAIN <sql>` through the policy-gated
-//! active connection and shows the textual plan.
+//! EXPLAIN plan dialog. Runs the engine's plan statement through the
+//! policy-gated active connection and shows the textual plan.
 
 use gtk::prelude::IsA;
 use relm4::adw::prelude::*;
@@ -26,10 +26,27 @@ pub fn present(parent: &impl IsA<gtk::Window>, sql: &str) {
         return;
     };
 
+    let driver_id = database_service::instance()
+        .active_metadata()
+        .map(|metadata| metadata.driver_id)
+        .unwrap_or_default();
     let explain_sql = if trimmed.to_ascii_uppercase().starts_with("EXPLAIN") {
         trimmed.to_string()
     } else {
-        format!("EXPLAIN {trimmed}")
+        match tablepro_core::sql_dialect::explain_statement(&driver_id, trimmed) {
+            Some(statement) => statement,
+            None => {
+                let toast_parent = parent.clone().upcast::<gtk::Window>();
+                let dialog = adw::AlertDialog::new(
+                    Some(&tr!("Explain query")),
+                    Some(&tr!("This database engine does not provide a query plan statement.")),
+                );
+                dialog.add_response("close", &tr!("Close"));
+                dialog.set_close_response("close");
+                dialog.present(Some(&toast_parent));
+                return;
+            }
+        }
     };
 
     let window = adw::Window::builder()

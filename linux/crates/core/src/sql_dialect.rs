@@ -30,6 +30,19 @@ pub fn placeholder_for(driver_id: &str, index: usize) -> String {
     }
 }
 
+pub fn explain_statement(driver_id: &str, sql: &str) -> Option<String> {
+    let prefix = match driver_id {
+        "postgres" | "mysql" | "clickhouse" | "duckdb" => "EXPLAIN ",
+        "sqlite" => "EXPLAIN QUERY PLAN ",
+        _ => return None,
+    };
+    let trimmed = sql.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(format!("{prefix}{trimmed}"))
+}
+
 /// Render an `UPDATE`. ClickHouse only accepted standard `UPDATE`
 /// syntax from 25.7; the spelling that works across every supported
 /// release is `ALTER TABLE … UPDATE`, which the server applies as a
@@ -576,5 +589,33 @@ mod tests {
         let values = vec![Value::Null, Value::Null];
         let err = build_insert_from_draft("postgres", None, "t", &columns, &values).unwrap_err();
         assert!(matches!(err, BuildSqlError::NothingToUpdate));
+    }
+
+    #[test]
+    fn explain_uses_the_engine_plan_form() {
+        assert_eq!(
+            explain_statement("postgres", "SELECT 1").as_deref(),
+            Some("EXPLAIN SELECT 1")
+        );
+        assert_eq!(
+            explain_statement("sqlite", "  SELECT 1  ").as_deref(),
+            Some("EXPLAIN QUERY PLAN SELECT 1")
+        );
+        assert_eq!(
+            explain_statement("mysql", "SELECT 1").as_deref(),
+            Some("EXPLAIN SELECT 1")
+        );
+    }
+
+    #[test]
+    fn explain_is_unsupported_for_engines_without_a_single_statement_plan() {
+        for driver_id in ["mssql", "oracle", "mongodb", "redis"] {
+            assert_eq!(explain_statement(driver_id, "SELECT 1"), None, "driver: {driver_id}");
+        }
+    }
+
+    #[test]
+    fn explain_rejects_empty_sql() {
+        assert_eq!(explain_statement("postgres", "   "), None);
     }
 }
