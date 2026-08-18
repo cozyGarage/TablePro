@@ -33,6 +33,7 @@ CRATES=(
   tablepro-driver-redis
   tablepro-driver-mongodb
   tablepro-driver-oracle
+  tablepro-release-tests
 )
 
 PKG_ARGS=()

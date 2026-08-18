@@ -6,6 +6,7 @@
 #   ./scripts/ci-local.sh quick     # alias for ./scripts/preflight.sh (no GTK app)
 #   ./scripts/ci-local.sh full      # fmt + clippy + build + unit tests (GTK)
 #   ./scripts/ci-local.sh integration  # driver docker integration tests
+#   ./scripts/ci-local.sh release      # integration plus the postgres release fixture
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -55,6 +56,15 @@ run_integration() {
   echo "Integration checks passed."
 }
 
+run_release() {
+  run_integration
+  echo "==> PostgreSQL release fixture"
+  "$ROOT/scripts/test-postgres-release.sh"
+  echo "==> Installed GTK safety flows"
+  "$ROOT/scripts/test-gtk-safety.sh"
+  echo "Release checks passed."
+}
+
 case "$MODE" in
   quick | preflight)
     exec "$ROOT/scripts/preflight.sh"
@@ -65,8 +75,11 @@ case "$MODE" in
   integration)
     run_integration
     ;;
+  release)
+    run_release
+    ;;
   *)
-    echo "usage: $0 [quick|full|integration]" >&2
+    echo "usage: $0 [quick|full|integration|release]" >&2
     exit 2
     ;;
 esac
