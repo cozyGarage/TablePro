@@ -299,7 +299,30 @@ def assert_database_count_stable(path, expected, seconds=SETTLE_SECONDS):
         time.sleep(POLL_SECONDS)
 
 
-def write_fixture(base, audit_available=True):
+def set_text_by_name(name, text, timeout=WAIT_SECONDS):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        application = application_node()
+        if application is not None:
+            for node in descendants(application):
+                if node_name(node) != name or node_role(node) != pyatspi.ROLE_TEXT:
+                    continue
+                try:
+                    editable = node.queryEditableText()
+                except Exception:
+                    continue
+                editable.setTextContents(text)
+                return
+        time.sleep(POLL_SECONDS)
+    raise AssertionError(f"no editable text control named {name!r}:\n{accessible_snapshot()}")
+
+
+def database_ids(path):
+    with sqlite3.connect(path) as connection:
+        return [row[0] for row in connection.execute("SELECT id FROM safety_items ORDER BY id")]
+
+
+def write_fixture(base, audit_available=True, environment="prod"):
     home = base / "home"
     config = base / "config"
     data = base / "data"
@@ -335,7 +358,7 @@ def write_fixture(base, audit_available=True):
                 "tls_mode": "disabled",
                 "read_only": False,
                 "auth_mode": "password",
-                "environment": "prod",
+                "environment": environment,
             }
         ],
     }
@@ -409,7 +432,11 @@ def run_scenario(binary, scenario):
     failure = None
     stderr = ""
     try:
-        database, environment = write_fixture(base, audit_available=scenario.__name__ != "audit_failure_denies")
+        database, environment = write_fixture(
+            base,
+            audit_available=getattr(scenario, "audit_available", True),
+            environment=getattr(scenario, "environment", "prod"),
+        )
         process = start_application(binary, environment)
         open_editor()
         scenario(database)
@@ -453,13 +480,34 @@ def audit_failure_denies(database):
     assert_database_count_stable(database, 0)
 
 
+audit_failure_denies.audit_available = False
+
+
+def named_parameter_binds_a_value(database):
+    run_sql("INSERT INTO safety_items(id) VALUES (:id)")
+    wait_for_node(name=":id")
+    set_text_by_name(":id", "7")
+    invoke(wait_for_node(name="Run with values", role=pyatspi.ROLE_PUSH_BUTTON))
+    wait_for_node(name="Run with values", present=False)
+    wait_for_database_count(database, 1)
+    assert database_ids(database) == [7], f"expected the bound value, found {database_ids(database)}"
+
+
+named_parameter_binds_a_value.environment = "local"
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: gtk_safety.py /path/to/tablepro-app")
     binary = Path(sys.argv[1]).resolve()
     if not binary.is_file():
         raise SystemExit(f"application binary not found: {binary}")
-    for scenario in [dismissed_approval_denies, approve_once_prompts_again, audit_failure_denies]:
+    for scenario in [
+        dismissed_approval_denies,
+        approve_once_prompts_again,
+        audit_failure_denies,
+        named_parameter_binds_a_value,
+    ]:
         run_scenario(binary, scenario)
         print(f"passed: {scenario.__name__}")
 

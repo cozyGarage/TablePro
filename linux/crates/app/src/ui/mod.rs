@@ -11,6 +11,7 @@ mod filter_strip;
 mod grid;
 mod history_dialog;
 mod mcp_preferences;
+mod parameters_dialog;
 mod preferences;
 mod row_object;
 mod sidebar_row;

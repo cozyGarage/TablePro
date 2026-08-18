@@ -57,6 +57,10 @@ pub enum StatementOutcomeKind {
 #[derive(Debug)]
 pub enum SqlEditorInput {
     Run,
+    RunWithParameters {
+        sql: String,
+        values: std::collections::HashMap<String, tablepro_core::Value>,
+    },
     Cancel,
     ShowOutcomes(Vec<StatementOutcome>),
     ShowCancelled,
@@ -335,7 +339,11 @@ impl SimpleComponent for SqlEditor {
                     self.status.set_label(&crate::tr!("empty query"));
                     return;
                 }
-                self.execute_sql(trimmed, sender);
+                self.begin_run(trimmed, sender);
+            }
+
+            SqlEditorInput::RunWithParameters { sql, values } => {
+                self.execute_sql(sql, values, sender);
             }
 
             SqlEditorInput::ToggleLineComment => {
@@ -365,7 +373,7 @@ impl SimpleComponent for SqlEditor {
                     self.status.set_label(&crate::tr!("No statement at cursor"));
                     return;
                 };
-                self.execute_sql(statement, sender);
+                self.begin_run(statement, sender);
             }
 
             SqlEditorInput::Cancel => {
@@ -489,7 +497,39 @@ impl SimpleComponent for SqlEditor {
 }
 
 impl SqlEditor {
-    fn execute_sql(&mut self, trimmed: String, sender: ComponentSender<Self>) {
+    fn begin_run(&mut self, sql: String, sender: ComponentSender<Self>) {
+        let driver_id = database_service::instance()
+            .active_metadata()
+            .map(|metadata| metadata.driver_id)
+            .unwrap_or_default();
+        let names = crate::services::query_parameters::statement_names(&sql, &driver_id);
+        if names.is_empty() {
+            self.execute_sql(sql, std::collections::HashMap::new(), sender);
+            return;
+        }
+        let Some(window) = self
+            .source_view
+            .root()
+            .and_then(|root| root.downcast::<gtk::Window>().ok())
+        else {
+            self.status
+                .set_label(&crate::tr!("Cannot ask for parameter values without a window"));
+            return;
+        };
+        crate::ui::parameters_dialog::present(&window, &names, move |values| {
+            sender.input(SqlEditorInput::RunWithParameters {
+                sql: sql.clone(),
+                values,
+            });
+        });
+    }
+
+    fn execute_sql(
+        &mut self,
+        trimmed: String,
+        parameter_values: std::collections::HashMap<String, tablepro_core::Value>,
+        sender: ComponentSender<Self>,
+    ) {
         let conn = match database_service::instance().active() {
             Some(c) => c,
             None => {
@@ -516,6 +556,10 @@ impl SqlEditor {
         self.executing_started_at = Some(SystemTime::now());
 
         let timeout_secs = crate::services::preferences::load().query_timeout_secs;
+        let driver_id = database_service::instance()
+            .active_metadata()
+            .map(|metadata| metadata.driver_id)
+            .unwrap_or_default();
         let sender_clone = sender.clone();
         sender.command(move |_, shutdown| {
             shutdown
@@ -524,7 +568,7 @@ impl SqlEditor {
                     let deadline = (timeout_secs > 0)
                         .then(|| tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64));
                     let control = OperationControl::new(token, deadline);
-                    let msg = match run_statements(conn, statements, &control).await {
+                    let msg = match run_statements(conn, statements, &driver_id, &parameter_values, &control).await {
                         ScriptRunResult::Cancelled => SqlEditorInput::ShowCancelled,
                         ScriptRunResult::TimedOut => SqlEditorInput::ShowTimedOut(timeout_secs),
                         ScriptRunResult::Completed(outcomes) => {

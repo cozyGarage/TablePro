@@ -9,6 +9,7 @@ pub mod filter_settings;
 pub mod gtk_approval;
 pub mod mcp_service;
 pub mod preferences;
+pub mod query_parameters;
 pub mod single_instance;
 pub mod structure_tracker;
 pub mod window_state;

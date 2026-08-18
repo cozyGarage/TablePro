@@ -34,6 +34,7 @@
 - Installed GTK safety checks for approval dismissal, approve-once scope, and unavailable audit storage
 - Deterministic PostgreSQL release checks for TLS hostname and authority verification, tunnelled access, read-only denial, rollback, blocking locks, and reconnect
 - Verify Full for PostgreSQL over SSH, using the original database hostname for certificate checks
+- Named `:parameter` placeholders in the SQL editor, with a per-value type choice, sent to the database as bound parameters
 
 ### Changed
 

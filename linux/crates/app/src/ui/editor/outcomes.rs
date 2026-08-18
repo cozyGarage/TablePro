@@ -20,6 +20,8 @@ pub(crate) enum ScriptRunResult {
 pub(crate) async fn run_statements(
     conn: std::sync::Arc<dyn tablepro_core::Connection>,
     statements: Vec<String>,
+    driver_id: &str,
+    parameter_values: &std::collections::HashMap<String, tablepro_core::Value>,
     control: &OperationControl,
 ) -> ScriptRunResult {
     if statements.is_empty() {
@@ -38,7 +40,19 @@ pub(crate) async fn run_statements(
             continue;
         }
         let started = std::time::Instant::now();
-        let kind = match conn.query_controlled(&sql, control).await {
+        let bound = match crate::services::query_parameters::bind_statement(&sql, driver_id, parameter_values) {
+            Ok(bound) => bound,
+            Err(reason) => {
+                out.push(StatementOutcome {
+                    sql_preview: preview,
+                    elapsed_ms: 0,
+                    kind: StatementOutcomeKind::Error(reason),
+                });
+                aborted = true;
+                continue;
+            }
+        };
+        let kind = match conn.query_params_controlled(&bound.sql, &bound.values, control).await {
             Ok(qr) => StatementOutcomeKind::Rows(qr),
             Err(DriverError::Cancelled) => return ScriptRunResult::Cancelled,
             Err(DriverError::TimedOut) => return ScriptRunResult::TimedOut,
