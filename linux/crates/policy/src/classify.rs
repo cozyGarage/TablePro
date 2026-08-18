@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{
     Cte, Delete, Expr, FromTable, FunctionArg, FunctionArgExpr, FunctionArguments, Insert, ObjectName, Query,
-    SelectItem, SetExpr, Statement, TableFactor, TableObject,
+    SelectItem, SetExpr, Statement, TableFactor, TableObject, UtilityOption, Value,
 };
 use sqlparser::dialect::{Dialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
@@ -310,6 +310,24 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
             is_multi_statement: false,
             parse_error: None,
         },
+        Statement::Explain {
+            analyze,
+            statement,
+            options,
+            ..
+        } => classify_explain(*analyze, statement, options.as_deref()),
+        Statement::ExplainTable { table_name, .. } => StatementFacts {
+            class: StatementClass::Select,
+            writes: false,
+            tables: object_name_strings(table_name),
+            has_where: true,
+            contains_ddl: false,
+            contains_mutating_dml: false,
+            contains_unscoped_dml: false,
+            contains_unknown_write: false,
+            is_multi_statement: false,
+            parse_error: None,
+        },
         _ => StatementFacts {
             class: StatementClass::Other,
             writes: true,
@@ -323,6 +341,48 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
             parse_error: None,
         },
     }
+}
+
+fn classify_explain(analyze: bool, statement: &Statement, options: Option<&[UtilityOption]>) -> StatementFacts {
+    if analyze || options.is_some_and(analyze_option_enabled) {
+        return classify_statement(statement);
+    }
+    let inner = classify_statement(statement);
+    StatementFacts {
+        class: StatementClass::Select,
+        writes: false,
+        tables: inner.tables,
+        has_where: true,
+        contains_ddl: false,
+        contains_mutating_dml: false,
+        contains_unscoped_dml: false,
+        contains_unknown_write: false,
+        is_multi_statement: false,
+        parse_error: None,
+    }
+}
+
+fn analyze_option_enabled(options: &[UtilityOption]) -> bool {
+    options.iter().any(|option| {
+        option.name.value.eq_ignore_ascii_case("analyze") && !option.arg.as_ref().is_some_and(is_disabled_option_arg)
+    })
+}
+
+fn is_disabled_option_arg(arg: &Expr) -> bool {
+    match arg {
+        Expr::Value(value) => match &value.value {
+            Value::Boolean(flag) => !flag,
+            Value::Number(number, _) => number.parse::<f64>().is_ok_and(|n| n == 0.0),
+            Value::SingleQuotedString(text) | Value::DoubleQuotedString(text) => is_disabled_word(text),
+            _ => false,
+        },
+        Expr::Identifier(ident) => is_disabled_word(&ident.value),
+        _ => false,
+    }
+}
+
+fn is_disabled_word(text: &str) -> bool {
+    matches!(text.to_ascii_lowercase().as_str(), "false" | "off" | "0" | "no")
 }
 
 fn ddl_facts(tables: Vec<String>) -> StatementFacts {
@@ -851,5 +911,68 @@ mod tests {
         let facts = classify("KILL 42", "mysql");
         assert_eq!(facts.class, StatementClass::Administrative);
         assert!(facts.writes);
+    }
+
+    #[test]
+    fn plain_explain_of_a_select_is_a_read() {
+        let facts = classify("EXPLAIN SELECT id FROM users", "postgres");
+        assert_eq!(facts.class, StatementClass::Select);
+        assert!(!facts.writes);
+        assert!(!facts.contains_unknown_write);
+        assert_eq!(facts.tables, vec!["users".to_string()]);
+    }
+
+    #[test]
+    fn plain_explain_of_a_write_does_not_execute_it() {
+        let facts = classify("EXPLAIN DELETE FROM users", "postgres");
+        assert_eq!(facts.class, StatementClass::Select);
+        assert!(!facts.writes);
+        assert!(!facts.contains_mutating_dml);
+        assert!(!facts.contains_unscoped_dml);
+    }
+
+    #[test]
+    fn explain_verbose_of_a_select_is_a_read() {
+        let facts = classify("EXPLAIN (VERBOSE) SELECT id FROM users", "postgres");
+        assert_eq!(facts.class, StatementClass::Select);
+        assert!(!facts.writes);
+    }
+
+    #[test]
+    fn explain_analyze_keeps_the_inner_statement_facts() {
+        let facts = classify("EXPLAIN ANALYZE DELETE FROM users", "postgres");
+        assert_eq!(facts.class, StatementClass::Delete);
+        assert!(facts.writes);
+        assert!(facts.contains_mutating_dml);
+        assert!(facts.contains_unscoped_dml);
+        assert_eq!(facts.tables, vec!["users".to_string()]);
+    }
+
+    #[test]
+    fn explain_with_a_parenthesized_analyze_option_is_a_write() {
+        let facts = classify("EXPLAIN (ANALYZE) UPDATE users SET name = 'x'", "postgres");
+        assert_eq!(facts.class, StatementClass::Update);
+        assert!(facts.writes);
+        assert!(facts.contains_unscoped_dml);
+    }
+
+    #[test]
+    fn explain_with_analyze_disabled_is_a_read() {
+        for sql in [
+            "EXPLAIN (ANALYZE false) DELETE FROM users",
+            "EXPLAIN (ANALYZE off) DELETE FROM users",
+            "EXPLAIN (ANALYZE 0) DELETE FROM users",
+        ] {
+            let facts = classify(sql, "postgres");
+            assert_eq!(facts.class, StatementClass::Select, "SQL: {sql}");
+            assert!(!facts.writes, "SQL: {sql}");
+        }
+    }
+
+    #[test]
+    fn describe_table_is_a_read() {
+        let facts = classify("DESCRIBE users", "mysql");
+        assert_eq!(facts.class, StatementClass::Select);
+        assert!(!facts.writes);
     }
 }
