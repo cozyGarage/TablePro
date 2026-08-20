@@ -1,6 +1,6 @@
 # Capability evidence
 
-Last audited: 2026-08-20
+Last audited: 2026-08-21
 
 `PLAN.md` lists ten capabilities as "Already useful on Linux". This file records
 what actually proves each one, so the list is a claim backed by evidence rather

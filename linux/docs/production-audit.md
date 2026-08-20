@@ -1,6 +1,6 @@
 # Production readiness audit
 
-**Updated**: 2026-08-20
+**Updated**: 2026-08-21
 
 **State**: useful for development and personal database work, not yet approved for trusted production writes or unattended agents
 
@@ -59,7 +59,7 @@ Release testing must still prove the installed GTK cancel flow and audit outcome
 
 The installed GTK suite runs the real application under an isolated D-Bus session and Xvfb display with PyAT-SPI and disposable XDG directories. Local release verification proves that dismissing a production approval leaves SQLite unchanged, approve-once does not authorize the next mutation, and unavailable audit storage cannot be approved around.
 
-The PR smoke is now a required independent job. A daily workflow runs five retry-free attempts and preserves per-attempt output plus failure accessibility/screenshots. Promotion still waits for 30 consecutive attempts across at least six runs. PostgreSQL-specific installed cancel, timeout, and terminal audit behavior remains part of the Phase 3 release fixture rather than this deterministic SQLite suite.
+The PR smoke is now a required independent job. A daily workflow runs five retry-free attempts and preserves per-attempt output plus failure accessibility/screenshots. Promotion still waits for 30 consecutive attempts across at least six runs, and adding a scenario restarts that ledger. The suite covers eleven scenarios, including a connection switch that gates pending row edits and a browse tab that reads the connection it was reopened against. PostgreSQL-specific installed cancel, timeout, and terminal audit behavior remains part of the Phase 3 release fixture rather than this deterministic SQLite suite.
 
 A local soak on 2026-08-18 hit one failure in 14 runs, caused by a synthetic Return reaching an approval dialog. The harness no longer has a Return-key activation fallback: named AT-SPI actions drive controls, while synthetic keys are limited to shortcuts being tested. It also verifies successful and failed saved-connection switching against separate SQLite files.
 

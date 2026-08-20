@@ -1,6 +1,6 @@
 # TablePro Linux roadmap
 
-Last audited: 2026-08-20
+Last audited: 2026-08-21
 
 The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Linux capability backlog. This file is the concise status view.
 
@@ -99,6 +99,8 @@ The fixture runs from `./scripts/test-postgres-release.sh` and in the `postgres-
 - [x] Installed GTK dismissal leaves SQLite unchanged
 - [x] Installed GTK approve-once prompts again for the next operation
 - [x] Installed GTK audit failure cannot be approved around
+- [x] Installed GTK pending row edits gate a connection switch without writing to the old database
+- [x] Installed GTK browse tabs read the connection they were reopened against
 
 Phase 4 has a required PR smoke job and a separate daily five-attempt soak. Promotion still requires 30 consecutive retry-free attempts across at least six workflow runs.
 
@@ -143,6 +145,18 @@ any later AUR/Omarchy or Flatpak publication.
 
 The repository extraction completed on 2026-08-17. Product planning now follows Linux user needs and release evidence.
 
+### 10: DBA operations at scale
+
+- [ ] Several connections open at once, with fail-closed per-tab ownership across all of them
+- [ ] Connection groups, tags, favorites, search, and URL import
+- [ ] A typed sessions and locks console with capability-declared driver support and governed session termination
+- [ ] A PostgreSQL server health panel that degrades cleanly when a statistics extension is absent
+- [ ] Configurable pool size and timeouts per saved connection, honoured by the driver
+- [ ] Read-only review of views, routines, triggers, sequences, extensions, roles, and grants
+- [ ] A decision record, design, and measured prototype for an out-of-process Python runner
+
+Phase 10 is planned, not started. It follows the internal Arch RC tag. Slices run in order, and the first slice retires the one-active-connection limit. Every connection it exposes stays policy-guarded, and no slice ships DDL or server configuration writes.
+
 ## Next implementation target
 
-The immediate target is the internal Arch RC: run the exact-commit hosted jobs, accumulate the Phase 4 soak ledger, and verify install/upgrade/rollback on Wayland. Full-table snapshot export and PostgreSQL object depth follow; new drivers do not.
+The immediate target is the internal Arch RC: run the exact-commit hosted jobs, accumulate the Phase 4 soak ledger, and verify install/upgrade/rollback on Wayland. Those gates are mostly waiting, so Phase 10 feature work runs in parallel on `linux` while the candidate stays frozen on a release branch. Phase 10 comes before full-table snapshot export and Phase 6 object administration; new drivers come after both.

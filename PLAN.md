@@ -1,6 +1,6 @@
 # TablePro Linux development plan
 
-Last audited: 2026-08-20
+Last audited: 2026-08-21
 
 This plan is the source of truth for the Linux application. It separates:
 
@@ -22,16 +22,18 @@ Audited branch state:
 - Experimental drivers: Redis, MongoDB, DuckDB; Oracle is excluded because its optional build is broken and unverified
 - No Linux account, subscription, receipt, license-key, or entitlement checks
 
-Verified locally on 2026-08-12:
+Verified locally on 2026-08-21 against Arch stable Rust 1.97.1:
 
 - File-size guard passes
 - `cargo fmt --all -- --check` passes
-- 387 fast tests and 5 MCP policy integration tests pass; one Secret Service integration test is ignored
-- `cargo deny check` passes
-- `cargo audit --no-fetch` passes with the allowed unmaintained `paste` warning
-- Full-workspace strict Clippy passes on Rust 1.93.0 and Arch stable Rust 1.97.1
-- The complete Rust 1.93 preflight passes, including 283 non-GTK unit tests and 5 MCP policy integration tests; one Secret Service test is ignored
-- All 27 Docker driver integration tests pass: PostgreSQL 4, MySQL 4, SQL Server 9, and ClickHouse 10
+- Full-workspace strict Clippy passes with `-D warnings`
+- The unit tier passes: 541 tests, one ignored Secret Service test
+- The sandbox tier passes: 361 tests, two ignored
+- The installed GTK tier passes: 11 of 11 scenarios, retry-free
+- `cargo deny check` reports advisories, bans, licenses, and sources ok
+- All 27 Docker driver integration tests passed on 2026-08-12: PostgreSQL 4, MySQL 4, SQL Server 9, and ClickHouse 10
+
+Run `cargo deny check` from `linux/`. It does not accept `--manifest-path`.
 
 The repository pins Rust 1.93, but an OS-packaged `/usr/bin/cargo` does not honor `rust-toolchain.toml` without rustup. CI must test the MSRV, while local development and a scheduled job should also test the current stable compiler.
 
@@ -300,8 +302,15 @@ Use SQLite, temporary XDG directories, `dbus-run-session`, Xvfb, and AT-SPI auto
 1. [x] Dismissed production approval leaves the database unchanged.
 2. [x] `Approve once` performs exactly one mutation and asks again next time.
 3. [x] An unavailable audit journal cannot be bypassed through approval.
+4. [x] A connection switch with pending row edits offers Stay, Discard, and Save, and neither Stay nor Discard writes to the old database.
+5. [x] A browse tab reopened after a switch reads the new connection, and the previous page indicator does not survive the switch.
 
-Keep the PR smoke required. Promote an RC only after 30 consecutive retry-free attempts across at least six distinct daily/manual soak runs.
+Unix-socket endpoint behavior is form logic, so it is covered in the unit tier
+rather than the GTK tier: the endpoint choice appears only for a driver that
+supports a socket, selecting it hides every network row, a relative socket
+directory is invalid, and the resolved socket follows the directory and port.
+
+Keep the PR smoke required. Promote an RC only after 30 consecutive retry-free attempts across at least six distinct daily/manual soak runs. Adding a scenario restarts that ledger.
 
 ---
 
@@ -336,7 +345,8 @@ Track capabilities as planned, implemented, integrated, release-verified, deferr
 - Query history
 - CSV and JSON export
 - Activity and EXPLAIN
-- SSH, TLS, reconnect and Kerberos foundations
+- SSH, TLS, and reconnect, release-verified on PostgreSQL only
+- Kerberos configuration and service identity, with no test of any kind and no KDC fixture
 - MCP and headless agent foundations
 
 ### Priority A: daily DBA and data-engineering workflows
@@ -471,6 +481,184 @@ Removed material included retired application source, tests, project files, runt
 
 ---
 
+# Phase 10: DBA operations at scale
+
+## Status
+
+Not started. Planned on 2026-08-21, sequenced after the internal Arch RC is tagged.
+
+The product is strong on safety and thin on operations. A DBA who manages many
+servers gets one active connection per process, an activity dialog that renders
+tab-separated text, hardcoded driver pool sizes, no server health view, and no
+read-only view of views, routines, triggers, sequences, roles, or grants. This
+phase closes that gap without weakening any safety invariant.
+
+Every connection this phase exposes is still a `PolicyGuard`. Health polling,
+activity queries, session termination, and schema introspection are not
+exceptions. Polling is bounded, cancellable, and never runs on the GTK thread.
+
+Deliver in ordered slices. Slices 1 through 3 must land. If the phase runs
+long, cut slice 6 first and slice 5 second. Do not cut tests.
+
+## 10.1 Concurrent connections
+
+The prerequisite for the rest of the phase. `DatabaseService` already keys
+entries by UUID; exclusivity is one drain call in `activate_exclusive`.
+
+Replace `activate_exclusive` with an additive `activate` plus an explicit
+`close`, keep the active id as the focused connection for menu actions, and
+extend the fail-closed tab-ownership invariant from one owner to many. A tab
+must never run against a connection it does not own. Workspace restoration
+reconnects each referenced connection, and a failed reconnect leaves that tab
+inert rather than rebinding it. Per-tab chrome states the connection and its
+environment so the target server is identifiable without clicking.
+
+Primary files:
+
+- linux/crates/app/src/services/database_service.rs
+- linux/crates/app/src/services/connection_monitor.rs
+- linux/crates/app/src/ui/app/connection.rs
+- linux/crates/app/src/ui/app/workspace_tabs.rs
+- linux/crates/app/src/ui/app/workspace_persist.rs
+- linux/crates/app/src/ui/app/workspace_chrome.rs
+
+This slice retires the single-connection limit recorded in
+`linux/docs/production-audit.md`.
+
+## 10.2 Connection organization
+
+Saved connections gain a group, tags, and a favorite flag. The connection list
+groups, filters, and searches over them, and every row carries its environment
+colour. Connection URL import lands here. Reuse the Open Quickly ranking rather
+than writing a second ranker.
+
+Primary files:
+
+- linux/crates/storage/src
+- linux/crates/app/src/ui/welcome_view.rs
+- linux/crates/app/src/ui/connection_row.rs
+- linux/crates/app/src/ui/quick_switcher_dialog.rs
+
+Legacy connection files without the new fields must still load.
+
+## 10.3 Sessions and activity console
+
+`ActivityQuery` becomes a capability-declared set so the UI hides what a driver
+cannot answer instead of showing an empty result. Add PostgreSQL blocking trees
+through `pg_blocking_pids`, MySQL lock waits joined to running transactions, and
+SQL Server transaction locks joined to executing requests.
+
+The activity dialog is replaced by a view that renders through the existing
+result grid, so columns are typed and sortable. Refresh is bounded, has an
+explicit interval, and is cancelled when the view closes.
+
+Session termination stays governed. PostgreSQL backend control and MySQL KILL
+already classify as administrative, so production termination requires approval
+and must record a terminal audit state.
+
+Primary files:
+
+- linux/crates/core/src/activity.rs
+- New: linux/crates/app/src/ui/server_ops/
+- linux/crates/release-tests/tests/activity_locks.rs
+
+## 10.4 Server health and performance
+
+A per-driver metric set with an availability probe. PostgreSQL first:
+connection saturation, cache hit ratio, longest running transaction,
+idle-in-transaction count, replication lag and slot state, transaction id
+wraparound headroom, deadlocks, bloat, autovacuum age, and top statements.
+
+An absent statistics extension degrades one panel. It does not fail the view.
+Every metric query is a read-only statement through the guard. No charting
+library and no time series in this slice.
+
+Primary files:
+
+- New: linux/crates/core/src/server_health.rs
+- New: linux/crates/app/src/ui/server_health/
+
+## 10.5 Connection and resource control
+
+Driver pool sizes are hardcoded and neither configurable nor introspectable.
+Connect options gain pool size, acquire timeout, idle timeout, connect timeout,
+and statement timeout. Defaults must reproduce current behavior exactly. Saved
+connections carry the same fields, transport maps them, and each driver honours
+them. Pool telemetry surfaces in the health view.
+
+Server configuration is read-only in this slice. Writing server settings from
+the client is out of scope.
+
+Primary files:
+
+- linux/crates/core/src/connection.rs
+- linux/crates/transport/src/lib.rs
+- linux/crates/drivers/postgres/src/lib.rs
+- linux/crates/drivers/mysql/src/lib.rs
+- linux/crates/drivers/sqlite/src/lib.rs
+- New: a connect-dialog advanced section module
+
+## 10.6 Safe schema review
+
+Read-only introspection for views, materialized views, routines, triggers,
+sequences, extensions, roles, and grants. The connection trait gains methods
+whose defaults return nothing, matching the existing index and foreign-key
+pattern, so drivers opt in without breaking. PostgreSQL implements all of them.
+
+Database metadata is untrusted input. Identifiers are dialect-quoted and never
+joined into SQL as text.
+
+This slice is the read-only foundation that Phase 6 object administration
+builds DDL on. It ships no DDL itself.
+
+Primary files:
+
+- linux/crates/core/src/query.rs
+- linux/crates/core/src/connection.rs
+- linux/crates/drivers/postgres/src/lib.rs
+- linux/crates/app/src/ui/sidebar_row.rs
+
+## 10.7 Python runner design spike
+
+No shipped feature. The repository forbids an in-process scripting runtime and
+does not need one. `agentd` already serves a policy-guarded, audited,
+rate-limited MCP endpoint over stdio, so an out-of-process interpreter over
+that transport inherits policy, audit, allowlists, and cancellation.
+
+The spike produces an architecture decision record, a design document, and a
+throwaway prototype that is not a workspace member and not in CI. The design
+must resolve the principal question, because a script runs under a human
+session but unattended and no one answers an approval prompt. It must also
+resolve audit provenance against the hash-chained journal format, the sandbox
+model, interpreter provenance, and the data handoff. Python must never become
+a build or runtime requirement of the Arch package.
+
+Primary files:
+
+- New: linux/docs/decisions/0002-out-of-process-python-runner.md
+- New: linux/docs/python-scripting.md
+- New: linux/scripts/spike/
+
+## Acceptance criteria
+
+- [ ] Several connections are open at once, and a query result reaches only the tab that owns its connection.
+- [ ] Closing one connection leaves every other connection usable and ends only its own monitor task.
+- [ ] Workspace restoration reopens every referenced connection, and a failed reconnect leaves that tab inert.
+- [ ] Saved connections group, tag, filter, and search, and legacy connection files without the new fields still load.
+- [ ] Each driver declares which activity queries it supports, and the UI offers only those.
+- [ ] A real blocking pair is reported as a blocking tree on PostgreSQL, MySQL, and SQL Server.
+- [ ] Terminating a session in production requires approval and records a terminal audit state, and dismissal leaves the session alive.
+- [ ] Activity and health refresh are bounded, cancelled on close, and never block the GTK thread.
+- [ ] Health metrics return against the PostgreSQL fixture, and a missing statistics extension degrades one panel while the rest render.
+- [ ] Pool size and statement timeout are configurable per saved connection, honoured by the driver, and proven server-side.
+- [ ] Default pool and timeout values reproduce pre-slice behavior, and legacy saved connections deserialize.
+- [ ] Views, materialized views, routines, triggers, sequences, extensions, roles, and grants are listed read-only against a real PostgreSQL schema.
+- [ ] No introspection or metric path builds SQL by joining database metadata as text.
+- [ ] Every connection handed to any consumer in this phase is a `PolicyGuard`.
+- [ ] The Python spike lands an accepted decision record, a design document, and a measured prototype result, and ships no runner.
+
+---
+
 # Agent surface
 
 Agents are a supported surface, not a bolt-on. Every agent-facing capability
@@ -501,9 +689,10 @@ Rules that follow from this shape:
 - Built-in AI chat stays a deferred product feature. This is the integration
   surface, not a chat client.
 
-Known seam: saved connections carry no custom certificate authority or client
-certificate, so a private CA is unusable on every surface. That is tracked as
-a Priority A capability, not a defect in this shape.
+Known seam: saved connections can name a certificate authority, so a privately
+issued server certificate now verifies on every surface. Client certificates
+and pinned fingerprints remain unfinished storage, UI, and driver fields. That
+is tracked as a Priority A capability, not a defect in this shape.
 
 # First trusted Linux release gate
 
