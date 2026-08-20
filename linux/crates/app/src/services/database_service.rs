@@ -145,11 +145,13 @@ impl DatabaseService {
         tracing::info!("policy reloaded");
     }
 
-    /// Make a fully validated connection the only connection owned by this
-    /// application window. Callers must prepare the connection before this
-    /// method: activation itself is deliberately infallible and is the final
-    /// step of a connection switch.
-    pub fn activate_exclusive(
+    /// Register a fully validated connection and give it focus. Callers must
+    /// prepare the connection before this method: activation itself is
+    /// deliberately infallible and is the final step of a connection switch.
+    /// Activation is additive. A caller that means to replace a connection
+    /// closes the previous one itself, so ownership is never dropped as a
+    /// side effect of opening something else.
+    pub fn activate(
         &self,
         id: Uuid,
         metadata: ConnectionMetadata,
@@ -176,9 +178,6 @@ impl DatabaseService {
             _monitor: monitor,
         };
         let mut connections = self.connections.lock().expect("database_service lock");
-        for (_, previous) in connections.drain() {
-            previous.cancel.cancel();
-        }
         connections.insert(id, entry);
         let mut active = self.active.lock().expect("database_service lock");
         *active = Some(id);
@@ -251,7 +250,7 @@ impl DatabaseService {
         self.active_metadata().map(|m| m.read_only).unwrap_or(false)
     }
 
-    pub fn remove(&self, id: Uuid) {
+    pub fn close(&self, id: Uuid) {
         let mut entries = self.connections.lock().expect("database_service lock");
         if let Some(entry) = entries.remove(&id) {
             entry.cancel.cancel();
@@ -262,7 +261,7 @@ impl DatabaseService {
         }
     }
 
-    pub fn clear_all(&self) {
+    pub fn close_all(&self) {
         let mut entries = self.connections.lock().expect("database_service lock");
         for (_, entry) in entries.drain() {
             entry.cancel.cancel();
@@ -291,38 +290,88 @@ mod tests {
         assert!(audit.state.governed_writes_disabled());
     }
 
-    #[tokio::test]
-    async fn exclusive_activation_removes_the_previous_connection() {
-        let service = DatabaseService::new();
+    async fn open_memory_connection(service: &DatabaseService, name: &str) -> Uuid {
         let driver: Arc<dyn DatabaseDriver> = Arc::new(drivers_sqlite::SqliteDriver);
-
-        for (index, id) in [Uuid::new_v4(), Uuid::new_v4()].into_iter().enumerate() {
-            let options = ConnectOptions {
-                database: ":memory:".into(),
-                ..Default::default()
-            };
-            let connection = driver.connect(options.clone()).await.expect("sqlite connection");
-            service.activate_exclusive(
+        let id = Uuid::new_v4();
+        let options = ConnectOptions {
+            database: ":memory:".into(),
+            ..Default::default()
+        };
+        let connection = driver.connect(options.clone()).await.expect("sqlite connection");
+        service.activate(
+            id,
+            ConnectionMetadata {
                 id,
-                ConnectionMetadata {
-                    id,
-                    name: format!("connection-{index}"),
-                    driver_id: "sqlite".into(),
-                    environment: Environment::Local,
-                    read_only: false,
-                    server_version: None,
-                },
-                connection,
-                None,
-                false,
-                ReconnectParams {
-                    driver: driver.clone(),
-                    opts: options,
-                    ssh: None,
-                },
-            );
-            assert_eq!(service.active_id(), Some(id));
-            assert_eq!(service.all_connections().len(), 1);
-        }
+                name: name.into(),
+                driver_id: "sqlite".into(),
+                environment: Environment::Local,
+                read_only: false,
+                server_version: None,
+            },
+            connection,
+            None,
+            false,
+            ReconnectParams {
+                driver,
+                opts: options,
+                ssh: None,
+            },
+        );
+        id
+    }
+
+    #[tokio::test]
+    async fn activation_is_additive_and_focuses_the_newest_connection() {
+        let service = DatabaseService::new();
+
+        let first = open_memory_connection(&service, "first").await;
+        assert_eq!(service.active_id(), Some(first));
+        assert_eq!(service.all_connections().len(), 1);
+
+        let second = open_memory_connection(&service, "second").await;
+        assert_eq!(service.active_id(), Some(second));
+        assert_eq!(service.all_connections().len(), 2);
+        assert!(service.handle(first, Principal::human_gui()).is_some());
+        assert!(service.handle(second, Principal::human_gui()).is_some());
+    }
+
+    #[tokio::test]
+    async fn closing_one_connection_leaves_every_other_connection_usable() {
+        let service = DatabaseService::new();
+        let first = open_memory_connection(&service, "first").await;
+        let second = open_memory_connection(&service, "second").await;
+
+        service.close(second);
+
+        assert_eq!(service.active_id(), None);
+        assert_eq!(service.all_connections().len(), 1);
+        assert!(service.handle(second, Principal::human_gui()).is_none());
+        let survivor = service.handle(first, Principal::human_gui()).expect("first survives");
+        survivor.ping().await.expect("the surviving connection still answers");
+    }
+
+    #[tokio::test]
+    async fn closing_a_connection_that_is_not_focused_keeps_the_focus() {
+        let service = DatabaseService::new();
+        let first = open_memory_connection(&service, "first").await;
+        let second = open_memory_connection(&service, "second").await;
+
+        service.close(first);
+
+        assert_eq!(service.active_id(), Some(second));
+        assert_eq!(service.all_connections().len(), 1);
+        assert!(service.handle(second, Principal::human_gui()).is_some());
+    }
+
+    #[tokio::test]
+    async fn close_all_releases_every_connection() {
+        let service = DatabaseService::new();
+        open_memory_connection(&service, "first").await;
+        open_memory_connection(&service, "second").await;
+
+        service.close_all();
+
+        assert_eq!(service.active_id(), None);
+        assert!(service.all_connections().is_empty());
     }
 }

@@ -54,7 +54,7 @@ impl PreparedConnection {
     }
 
     pub fn activate(self) -> (Vec<tablepro_core::TableInfo>, String) {
-        database_service::instance().activate_exclusive(
+        database_service::instance().activate(
             self.id,
             self.metadata,
             self.connection,

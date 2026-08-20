@@ -129,12 +129,7 @@ impl App {
         // connection we're about to release. Reopening one against a
         // different connection would target a non-existent table.
         self.clear_closed_tabs_stack();
-        let svc = database_service::instance();
-        if let Some(id) = svc.active_id() {
-            svc.remove(id);
-        } else {
-            svc.clear_all();
-        }
+        database_service::instance().close_all();
         self.schema_buffer.set_text(crate::ui::editor::SQL_KEYWORDS);
         self.current_driver_id = None;
         self.read_only = false;
@@ -445,6 +440,13 @@ impl App {
             // dispose the old tab controllers and install the candidate.
             self.teardown_workspace_tabs();
             self.clear_closed_tabs_stack();
+        }
+        // Activation is additive, so this window releases the connection it is
+        // replacing. Closing before activation keeps reconnecting to the same
+        // saved connection correct: the identifier is reused, not cancelled.
+        let replaced = database_service::instance().active_id();
+        if let Some(previous) = replaced {
+            database_service::instance().close(previous);
         }
         let (tables, driver_id) = prepared.activate();
         self.connection_transition = ConnectionTransition::Idle;
