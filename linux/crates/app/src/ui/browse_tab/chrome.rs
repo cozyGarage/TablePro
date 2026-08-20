@@ -22,6 +22,7 @@ impl BrowseTab {
             .sensitive(false)
             .build();
         insert_button.add_css_class("flat");
+        insert_button.update_property(&[gtk::accessible::Property::Label(&crate::tr!("Insert row"))]);
         let sender_for_insert = sender.clone();
         insert_button.connect_clicked(move |_| sender_for_insert.input(BrowseTabInput::InsertRow));
 

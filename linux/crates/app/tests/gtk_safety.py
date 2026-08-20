@@ -72,6 +72,52 @@ def find_node(name=None, role=None):
     return None
 
 
+def find_node_containing(text, role=None):
+    for application in desktop_applications():
+        for node in descendants(application):
+            if role is not None and node_role(node) != role:
+                continue
+            if text in node_name(node):
+                return node
+    return None
+
+
+def wait_for_node_containing(text, role=None, present=True, timeout=WAIT_SECONDS):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        node = find_node_containing(text, role=role)
+        if (node is not None) == present:
+            return node
+        time.sleep(POLL_SECONDS)
+    expectation = "appear" if present else "disappear"
+    raise AssertionError(
+        f"expected an accessible name containing {text!r} to {expectation}:\n{accessible_snapshot()}"
+    )
+
+
+def find_frame_containing(text):
+    for application in desktop_applications():
+        for node in descendants(application):
+            if node_role(node) != pyatspi.ROLE_FRAME:
+                continue
+            if text in node_name(node):
+                return node
+    return None
+
+
+def wait_for_frame_containing(text, present=True, timeout=WAIT_SECONDS):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        node = find_frame_containing(text)
+        if (node is not None) == present:
+            return node
+        time.sleep(POLL_SECONDS)
+    expectation = "appear" if present else "disappear"
+    raise AssertionError(
+        f"expected a window title containing {text!r} to {expectation}:\n{accessible_snapshot()}"
+    )
+
+
 def accessible_snapshot():
     applications = desktop_applications()
     if not applications:
@@ -749,6 +795,71 @@ def current_page_csv_export_is_pk_ordered(database, base):
 current_page_csv_export_is_pk_ordered.environment = "local"
 
 
+def pending_edits_gate_a_connection_switch(database, base):
+    invoke_named_action_within("safety_items", "Open safety_items")
+    wait_for_node(name="No rows on this page")
+    invoke(wait_for_node(name="Insert row", role=pyatspi.ROLE_PUSH_BUTTON))
+    wait_for_node(name="1 unsaved change")
+
+    open_saved_connection(CONNECTION_B_NAME)
+    wait_for_node(name="Save changes before switching?")
+    invoke(wait_for_node(name="Stay", role=pyatspi.ROLE_PUSH_BUTTON))
+    wait_for_node(name="Save changes before switching?", present=False)
+    wait_for_frame_containing(f"{CONNECTION_NAME} — TablePro")
+    wait_for_frame_containing(f"{CONNECTION_B_NAME} — TablePro", present=False)
+    wait_for_node(name="1 unsaved change")
+    assert_database_count_stable(database, 0)
+
+    open_saved_connection(CONNECTION_B_NAME)
+    wait_for_node(name="Save changes before switching?")
+    invoke(wait_for_node(name="Discard and switch", role=pyatspi.ROLE_PUSH_BUTTON))
+    wait_for_frame_containing(f"{CONNECTION_B_NAME} — TablePro")
+    wait_for_node(name="1 unsaved change", present=False)
+    assert database_ids(database) == [], (
+        f"a discarded pending row reached the old database: {database_ids(database)}"
+    )
+
+    invoke(wait_for_node(name="Open SQL editor"))
+    wait_for_node(name="Run", role=pyatspi.ROLE_PUSH_BUTTON)
+    run_sql("INSERT INTO safety_items(id) VALUES (55)")
+    database_b = base / "safety-b.sqlite"
+    wait_for_database_count(database_b, 1)
+    assert database_ids(database_b) == [55]
+    assert database_ids(database) == [], "the old connection stayed writable after the switch"
+
+
+pending_edits_gate_a_connection_switch.environment = "local"
+
+
+def a_browse_tab_reads_the_new_connection_after_a_switch(database, base):
+    database_b = base / "safety-b.sqlite"
+    with sqlite3.connect(database) as connection:
+        connection.executemany(
+            "INSERT INTO safety_items(id) VALUES (?)",
+            ((identifier,) for identifier in range(1, 8)),
+        )
+    with sqlite3.connect(database_b) as connection:
+        connection.executemany(
+            "INSERT INTO safety_items(id) VALUES (?)",
+            ((identifier,) for identifier in range(1, 4)),
+        )
+
+    invoke_named_action_within("safety_items", "Open safety_items")
+    wait_for_node_containing("Rows 1 – 7")
+
+    open_saved_connection(CONNECTION_B_NAME)
+    wait_for_frame_containing(f"{CONNECTION_B_NAME} — TablePro")
+    wait_for_node_containing("Rows 1 – 7", present=False)
+
+    invoke_named_action_within("safety_items", "Open safety_items")
+    wait_for_node_containing("Rows 1 – 3")
+    assert database_ids(database) == list(range(1, 8)), "the old database changed after the switch"
+    assert database_ids(database_b) == [1, 2, 3]
+
+
+a_browse_tab_reads_the_new_connection_after_a_switch.environment = "local"
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: gtk_safety.py /path/to/tablepro-app")
@@ -765,6 +876,8 @@ def main():
         failed_switch_preserves_the_old_workspace,
         running_query_is_cancelled_before_switch,
         current_page_csv_export_is_pk_ordered,
+        pending_edits_gate_a_connection_switch,
+        a_browse_tab_reads_the_new_connection_after_a_switch,
     ]
     selected = os.environ.get("TABLEPRO_GTK_SCENARIO")
     if selected:

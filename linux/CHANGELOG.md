@@ -42,6 +42,8 @@
 - Direct PostgreSQL Unix-socket connections shared by GUI and agentd, with saved-path compatibility and a real socket fixture
 - Required GTK connection-isolation smoke plus a daily five-attempt retry-free soak workflow
 - Internal Arch RC packaging from an immutable commit archive and verified checksum
+- Screen readers now announce the browse toolbar's insert-row button by name
+- Installed GTK checks that a connection switch gates pending row edits and that a browse tab reads the connection it was reopened against
 
 ### Changed
 
