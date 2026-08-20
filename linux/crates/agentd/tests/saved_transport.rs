@@ -40,6 +40,7 @@ fn saved_with_bastion(host: &str, bastion_port: u16) -> SavedConnection {
         driver_id: "postgres".into(),
         host: host.into(),
         port: 5432,
+        socket_dir: None,
         database: "warehouse".into(),
         username: "reader".into(),
         use_tls: false,

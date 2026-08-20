@@ -1,5 +1,5 @@
-//! Headless TablePro agent daemon. Serves MCP over stdio or loopback HTTP
-//! with a required policy file and no GTK dependency.
+//! Headless TablePro agent process. Serves MCP on demand over stdio with a
+//! required policy file and no GTK dependency.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -20,7 +20,7 @@ use drivers_redis::RedisDriver;
 use drivers_sqlite::SqliteDriver;
 use tablepro_agentd::DaemonProvider;
 use tablepro_core::DriverRegistry;
-use tablepro_mcp::{McpBridge, McpServerConfig, TokenPermissions, TokenStore, serve_stdio, serve_streamable_http};
+use tablepro_mcp::{McpBridge, TokenPermissions, TokenStore, serve_stdio};
 use tablepro_policy::{ApprovalOutcome, ApprovalRequest, ApprovalSink, AuditState, DenyApprovalSink, load_from_path};
 use tablepro_storage::{AuditJournal, SavedConnection, load_connections};
 use uuid::Uuid;
@@ -32,14 +32,6 @@ struct Args {
     #[arg(long)]
     policy: PathBuf,
 
-    /// Transport: stdio (default) or http.
-    #[arg(long, default_value = "stdio")]
-    transport: Transport,
-
-    /// HTTP bind port (loopback only).
-    #[arg(long, default_value_t = 17432)]
-    port: u16,
-
     /// Approval strategy when policy requires approval.
     #[arg(long, default_value = "deny")]
     approval: ApprovalMode,
@@ -50,12 +42,6 @@ struct Args {
 
     #[arg(long, requires = "issue_token")]
     connection: Vec<Uuid>,
-}
-
-#[derive(Clone, Debug, ValueEnum)]
-enum Transport {
-    Stdio,
-    Http,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -162,19 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     let bridge = Arc::new(McpBridge::new(provider, tokens));
 
-    match args.transport {
-        Transport::Stdio => serve_stdio(bridge).await?,
-        Transport::Http => {
-            serve_streamable_http(
-                bridge,
-                McpServerConfig {
-                    bind_host: "127.0.0.1".into(),
-                    bind_port: args.port,
-                },
-            )
-            .await?;
-        }
-    }
+    serve_stdio(bridge).await?;
     Ok(())
 }
 
@@ -190,6 +164,7 @@ mod tests {
             driver_id: "postgres".into(),
             host: "localhost".into(),
             port: 5432,
+            socket_dir: None,
             database: "postgres".into(),
             username: "postgres".into(),
             use_tls: false,

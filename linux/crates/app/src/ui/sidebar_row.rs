@@ -10,6 +10,7 @@ use tablepro_core::TableInfo;
 #[derive(Debug)]
 pub struct SidebarRow {
     pub info: TableInfo,
+    open_button: gtk::Button,
     /// The eagerly-parented context-menu popover. Held on the model
     /// so `shutdown` can `unparent()` it before the row's root widget
     /// is finalized — without this, GTK warns
@@ -20,6 +21,7 @@ pub struct SidebarRow {
 
 #[derive(Debug)]
 pub enum SidebarRowMsg {
+    Open,
     OpenInNewTab,
     EditStructure,
     ShowCreateTable,
@@ -28,24 +30,40 @@ pub enum SidebarRowMsg {
 
 #[derive(Debug)]
 pub enum SidebarRowOutput {
+    Open {
+        schema: Option<String>,
+        name: String,
+    },
     /// Ctrl+click or right-click "Open in new tab" — App always appends a
     /// new tab even if the same table is already open. Plain click /
     /// Enter activation does NOT flow through here; it's handled at the
     /// parent ListBox via the `row-activated` signal, which is the only
     /// GTK signal that fires for both mouse and keyboard activation.
-    OpenInNewTab { schema: Option<String>, name: String },
+    OpenInNewTab {
+        schema: Option<String>,
+        name: String,
+    },
     /// Right-click "Edit Structure" → opens an Edit-mode Structure tab
     /// for this table.
-    EditStructure { schema: Option<String>, name: String },
+    EditStructure {
+        schema: Option<String>,
+        name: String,
+    },
     /// Right-click "Show CREATE TABLE" → App synthesises the full
     /// CREATE statement (columns + indexes + foreign keys) and opens
     /// it in a fresh editor tab. Useful for schema export, sharing,
     /// or just reading the canonical DDL without going through pg_dump.
-    ShowCreateTable { schema: Option<String>, name: String },
+    ShowCreateTable {
+        schema: Option<String>,
+        name: String,
+    },
     /// Right-click "Drop Table…" → App presents the AdwAlertDialog
     /// confirmation; on confirm runs DROP TABLE and closes any open
     /// tabs for the dropped table.
-    DropTable { schema: Option<String>, name: String },
+    DropTable {
+        schema: Option<String>,
+        name: String,
+    },
 }
 
 #[relm4::factory(pub)]
@@ -98,12 +116,26 @@ impl FactoryComponent for SidebarRow {
                     set_hexpand: true,
                     set_ellipsize: pango::EllipsizeMode::End,
                 },
+
+                append: &self.open_button,
             },
         }
     }
 
     fn init_model(info: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
-        Self { info, popover: None }
+        let open_label = crate::tr!("Open {name}").replace("{name}", &info.name);
+        let open_button = gtk::Button::builder()
+            .icon_name("go-next-symbolic")
+            .tooltip_text(&open_label)
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .build();
+        open_button.update_property(&[gtk::accessible::Property::Label(&open_label)]);
+        Self {
+            info,
+            open_button,
+            popover: None,
+        }
     }
 
     fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
@@ -125,6 +157,9 @@ impl FactoryComponent for SidebarRow {
         sender: FactorySender<Self>,
     ) -> Self::Widgets {
         let widgets = view_output!();
+        let sender_for_open_button = sender.clone();
+        self.open_button
+            .connect_clicked(move |_| sender_for_open_button.input(SidebarRowMsg::Open));
 
         // Tooltip surfaces the fully-qualified name (`schema.table`)
         // for multi-schema connections so the user can disambiguate
@@ -260,6 +295,12 @@ impl FactoryComponent for SidebarRow {
             "input"
         );
         match msg {
+            SidebarRowMsg::Open => {
+                let _ = sender.output(SidebarRowOutput::Open {
+                    schema: self.info.schema.clone(),
+                    name: self.info.name.clone(),
+                });
+            }
             SidebarRowMsg::OpenInNewTab => {
                 let _ = sender.output(SidebarRowOutput::OpenInNewTab {
                     schema: self.info.schema.clone(),

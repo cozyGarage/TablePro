@@ -18,7 +18,7 @@ linux/
 │   ├── release-tests/       deterministic release checks against the PostgreSQL fixture
 │   └── drivers/             one crate per database engine
 ├── tests/fixtures/          container fixtures for release checks
-├── packaging/               AUR and Debian package files
+├── packaging/               internal Arch RC and development Debian files
 ├── flatpak/                 later Flatpak packaging work
 └── scripts/                 local checks, integration tests, and package helpers
 ```
@@ -130,4 +130,4 @@ CI runs GTK checks in an Ubuntu 25.10 container because the selected libadwaita 
 - Drivers are statically linked.
 - There is no embedded browser UI.
 - There is no in-process user scripting runtime.
-- AUR and Omarchy are the first packaging target. Flatpak publication comes later.
+- An internal Arch package is the first release target. Public AUR/Omarchy and Flatpak publication come later.

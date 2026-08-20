@@ -37,6 +37,10 @@ impl DatabaseDriver for PgDriver {
         Some(format!(".s.PGSQL.{service_port}"))
     }
 
+    fn supports_local_socket(&self) -> bool {
+        true
+    }
+
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
         use tablepro_core::TlsMode;
         let mut pg_opts = match opts.transport() {
@@ -45,6 +49,7 @@ impl DatabaseDriver for PgDriver {
                 directory,
                 identity_host,
                 identity_port,
+                ..
             } => PgConnectOptions::new()
                 .host(identity_host)
                 .port(identity_port)

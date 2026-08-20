@@ -1,12 +1,12 @@
 # TablePro Linux roadmap
 
-Last audited: 2026-08-18
+Last audited: 2026-08-20
 
 The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Linux capability backlog. This file is the concise status view.
 
 ## Current state
 
-TablePro Linux is a substantial GTK4/libadwaita database client, not a prototype. Its core daily-driver workflows are implemented. Production approval, fail-closed audit, PostgreSQL cancellation, and PostgreSQL TLS, SSH, lock, and reconnect behavior are release-verified locally. What still blocks a trusted release is external confirmation in hosted CI, the installed GTK soak, and packaging verification.
+TablePro Linux is a substantial GTK4/libadwaita database client, not a prototype. Its core daily-driver workflows are implemented. Production approval, fail-closed audit, PostgreSQL cancellation, and PostgreSQL TLS, SSH, lock, and reconnect behavior are release-verified locally. Exclusive connection switching, deterministic PostgreSQL ordering, direct local sockets, the internal Arch recipe, and a required GTK job are implemented in the current candidate. What still blocks an RC is exact-commit CI, 30/30 GTK soak attempts, and installed-package verification.
 
 Every claim below states whether it is implemented, integrated, or release-verified. A feature with unit tests only is never described as verified.
 
@@ -32,11 +32,12 @@ Status terms:
 | SSH and jump chains | Integrated | A verifying PostgreSQL connection forwards through a private Unix socket and is release-verified, headlessly as well as in the GUI; jump chains are JSON-only in the current GTK form |
 | TLS modes | Partial | Release-verified on PostgreSQL, including `VerifyFull` through SSH. Release-verified on MySQL, ClickHouse, MongoDB, and Redis through the driver TLS fixture. Mapped but untested on SQL Server, which also cannot name a certificate authority. Saved connections carry a certificate authority. See [docs/connections.md](docs/connections.md) |
 | Query history | Implemented | MCP access must be isolated before being re-exposed |
-| CSV/JSON export | Implemented | CSV streams table pages from the exporting tab's own connection; Parquet is unsupported |
+| CSV/JSON export | Implemented | GUI CSV and JSON export the loaded page only; full-table snapshot streaming and Parquet are deferred |
 | Activity and EXPLAIN | Implemented | Administrative classification and numeric session-ID validation are covered |
 | Policy, MCP, and agentd | Integrated | Approval and audit failures deny governed operations; read-only denial is release-verified against PostgreSQL; the GUI and agentd share one connection transport, release-verified through the fixture bastion |
 | Audit journal | Integrated | Durable intent/outcome records, recovery, private mode, and cross-process locking are locally verified |
-| AUR, Debian, Flatpak | Scaffolded | Not release-verified or ready for a public stable package |
+| Internal Arch RC | Implemented | Immutable-commit/checksum recipe exists; install, upgrade, rollback, and Wayland verification remain |
+| Debian, Flatpak, AUR | Scaffolded | Not release targets and not ready for public publication |
 | i18n and accessibility | Infrastructure | English strings/checklist exist; end-user verification is incomplete |
 
 ## Active phases
@@ -99,7 +100,7 @@ The fixture runs from `./scripts/test-postgres-release.sh` and in the `postgres-
 - [x] Installed GTK approve-once prompts again for the next operation
 - [x] Installed GTK audit failure cannot be approved around
 
-Phase 4 is implemented and locally release-verified. The installed suite remains non-blocking in CI until it completes 30 retry-free scheduled runs.
+Phase 4 has a required PR smoke job and a separate daily five-attempt soak. Promotion still requires 30 consecutive retry-free attempts across at least six workflow runs.
 
 ### 5: Documentation and capability tracking
 
@@ -128,7 +129,9 @@ Prioritize real workflows: Redshift and CockroachDB profiles, Trino, Snowflake, 
 
 ### 8: Identity and packaging
 
-Finalize the product name, repository, and application ID before publishing. AUR/Omarchy is first; Flatpak follows after sandbox and update behavior are verified.
+Promote the internal Arch package only after its installed-package and soak
+gates pass. Finalize the product name, repository, and application ID before
+any later AUR/Omarchy or Flatpak publication.
 
 ### 9: Linux-only repository extraction
 
@@ -142,4 +145,4 @@ The repository extraction completed on 2026-08-17. Product planning now follows 
 
 ## Next implementation target
 
-Phase 3 is release-verified locally. The remaining gates are the hosted `postgres-release` job and the Phase 4 GTK soak. After those, Phase 5 documentation cleanup and Phase 6 editor productivity work follow.
+The immediate target is the internal Arch RC: run the exact-commit hosted jobs, accumulate the Phase 4 soak ledger, and verify install/upgrade/rollback on Wayland. Full-table snapshot export and PostgreSQL object depth follow; new drivers do not.

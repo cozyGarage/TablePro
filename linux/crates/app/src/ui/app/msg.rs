@@ -7,10 +7,9 @@ use super::OpenMode;
 #[derive(Debug)]
 pub enum AppMsg {
     OpenConnect,
-    Connected {
-        tables: Vec<TableInfo>,
-        driver_id: String,
-    },
+    ConnectionPrepared(Box<crate::services::connection_service::PreparedConnection>),
+    ConnectionPrepareFailed(String),
+    ConnectionSwitchDecision(super::types::SwitchDecision),
     DialogClosed,
     SelectTable {
         schema: Option<String>,

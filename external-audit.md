@@ -2,7 +2,7 @@
 
 This file preserves an external review that helped shape the Linux plan. It is advisory and contains historical repository assumptions. `PLAN.md`, `linux/ROADMAP.md`, current code, and current test evidence are authoritative. Do not copy external architecture or source without checking the Linux crate, policy, audit, and GTK boundaries.
 
-Useful recommendations already reflected in the active plan include schema-aware completion, SQL favorites, file workflows, connection organization, true result streaming, measured release optimization, PostgreSQL TLS over SSH verification, targeted GTK safety tests, and AUR-first packaging.
+Useful recommendations already reflected in the active plan include schema-aware completion, SQL favorites, file workflows, connection organization, true result streaming, measured release optimization, PostgreSQL TLS over SSH verification, targeted GTK safety tests, and internal-Arch-first packaging.
 
 ## Executive Summary
 
@@ -83,7 +83,7 @@ There is also a strategic tension you should decide on consciously: the repo car
 
 **Phase 3 — Data workflows (weeks 9–13).** CSV/JSON import, SQL dump export, true streaming for large results (drop the 1M-row materialization), views/materialized views/routines in the sidebar, PG/MySQL users & roles, `pg_dump`/`pg_restore`.
 
-**Phase 4 — Release gate (weeks 13–16).** Resolve PG `VerifyFull` over SSH (the plan lists the options: sqlx API, small patch, or supplying the stream), write the three GTK safety tests, run the Docker release fixture, ship AUR first, then Flatpak with offline Cargo sources. Only now does the app become something you'd hand to another person.
+**Phase 4 — Release gate (weeks 13–16).** Resolve PG `VerifyFull` over SSH (the plan lists the options: sqlx API, small patch, or supplying the stream), write the GTK safety tests, run the Docker release fixture, prove an internal Arch RC, then consider public packaging with offline Cargo sources. Only now does the app become something you'd hand to another person.
 
 ### **Corrected brief for your research agent**
 

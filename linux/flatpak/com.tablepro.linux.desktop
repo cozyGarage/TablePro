@@ -2,7 +2,7 @@
 Name=TablePro
 GenericName=Database Client
 Comment=Native Linux database client
-Exec=tablepro-app
+Exec=tablepro
 Icon=com.tablepro.linux
 Terminal=false
 Type=Application

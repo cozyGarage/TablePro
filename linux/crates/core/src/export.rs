@@ -33,7 +33,11 @@ pub fn write_csv_row(w: &mut impl Write, row: &[Value]) -> io::Result<()> {
     Ok(())
 }
 
-/// Stream an entire table to CSV by paging through `fetch_rows`.
+/// Legacy best-effort full-table CSV paging helper.
+///
+/// This does not establish a database snapshot or stable row order. It is not
+/// used by the RC GUI; callers must provide those guarantees themselves before
+/// presenting its output as a consistent full-table export.
 /// Returns the number of data rows written.
 pub async fn stream_table_to_csv(
     conn: &dyn Connection,
@@ -69,7 +73,7 @@ pub async fn stream_table_to_csv(
 }
 
 /// Stream rows from an arbitrary SELECT by re-running with LIMIT/OFFSET
-/// pages. Prefer [`stream_table_to_csv`] for table browse exports.
+/// pages. The RC browse UI uses these helpers for its loaded-page export.
 pub async fn stream_query_to_csv(
     conn: &dyn Connection,
     driver_id: &str,

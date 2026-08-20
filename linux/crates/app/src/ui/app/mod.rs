@@ -35,7 +35,7 @@ use super::welcome_view::{WelcomeView, WelcomeViewInit, WelcomeViewOutput};
 use crate::services::database_service::ConnectionHealth;
 
 pub use msg::AppMsg;
-use types::{CLOSED_TABS_CAPACITY, ExportFormat, StatusKind};
+use types::{CLOSED_TABS_CAPACITY, ConnectionTransition, ExportFormat, StatusKind, SwitchDecision};
 pub use types::{ClosedTabDescriptor, EditorTabSlot, OpenMode, StructureTabSlot, TableTabSlot, WorkspaceTab};
 
 /// Decrement a tab's pending-save counter in the close-after-save map.
@@ -117,6 +117,15 @@ pub struct App {
     default_page_size: u64,
     saved_connections: Vec<SavedConnection>,
     connected: bool,
+    /// Serialized connection-switch state. The candidate is fully validated
+    /// before it can replace the active connection.
+    connection_transition: ConnectionTransition,
+    prepared_connection: Option<crate::services::connection_service::PreparedConnection>,
+    switch_saves_pending: std::collections::HashMap<Uuid, u32>,
+    /// Audit safety state captured before cancelling running work for a
+    /// connection switch. If cancellation makes a previously safe state
+    /// ambiguous, the candidate is discarded and the old workspace remains.
+    switch_cancel_audit_was_disabled: Option<bool>,
     /// Tabs the user picked "Save" on in a close-confirmation dialog,
     /// counted by remaining saves before the close fires. A Table tab
     /// with both browse-dirty AND structure-dirty dispatches two saves
@@ -567,6 +576,11 @@ impl SimpleComponent for App {
                     .build(),
             )
             .forward(sender.input_sender(), |out| match out {
+                SidebarRowOutput::Open { schema, name } => AppMsg::SelectTable {
+                    schema,
+                    name,
+                    open_mode: OpenMode::SwitchOrAppend,
+                },
                 // Plain click + Enter activation route through the parent
                 // ListBox's `row-activated` signal (wired below), which is
                 // the only signal that fires for both mouse and keyboard.
@@ -867,6 +881,10 @@ impl SimpleComponent for App {
             default_page_size: crate::services::preferences::load().default_page_size,
             saved_connections: Vec::new(),
             connected: false,
+            connection_transition: ConnectionTransition::Idle,
+            prepared_connection: None,
+            switch_saves_pending: std::collections::HashMap::new(),
+            switch_cancel_audit_was_disabled: None,
             close_after_save: close_after_save_handle,
             close_window_after_save: close_window_after_save_handle,
             in_flight_saves: in_flight_saves_handle,
@@ -919,16 +937,18 @@ impl SimpleComponent for App {
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
             AppMsg::OpenConnect => self.on_open_connect(sender),
-            AppMsg::Connected { tables, driver_id } => self.on_connected(tables, driver_id, sender),
+            AppMsg::ConnectionPrepared(prepared) => self.on_connection_prepared(prepared, sender),
+            AppMsg::ConnectionPrepareFailed(message) => self.on_connection_prepare_failed(message),
+            AppMsg::ConnectionSwitchDecision(decision) => self.on_connection_switch_decision(decision, sender),
             AppMsg::Disconnect => self.on_disconnect(sender),
             AppMsg::ForceDisconnect => self.do_disconnect(sender),
-            AppMsg::DialogClosed => self.dialog = None,
+            AppMsg::DialogClosed => self.on_connect_dialog_closed(),
             AppMsg::SelectTable {
                 schema,
                 name,
                 open_mode,
             } => self.on_select_table(schema, name, open_mode, sender),
-            AppMsg::ColumnsLoaded(tab_id, columns) => self.on_browse_columns_loaded(tab_id, columns),
+            AppMsg::ColumnsLoaded(tab_id, columns) => self.on_browse_columns_loaded(tab_id, columns, sender),
             AppMsg::RowsLoaded(tab_id, offset, result) => self.on_browse_rows_loaded(tab_id, offset, result),
             AppMsg::LoadFailed(tab_id, msg) => self.on_browse_load_failed(tab_id, msg),
             AppMsg::RowCountLoaded(tab_id, count) => self.on_browse_row_count_loaded(tab_id, count),
@@ -973,6 +993,7 @@ impl SimpleComponent for App {
                     self.close_window_after_save.set(false);
                     self.window.close();
                 }
+                self.connection_switch_save_succeeded(tab_id, sender);
             }
             AppMsg::SaveFailedForTab(tab_id, message) => {
                 self.set_row_op_in_flight(false);
@@ -983,6 +1004,7 @@ impl SimpleComponent for App {
                 self.close_after_save.borrow_mut().remove(&tab_id);
                 self.close_window_after_save.set(false);
                 self.dispatch_to_tab(tab_id, BrowseTabInput::SaveFailed(message));
+                self.connection_switch_save_failed();
             }
             AppMsg::FlashErrorRowForTab(tab_id, source) => {
                 self.dispatch_to_tab(tab_id, BrowseTabInput::FlashErrorRow(source));
@@ -1029,9 +1051,13 @@ impl SimpleComponent for App {
             }
             AppMsg::SaveActiveStructureTabById(id) => self.save_structure_tab_by_id(id, sender),
             AppMsg::StructureSaveCompleted { tab_id, new_table_name } => {
-                self.on_structure_save_completed(tab_id, new_table_name, sender)
+                self.on_structure_save_completed(tab_id, new_table_name, sender.clone());
+                self.connection_switch_save_succeeded(tab_id, sender);
             }
-            AppMsg::StructureSaveFailed(tab_id, message) => self.on_structure_save_failed(tab_id, message),
+            AppMsg::StructureSaveFailed(tab_id, message) => {
+                self.on_structure_save_failed(tab_id, message);
+                self.connection_switch_save_failed();
+            }
             AppMsg::FetchStructureData { tab_id } => self.on_fetch_structure_data(tab_id, sender),
             AppMsg::StructureDataLoaded {
                 tab_id,
@@ -1050,7 +1076,10 @@ impl SimpleComponent for App {
                 self.on_connections_loaded(&conns, sender);
             }
             AppMsg::NewEditorTab => self.append_editor_tab(None, sender),
-            AppMsg::EditorTabRunStateChanged(id, running) => self.on_editor_tab_run_state_changed(id, running),
+            AppMsg::EditorTabRunStateChanged(id, running) => {
+                self.on_editor_tab_run_state_changed(id, running);
+                self.continue_connection_switch(sender);
+            }
             AppMsg::EditorTabQueryChanged(id, text) => self.on_editor_tab_query_changed(id, text),
             AppMsg::EditorNeedsColumns(tables) => self.on_editor_needs_columns(tables, sender),
             AppMsg::SchemaColumnsFetched(table, columns) => self.on_schema_columns_fetched(table, columns),

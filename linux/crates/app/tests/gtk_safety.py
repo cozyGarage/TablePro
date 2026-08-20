@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import ctypes
+import csv
 import json
 import os
 import shutil
@@ -15,6 +16,8 @@ import pyatspi
 
 APP_NAME = "TablePro"
 CONNECTION_NAME = "Safety SQLite"
+CONNECTION_B_NAME = "Safety SQLite B"
+BROKEN_CONNECTION_NAME = "Broken SQLite"
 WAIT_SECONDS = 15
 POLL_SECONDS = 0.05
 SETTLE_SECONDS = 3.0
@@ -22,7 +25,11 @@ SETTLE_SECONDS = 3.0
 
 def descendants(node):
     yield node
-    for child in node:
+    try:
+        children = list(node)
+    except Exception:
+        return
+    for child in children:
         yield from descendants(child)
 
 
@@ -50,43 +57,46 @@ def application_node():
     return None
 
 
+def desktop_applications():
+    return list(pyatspi.Registry.getDesktop(0))
+
+
 def find_node(name=None, role=None):
-    application = application_node()
-    if application is None:
-        return None
-    for node in descendants(application):
-        if name is not None and node_name(node) != name:
-            continue
-        if role is not None and node_role(node) != role:
-            continue
-        return node
+    for application in desktop_applications():
+        for node in descendants(application):
+            if name is not None and node_name(node) != name:
+                continue
+            if role is not None and node_role(node) != role:
+                continue
+            return node
     return None
 
 
 def accessible_snapshot():
-    application = application_node()
-    if application is None:
+    applications = desktop_applications()
+    if not applications:
         return "application unavailable"
     entries = []
-    for node in descendants(application):
-        name = node_name(node)
-        if not name:
-            continue
-        try:
-            role_name = node.getRoleName()
-        except Exception:
-            role_name = "unknown"
-        try:
-            extents = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
-            bounds = f" [{extents.x},{extents.y} {extents.width}x{extents.height}]"
-        except Exception:
-            bounds = ""
-        try:
-            action = node.queryAction()
-            actions = f" actions={[action.getName(index) for index in range(action.nActions)]}"
-        except Exception:
-            actions = ""
-        entries.append(f"{role_name}: {name}{bounds}{actions}")
+    for application in applications:
+        for node in descendants(application):
+            name = node_name(node)
+            if not name:
+                continue
+            try:
+                role_name = node.getRoleName()
+            except Exception:
+                role_name = "unknown"
+            try:
+                extents = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+                bounds = f" [{extents.x},{extents.y} {extents.width}x{extents.height}]"
+            except Exception:
+                bounds = ""
+            try:
+                action = node.queryAction()
+                actions = f" actions={[action.getName(index) for index in range(action.nActions)]}"
+            except Exception:
+                actions = ""
+            entries.append(f"{role_name}: {name}{bounds}{actions}")
     return "\n".join(entries)
 
 
@@ -117,48 +127,39 @@ def invoke(node):
             action = candidate.queryAction()
             for index in range(action.nActions):
                 action_name = action.getName(index).lower()
-                if action_name in {"click", "activate", "press", "toggle"} and action.doAction(index):
+                if action_name in {"click", "activate", "press", "toggle", "default.activate"} and action.doAction(index):
                     return
         except Exception:
             continue
-    for candidate in candidates:
-        if not node_is_focusable_button(candidate):
-            continue
-        try:
-            if not candidate.queryComponent().grabFocus():
-                continue
-        except Exception:
-            continue
-        if not wait_for_focus(candidate):
-            continue
-        pyatspi.Registry.generateKeyboardEvent(0, "Return", pyatspi.KEY_SYM)
-        return
     raise AssertionError(f"no invokable action for {node_name(node)!r}")
 
 
-def node_is_focusable_button(node):
-    if node_role(node) != pyatspi.ROLE_PUSH_BUTTON:
-        return False
-    try:
-        return node.getState().contains(pyatspi.STATE_FOCUSABLE)
-    except Exception:
-        return False
+def invoke_named_action_within(anchor_name, action_name):
+    anchor = wait_for_node(name=anchor_name, role=pyatspi.ROLE_LIST_ITEM)
+    for node in descendants(anchor):
+        if node_name(node) != action_name:
+            continue
+        invoke(node)
+        return
+    raise AssertionError(
+        f"no action {action_name!r} within {anchor_name!r}:\n{accessible_snapshot()}"
+    )
 
 
-def node_has_focus(node):
-    try:
-        return node.getState().contains(pyatspi.STATE_FOCUSED)
-    except Exception:
-        return False
-
-
-def wait_for_focus(node, timeout=2.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if node_has_focus(node):
-            return True
-        time.sleep(POLL_SECONDS)
-    return False
+def invoke_accessible_action(action_name):
+    applications = desktop_applications()
+    if not applications:
+        raise AssertionError("application unavailable")
+    for application in applications:
+        for node in descendants(application):
+            try:
+                actions = node.queryAction()
+                for index in range(actions.nActions):
+                    if actions.getName(index) == action_name and actions.doAction(index):
+                        return
+            except Exception:
+                continue
+    raise AssertionError(f"no accessible action {action_name!r}:\n{accessible_snapshot()}")
 
 
 def press_x11_key(name, modifiers=()):
@@ -313,8 +314,7 @@ def assert_database_count_stable(path, expected, seconds=SETTLE_SECONDS):
 def set_text_by_name(name, text, timeout=WAIT_SECONDS):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        application = application_node()
-        if application is not None:
+        for application in desktop_applications():
             for node in descendants(application):
                 if node_name(node) != name or node_role(node) != pyatspi.ROLE_TEXT:
                     continue
@@ -328,9 +328,34 @@ def set_text_by_name(name, text, timeout=WAIT_SECONDS):
     raise AssertionError(f"no editable text control named {name!r}:\n{accessible_snapshot()}")
 
 
+def set_visible_editable_within(anchor_name, anchor_role, text):
+    anchor = wait_for_node(name=anchor_name, role=anchor_role)
+    for node in descendants(anchor):
+        try:
+            extents = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+            if extents.width <= 1 or extents.height <= 1:
+                continue
+            editable = node.queryEditableText()
+            editable.setTextContents(text)
+            return
+        except Exception:
+            continue
+    raise AssertionError(f"no visible editable control within {anchor_name!r}:\n{accessible_snapshot()}")
+
+
 def database_ids(path):
     with sqlite3.connect(path) as connection:
         return [row[0] for row in connection.execute("SELECT id FROM safety_items ORDER BY id")]
+
+
+def database_tables(path):
+    with sqlite3.connect(path) as connection:
+        return {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+            )
+        }
 
 
 def write_fixture(base, audit_available=True, environment="prod"):
@@ -349,7 +374,10 @@ def write_fixture(base, audit_available=True, environment="prod"):
         data.write_text("audit unavailable", encoding="utf-8")
 
     database = base / "safety.sqlite"
+    database_b = base / "safety-b.sqlite"
     with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE safety_items (id INTEGER PRIMARY KEY)")
+    with sqlite3.connect(database_b) as connection:
         connection.execute("CREATE TABLE safety_items (id INTEGER PRIMARY KEY)")
 
     tablepro_config = config / "tablepro"
@@ -370,10 +398,50 @@ def write_fixture(base, audit_available=True, environment="prod"):
                 "read_only": False,
                 "auth_mode": "password",
                 "environment": environment,
+            },
+            {
+                "id": "66a8b513-d771-4fe7-8ee0-ec1099254cb1",
+                "name": CONNECTION_B_NAME,
+                "driver_id": "sqlite",
+                "host": "",
+                "port": 0,
+                "database": str(database_b),
+                "username": "",
+                "use_tls": False,
+                "tls_mode": "disabled",
+                "read_only": False,
+                "auth_mode": "password",
+                "environment": environment,
+            },
+            {
+                "id": "6ff0268f-84cc-44f5-aeb4-a5d7609fb0fc",
+                "name": BROKEN_CONNECTION_NAME,
+                "driver_id": "sqlite",
+                "host": "",
+                "port": 0,
+                "database": str(base / "missing" / "broken.sqlite"),
+                "username": "",
+                "use_tls": False,
+                "tls_mode": "disabled",
+                "read_only": False,
+                "auth_mode": "password",
+                "environment": environment,
             }
         ],
     }
     (tablepro_config / "connections.json").write_text(json.dumps(connections), encoding="utf-8")
+    (tablepro_config / "preferences.json").write_text(
+        json.dumps(
+            {
+                "default_page_size": 100,
+                "confirm_destructive": True,
+                "editor_font_size": 12,
+                "history_retention_days": 30,
+                "query_timeout_secs": 60,
+            }
+        ),
+        encoding="utf-8",
+    )
 
     environment = os.environ.copy()
     environment.update(
@@ -427,7 +495,7 @@ def stop_application(process):
 
 
 def open_editor():
-    invoke(wait_for_node(name="Open connection", role=pyatspi.ROLE_PUSH_BUTTON))
+    invoke_named_action_within(CONNECTION_NAME, "Open connection")
     invoke(wait_for_node(name="Open SQL editor"))
     wait_for_node(name="Run", role=pyatspi.ROLE_PUSH_BUTTON)
 
@@ -454,8 +522,22 @@ def run_scenario(binary, scenario):
     except Exception as error:
         failure = error
     finally:
+        artifact_dir = None
+        if failure is not None and os.environ.get("TABLEPRO_GTK_ARTIFACT_DIR"):
+            artifact_dir = Path(os.environ["TABLEPRO_GTK_ARTIFACT_DIR"])
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            (artifact_dir / f"{scenario.__name__}-accessibility.txt").write_text(
+                accessible_snapshot(), encoding="utf-8"
+            )
+            if shutil.which("scrot"):
+                subprocess.run(
+                    ["scrot", str(artifact_dir / f"{scenario.__name__}.png")],
+                    check=False,
+                )
         if process is not None:
             stderr = stop_application(process)
+        if artifact_dir is not None:
+            (artifact_dir / f"{scenario.__name__}-stderr.txt").write_text(stderr, encoding="utf-8")
         shutil.rmtree(base, ignore_errors=True)
     if failure is not None:
         raise AssertionError(f"{failure}\napplication stderr:\n{stderr}") from failure
@@ -553,8 +635,7 @@ def favorite_round_trips_through_open_quickly(_database, base):
     press_x11_key("p", modifiers=["Control_L"])
     wait_for_node(name="smoke favorite")
     press_x11_text("smoke")
-    wait_for_node(name="smoke favorite")
-    press_x11_key("Return")
+    invoke_named_action_within("smoke favorite", "Open smoke favorite")
     wait_for_favorites(
         base,
         lambda favorites: any(item.get("last_used_at") for item in favorites),
@@ -565,19 +646,132 @@ def favorite_round_trips_through_open_quickly(_database, base):
 favorite_round_trips_through_open_quickly.environment = "local"
 
 
+def open_saved_connection(name):
+    invoke(wait_for_node(name="Open saved connection", role=pyatspi.ROLE_TOGGLE_BUTTON))
+    invoke_named_action_within(name, "Open connection")
+
+
+def successful_switch_keeps_database_ownership(database, base):
+    run_sql("CREATE TABLE ownership_old (id INTEGER PRIMARY KEY); INSERT INTO safety_items(id) VALUES (11)")
+    wait_for_database_count(database, 1)
+
+    open_saved_connection(CONNECTION_B_NAME)
+    wait_for_node(name=f"{CONNECTION_B_NAME} — TablePro", role=pyatspi.ROLE_FRAME)
+    invoke(wait_for_node(name="Open SQL editor"))
+    wait_for_node(name="Run", role=pyatspi.ROLE_PUSH_BUTTON)
+    run_sql("CREATE TABLE ownership_new (id INTEGER PRIMARY KEY); INSERT INTO safety_items(id) VALUES (22)")
+
+    database_b = base / "safety-b.sqlite"
+    wait_for_database_count(database_b, 1)
+    assert database_ids(database) == [11], f"old database changed after switch: {database_ids(database)}"
+    assert database_ids(database_b) == [22], f"new database did not receive the write: {database_ids(database_b)}"
+    assert "ownership_old" in database_tables(database)
+    assert "ownership_new" not in database_tables(database)
+    assert "ownership_new" in database_tables(database_b)
+    assert "ownership_old" not in database_tables(database_b)
+
+
+successful_switch_keeps_database_ownership.environment = "local"
+
+
+def failed_switch_preserves_the_old_workspace(database, _base):
+    open_saved_connection(BROKEN_CONNECTION_NAME)
+    wait_for_node(name="Connection failed")
+    invoke(wait_for_node(name="Close", role=pyatspi.ROLE_PUSH_BUTTON))
+    wait_for_node(name="Connection failed", present=False)
+
+    # The original editor remains attached to the original connection.
+    run_sql("INSERT INTO safety_items(id) VALUES (33)")
+    wait_for_database_count(database, 1)
+    assert database_ids(database) == [33]
+
+
+failed_switch_preserves_the_old_workspace.environment = "local"
+
+
+def running_query_is_cancelled_before_switch(database, base):
+    run_sql(
+        "WITH RECURSIVE counter(value) AS "
+        "(VALUES(0) UNION ALL SELECT value + 1 FROM counter WHERE value < 1000000000) "
+        "SELECT sum(value) FROM counter"
+    )
+    wait_for_node(name="Cancel", role=pyatspi.ROLE_PUSH_BUTTON)
+    open_saved_connection(CONNECTION_B_NAME)
+    invoke(wait_for_node(name="Cancel queries and switch", role=pyatspi.ROLE_PUSH_BUTTON))
+
+    wait_for_node(name=f"{CONNECTION_B_NAME} — TablePro", role=pyatspi.ROLE_FRAME)
+    invoke(wait_for_node(name="Open SQL editor"))
+    wait_for_node(name="Run", role=pyatspi.ROLE_PUSH_BUTTON)
+    run_sql("INSERT INTO safety_items(id) VALUES (44)")
+    database_b = base / "safety-b.sqlite"
+    wait_for_database_count(database_b, 1)
+    assert database_ids(database) == [], "the cancelled old query must not mutate its database"
+    assert database_ids(database_b) == [44]
+
+
+running_query_is_cancelled_before_switch.environment = "local"
+
+
+def current_page_csv_export_is_pk_ordered(database, base):
+    with sqlite3.connect(database) as connection:
+        connection.executemany(
+            "INSERT INTO safety_items(id) VALUES (?)",
+            ((identifier,) for identifier in range(150, 0, -1)),
+        )
+
+    invoke_named_action_within("safety_items", "Open safety_items")
+    wait_for_node(name="Rows 1 – 100")
+    invoke_accessible_action("win.export-csv")
+    wait_for_node(name="Export current page as CSV", role=pyatspi.ROLE_FILE_CHOOSER)
+    set_visible_editable_within(
+        "Export current page as CSV",
+        pyatspi.ROLE_FILE_CHOOSER,
+        str(base / "home" / "current-page.csv"),
+    )
+    invoke(wait_for_node(name="Save", role=pyatspi.ROLE_PUSH_BUTTON))
+
+    export = base / "home" / "current-page.csv"
+    deadline = time.monotonic() + WAIT_SECONDS
+    while time.monotonic() < deadline and not export.exists():
+        time.sleep(POLL_SECONDS)
+    if not export.exists():
+        raise AssertionError(f"current-page export was not written:\n{accessible_snapshot()}")
+    with export.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.reader(handle))
+    assert rows[0] == ["id"], f"unexpected CSV header: {rows[0]!r}"
+    exported_ids = [int(row[0]) for row in rows[1:]]
+    assert exported_ids == list(range(1, 101)), (
+        f"expected the first PK-ordered page only, found {len(exported_ids)} rows: "
+        f"{exported_ids[:5]}…{exported_ids[-5:]}"
+    )
+
+
+current_page_csv_export_is_pk_ordered.environment = "local"
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: gtk_safety.py /path/to/tablepro-app")
     binary = Path(sys.argv[1]).resolve()
     if not binary.is_file():
         raise SystemExit(f"application binary not found: {binary}")
-    for scenario in [
+    scenarios = [
         dismissed_approval_denies,
         approve_once_prompts_again,
         audit_failure_denies,
         named_parameter_binds_a_value,
         favorite_round_trips_through_open_quickly,
-    ]:
+        successful_switch_keeps_database_ownership,
+        failed_switch_preserves_the_old_workspace,
+        running_query_is_cancelled_before_switch,
+        current_page_csv_export_is_pk_ordered,
+    ]
+    selected = os.environ.get("TABLEPRO_GTK_SCENARIO")
+    if selected:
+        scenarios = [scenario for scenario in scenarios if scenario.__name__ == selected]
+        if not scenarios:
+            raise SystemExit(f"unknown GTK scenario: {selected}")
+    for scenario in scenarios:
         run_scenario(binary, scenario)
         print(f"passed: {scenario.__name__}")
 

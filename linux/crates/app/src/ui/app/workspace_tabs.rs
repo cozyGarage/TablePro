@@ -186,6 +186,7 @@ impl App {
                 controller: editor,
                 page: page.clone(),
                 query: String::new(),
+                running: false,
             };
             {
                 let mut tabs = workspace_tabs_for_create.borrow_mut();
@@ -520,6 +521,7 @@ impl App {
             controller: editor,
             page: page.clone(),
             query,
+            running: false,
         };
         self.workspace_tabs
             .borrow_mut()
@@ -823,12 +825,6 @@ impl App {
         Some((schema.map(str::to_owned), table.to_string()))
     }
 
-    pub(super) fn selected_browse_tab_connection(&self) -> Option<Uuid> {
-        let id = self.selected_browse_tab_id()?;
-        let tabs = self.workspace_tabs.borrow();
-        tabs.get(&id)?.browse_controller()?.model().connection_id()
-    }
-
     pub(super) fn sidebar_schemas_distinct(&self) -> usize {
         let schemas = self.sidebar_schemas.borrow();
         let distinct: std::collections::BTreeSet<&str> = schemas.iter().filter_map(|s| s.as_deref()).collect();
@@ -949,9 +945,17 @@ impl App {
     }
 
     pub(super) fn on_editor_tab_run_state_changed(&self, id: Uuid, running: bool) {
-        if let Some(WorkspaceTab::Editor(slot)) = self.workspace_tabs.borrow().get(&id) {
+        if let Some(WorkspaceTab::Editor(slot)) = self.workspace_tabs.borrow_mut().get_mut(&id) {
             slot.page.set_loading(running);
+            slot.running = running;
         }
+    }
+
+    pub(super) fn any_editor_running(&self) -> bool {
+        self.workspace_tabs
+            .borrow()
+            .values()
+            .any(|tab| matches!(tab, WorkspaceTab::Editor(slot) if slot.running))
     }
 
     pub(super) fn on_replace_active_tab_query(&mut self, text: String, sender: ComponentSender<Self>) {

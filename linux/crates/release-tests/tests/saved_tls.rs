@@ -16,6 +16,7 @@ fn saved(fixture: &Fixture, mode: TlsMode, root_cert: Option<PathBuf>) -> SavedC
         driver_id: "postgres".into(),
         host: fixture.proxy_host.clone(),
         port: fixture.proxy_port,
+        socket_dir: None,
         database: fixture.database.clone(),
         username: fixture.username.clone(),
         use_tls: mode.encrypts(),

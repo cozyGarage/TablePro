@@ -110,8 +110,11 @@ impl BrowseTab {
         // actions); they read the active tab's snapshot so the buttons
         // implicitly target this tab when this tab is active.
         let export_menu = gtk::gio::Menu::new();
-        export_menu.append(Some(&crate::tr!("Export as CSV…")), Some("win.export-csv"));
-        export_menu.append(Some(&crate::tr!("Export as JSON…")), Some("win.export-json"));
+        export_menu.append(Some(&crate::tr!("Export current page as CSV…")), Some("win.export-csv"));
+        export_menu.append(
+            Some(&crate::tr!("Export current page as JSON…")),
+            Some("win.export-json"),
+        );
         let export_button = gtk::MenuButton::builder()
             .icon_name("document-save-symbolic")
             .tooltip_text(crate::tr!("Export results"))

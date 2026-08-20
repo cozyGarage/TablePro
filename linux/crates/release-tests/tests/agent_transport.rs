@@ -21,6 +21,7 @@ fn verifying_options(fixture: &Fixture) -> tablepro_core::ConnectOptions {
         },
         auth_mode: AuthMode::Password,
         service_endpoint: None,
+        local_socket_dir: None,
         forwarded_socket_dir: None,
     }
 }

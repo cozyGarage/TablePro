@@ -339,10 +339,6 @@ impl BrowseTab {
         }
     }
 
-    pub fn connection_id(&self) -> Option<Uuid> {
-        self.connection_id
-    }
-
     pub fn schema(&self) -> Option<&str> {
         self.schema.as_deref()
     }
@@ -458,7 +454,7 @@ impl SimpleComponent for BrowseTab {
             .build();
         let no_pk_banner = adw::Banner::builder()
             .title(crate::tr!(
-                "This table has no primary key. Use the SQL editor to modify rows."
+                "This table has no primary key. Row order is not stable; use the SQL editor to modify rows."
             ))
             .revealed(false)
             .build();
@@ -783,11 +779,10 @@ impl SimpleComponent for BrowseTab {
             // run for the same mutation.
             crate::services::change_tracker::TrackerEvent::ChangedRows(keys) => BrowseTabInput::ChangedRows(keys),
         }));
-        // Trigger the initial fetches the moment the parent attaches us.
-        // The parent's forward closure wraps these in AppMsg::… with tab_id.
+        // Fetch metadata first. The parent starts count + row queries only
+        // after ColumnsLoaded, because deterministic ordering and typed
+        // filters depend on this schema information.
         let _ = sender.output(BrowseTabOutput::FetchColumns);
-        let _ = sender.output(BrowseTabOutput::FetchRowCount);
-        let _ = sender.output(BrowseTabOutput::FetchPage);
         ComponentParts { model, widgets: () }
     }
 

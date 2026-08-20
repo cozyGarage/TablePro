@@ -37,30 +37,22 @@ struct CountingConn {
     executes: Arc<AtomicUsize>,
     commits: Arc<AtomicUsize>,
 }
-
 struct BlockingWriteConn {
     dispatched: Arc<Notify>,
     release: Arc<Notify>,
 }
-
 struct AmbiguousWriteConn;
-
 struct ControlledWriteConn {
     outcome_unknown: bool,
 }
-
 struct TransactionQueryErrorConn;
-
 struct TransactionQueryErrorTx;
-
 struct QueryCountingConn {
     queries: Arc<AtomicUsize>,
 }
-
 struct QueryCountingTx {
     queries: Arc<AtomicUsize>,
 }
-
 struct AmbiguousCommitTx;
 
 #[async_trait]
@@ -327,6 +319,15 @@ impl Connection for ControlledWriteConn {
 
     async fn query(&self, _: &str) -> Result<QueryResult, DriverError> {
         Ok(empty_result())
+    }
+
+    async fn query_controlled(&self, _: &str, _: &OperationControl) -> Result<QueryResult, DriverError> {
+        if self.outcome_unknown {
+            return Err(DriverError::OperationOutcomeUnknown {
+                source: Box::new(DriverError::TimedOut),
+            });
+        }
+        Err(DriverError::TimedOut)
     }
 
     async fn execute(&self, _: &str) -> Result<ExecResult, DriverError> {
@@ -829,6 +830,36 @@ async fn controlled_unknown_outcome_records_unknown_and_poisons_state() {
 
     assert!(matches!(error, DriverError::OperationOutcomeUnknown { .. }));
     assert!(state.governed_writes_disabled());
+    let events = audit.events.lock().expect("event lock");
+    let outcome = events.last().expect("outcome event");
+    assert_eq!(outcome.terminal_status, AuditTerminalStatus::Unknown);
+    assert_eq!(outcome.error_category, Some(AuditErrorCategory::Unknown));
+}
+
+#[tokio::test]
+async fn controlled_read_unknown_outcome_does_not_poison_governed_writes() {
+    let state = Arc::new(AuditState::new());
+    let audit = Arc::new(SequenceAuditSink::new(vec![]));
+    let guard = PolicyGuard::new(
+        Arc::new(ControlledWriteConn { outcome_unknown: true }),
+        context(
+            Principal::human_gui(),
+            Environment::Prod,
+            PolicyConfig::default(),
+            Arc::new(AutoApproveSink),
+            audit.clone(),
+            state.clone(),
+        ),
+    );
+    let control = OperationControl::new(Default::default(), None);
+
+    let error = guard
+        .query_controlled("SELECT pg_sleep(30)", &control)
+        .await
+        .expect_err("unknown read outcome must surface");
+
+    assert!(matches!(error, DriverError::OperationOutcomeUnknown { .. }));
+    assert!(!state.governed_writes_disabled());
     let events = audit.events.lock().expect("event lock");
     let outcome = events.last().expect("outcome event");
     assert_eq!(outcome.terminal_status, AuditTerminalStatus::Unknown);

@@ -53,7 +53,11 @@ Include before and after screenshots for visible changes. Test both light and da
 
 ## Packaging
 
-AUR and Omarchy are the first packaging target. Test the recipe in `packaging/aur/PKGBUILD` when a change affects installed files, native dependencies, desktop integration, or launch behavior. Flatpak work is later and must not define the current release requirements.
+The internal Arch RC is the first packaging target. Test
+`packaging/arch/PKGBUILD` and `scripts/validate-arch-package.sh` when a change
+affects installed files, native dependencies, desktop integration, or launch
+behavior. Public AUR/Omarchy and Flatpak publication are deferred and must not
+define the current RC requirements.
 
 ## Commits and pull requests
 

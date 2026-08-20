@@ -6,7 +6,7 @@ use relm4::{adw, gtk};
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
-use tablepro_core::{AuthMode, ConnectOptions, DriverMaturity, DriverRegistry, Environment, TableInfo, TlsMode};
+use tablepro_core::{AuthMode, ConnectOptions, DriverMaturity, DriverRegistry, Environment, TlsMode};
 use tablepro_storage::{
     SavedConnection, SavedSshConfig, delete_password, save_connections, store_password, store_ssh_passphrase,
     store_ssh_password,
@@ -14,14 +14,17 @@ use tablepro_storage::{
 
 use super::ssh_section::{SshInputs, SshSecretToStore, SshSection};
 use crate::services::connection_service;
-use crate::services::database_service::{self, ReconnectParams};
+use crate::services::database_service::ReconnectParams;
 
 pub struct ConnectDialog {
     registry: Arc<DriverRegistry>,
     drivers: Vec<DriverEntry>,
     driver_combo: adw::ComboRow,
+    endpoint_combo: adw::ComboRow,
     host: adw::EntryRow,
     port: adw::SpinRow,
+    socket_dir: adw::EntryRow,
+    resolved_socket: adw::ActionRow,
     database: adw::EntryRow,
     username: adw::EntryRow,
     password: adw::PasswordEntryRow,
@@ -62,6 +65,7 @@ fn auth_mode_for_row(row: u32) -> AuthMode {
 struct AuthFormState {
     file_based: bool,
     supports_integrated: bool,
+    supports_local_socket: bool,
     selected: AuthMode,
 }
 
@@ -94,6 +98,7 @@ pub enum ConnectDialogInput {
     TlsModeChanged,
     SshAuthChanged,
     AuthModeChanged,
+    EndpointChanged,
     Submit,
     TestConnection,
     InputChanged,
@@ -102,14 +107,14 @@ pub enum ConnectDialogInput {
 
 #[derive(Debug)]
 pub enum ConnectDialogOutput {
-    Connected { tables: Vec<TableInfo>, driver_id: String },
+    Prepared(Box<connection_service::PreparedConnection>),
     Closed,
 }
 
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum ConnectDialogCmd {
-    Result(Result<(SavedConnection, Vec<TableInfo>), String>),
+    Result(Result<connection_service::PreparedConnection, String>),
     TestResult(Result<usize, String>),
 }
 
@@ -179,6 +184,16 @@ impl Component for ConnectDialog {
             sender_for_combo.input(ConnectDialogInput::DriverChanged(row.selected()));
         });
 
+        let endpoint_combo = adw::ComboRow::builder()
+            .title(crate::tr!("Endpoint"))
+            .subtitle(crate::tr!("Connect over the network or a local PostgreSQL socket"))
+            .model(&gtk::StringList::new(&["Network", "Unix socket"]))
+            .build();
+        let sender_for_endpoint = sender.clone();
+        endpoint_combo.connect_selected_notify(move |_| {
+            sender_for_endpoint.input(ConnectDialogInput::EndpointChanged);
+        });
+
         let host = adw::EntryRow::builder()
             .title(crate::tr!("Host"))
             .text("localhost")
@@ -188,6 +203,13 @@ impl Component for ConnectDialog {
         let port = adw::SpinRow::with_range(1.0, 65535.0, 1.0);
         port.set_title(&crate::tr!("Port"));
         port.set_value(5432.0);
+        let sender_for_port = sender.clone();
+        port.connect_value_notify(move |_| sender_for_port.input(ConnectDialogInput::InputChanged));
+        let socket_dir = adw::EntryRow::builder()
+            .title(crate::tr!("Socket directory"))
+            .text("/run/postgresql")
+            .build();
+        let resolved_socket = adw::ActionRow::builder().title(crate::tr!("Resolved socket")).build();
         let database = adw::EntryRow::builder()
             .title(crate::tr!("Database"))
             .text("postgres")
@@ -235,7 +257,7 @@ impl Component for ConnectDialog {
             sender_for_auth.input(ConnectDialogInput::SshAuthChanged);
         });
 
-        for entry in [&host, &database, &username] {
+        for entry in [&host, &socket_dir, &database, &username] {
             let s = sender.clone();
             entry.connect_changed(move |_| s.input(ConnectDialogInput::InputChanged));
         }
@@ -247,8 +269,11 @@ impl Component for ConnectDialog {
         // standard Adwaita section spacing & headers.
         let connection_group = adw::PreferencesGroup::builder().title(crate::tr!("Connection")).build();
         connection_group.add(&driver_combo);
+        connection_group.add(&endpoint_combo);
         connection_group.add(&host);
         connection_group.add(&port);
+        connection_group.add(&socket_dir);
+        connection_group.add(&resolved_socket);
         connection_group.add(&database);
 
         let auth_labels: Vec<String> = AUTH_MODE_ROWS.iter().map(|mode| auth_mode_label(*mode)).collect();
@@ -301,8 +326,11 @@ impl Component for ConnectDialog {
             registry: init.registry,
             drivers: drivers.clone(),
             driver_combo,
+            endpoint_combo,
             host,
             port,
+            socket_dir,
+            resolved_socket,
             database,
             username,
             password,
@@ -357,6 +385,10 @@ impl Component for ConnectDialog {
             ConnectDialogInput::TlsModeChanged => {
                 self.apply_tls_visibility();
             }
+            ConnectDialogInput::EndpointChanged => {
+                self.apply_form_state();
+                self.refresh_validity();
+            }
             ConnectDialogInput::SshToggled => {
                 self.refresh_validity();
             }
@@ -399,6 +431,8 @@ impl Component for ConnectDialog {
 
                 let label = if entry.id == "sqlite" {
                     opts.database.clone()
+                } else if let Some(directory) = &opts.local_socket_dir {
+                    format!("{}@{}", opts.username, directory.display())
                 } else if opts.auth_mode == AuthMode::Kerberos {
                     opts.host.clone()
                 } else {
@@ -493,12 +527,9 @@ impl Component for ConnectDialog {
     fn update_cmd(&mut self, msg: Self::CommandOutput, sender: ComponentSender<Self>, root: &Self::Root) {
         self.set_busy(BusyKind::None);
         match msg {
-            ConnectDialogCmd::Result(Ok((saved, tables))) => {
-                tracing::info!(driver = %saved.driver_id, table_count = tables.len(), "connected");
-                let _ = sender.output(ConnectDialogOutput::Connected {
-                    tables,
-                    driver_id: saved.driver_id,
-                });
+            ConnectDialogCmd::Result(Ok(prepared)) => {
+                tracing::info!(driver = %prepared.driver_id, table_count = prepared.tables.len(), "connection prepared");
+                let _ = sender.output(ConnectDialogOutput::Prepared(Box::new(prepared)));
                 root.close();
             }
             ConnectDialogCmd::Result(Err(e)) => {
@@ -522,13 +553,19 @@ impl ConnectDialog {
         let database_empty = self.database.text().trim().is_empty();
         toggle_error(&self.database, database_empty);
 
-        let host_required = !self.form.file_based;
+        let socket = self.uses_local_socket();
+        let host_required = !self.form.file_based && !socket;
         let host_empty = host_required && self.host.text().trim().is_empty();
         toggle_error(&self.host, host_empty);
 
-        let username_required = self.form.shows_credentials();
+        let username_required = self.form.shows_credentials() && !socket;
         let username_empty = username_required && self.username.text().trim().is_empty();
         toggle_error(&self.username, username_empty);
+        let socket_invalid = socket && !std::path::Path::new(self.socket_dir.text().as_str()).is_absolute();
+        toggle_error(&self.socket_dir, socket_invalid);
+        let resolved = std::path::Path::new(self.socket_dir.text().as_str())
+            .join(format!(".s.PGSQL.{}", self.port.value() as u16));
+        self.resolved_socket.set_subtitle(&resolved.display().to_string());
 
         let valid = self.is_form_valid();
         self.submit.set_sensitive(valid);
@@ -540,14 +577,17 @@ impl ConnectDialog {
             return false;
         }
         if !self.form.file_based {
-            if self.host.text().trim().is_empty() {
+            if !self.uses_local_socket() && self.host.text().trim().is_empty() {
                 return false;
             }
-            if self.form.shows_credentials() && self.username.text().trim().is_empty() {
+            if self.uses_local_socket() && !std::path::Path::new(self.socket_dir.text().as_str()).is_absolute() {
+                return false;
+            }
+            if self.form.shows_credentials() && !self.uses_local_socket() && self.username.text().trim().is_empty() {
                 return false;
             }
         }
-        if self.ssh.is_enabled() {
+        if !self.uses_local_socket() && self.ssh.is_enabled() {
             return self.ssh.collect().is_ok();
         }
         true
@@ -567,7 +607,7 @@ impl ConnectDialog {
     }
 
     fn tls_config_for(&self, driver: &dyn tablepro_core::DatabaseDriver) -> tablepro_core::TlsConfig {
-        let mode = if driver.is_file_based() {
+        let mode = if driver.is_file_based() || self.uses_local_socket() {
             TlsMode::Disabled
         } else {
             self.selected_tls_mode()
@@ -592,16 +632,22 @@ impl ConnectDialog {
     }
 
     fn apply_tls_visibility(&self) {
-        self.tls_root_cert
-            .set_visible(!self.form.file_based && self.selected_tls_mode().verifies_cert());
+        self.tls_root_cert.set_visible(
+            !self.form.file_based && !self.uses_local_socket() && self.selected_tls_mode().verifies_cert(),
+        );
     }
 
     fn apply_driver_form_visibility(&mut self, driver: &dyn tablepro_core::DatabaseDriver) {
         self.form.file_based = driver.is_file_based();
         self.form.supports_integrated = driver.supports_integrated_auth();
+        self.form.supports_local_socket = driver.supports_local_socket();
+        if !self.form.supports_local_socket {
+            self.endpoint_combo.set_selected(0);
+        }
         self.apply_form_state();
-        self.tls_root_cert
-            .set_visible(!driver.is_file_based() && self.selected_tls_mode().verifies_cert());
+        self.tls_root_cert.set_visible(
+            !driver.is_file_based() && !self.uses_local_socket() && self.selected_tls_mode().verifies_cert(),
+        );
         self.database.set_title(&if self.form.file_based {
             crate::tr!("File path")
         } else {
@@ -610,12 +656,24 @@ impl ConnectDialog {
     }
 
     fn apply_form_state(&self) {
-        let network = !self.form.file_based;
+        let socket = self.uses_local_socket();
+        let network = !self.form.file_based && !socket;
+        self.endpoint_combo
+            .set_visible(!self.form.file_based && self.form.supports_local_socket);
         self.host.set_visible(network);
-        self.port.set_visible(network);
+        self.port.set_visible(!self.form.file_based);
+        self.socket_dir.set_visible(socket);
+        self.resolved_socket.set_visible(socket);
         self.tls_mode.set_visible(network);
-        self.auth_group.set_visible(network);
+        self.auth_group.set_visible(!self.form.file_based);
         self.ssh.set_visible(network);
+        if socket {
+            self.tls_mode.set_selected(TlsMode::Disabled.index());
+            self.ssh.expander.set_enable_expansion(false);
+            self.password.set_title(&crate::tr!("Password (optional)"));
+        } else {
+            self.password.set_title(&crate::tr!("Password"));
+        }
         self.auth_combo.set_visible(self.form.shows_method());
         let credentials = self.form.shows_credentials();
         self.username.set_visible(credentials);
@@ -623,8 +681,15 @@ impl ConnectDialog {
     }
 
     fn collect_options(&self, driver: &dyn tablepro_core::DatabaseDriver) -> ConnectOptions {
+        let socket = self.uses_local_socket();
         let (username, password) = if self.form.shows_credentials() {
-            (self.username.text().to_string(), self.password.text().to_string())
+            let entered = self.username.text().trim().to_string();
+            let username = if socket && entered.is_empty() {
+                whoami::fallible::username().unwrap_or_default()
+            } else {
+                entered
+            };
+            (username, self.password.text().to_string())
         } else {
             (String::new(), String::new())
         };
@@ -637,8 +702,13 @@ impl ConnectDialog {
             tls: self.tls_config_for(driver),
             auth_mode: self.form.mode(),
             service_endpoint: None,
+            local_socket_dir: socket.then(|| std::path::PathBuf::from(self.socket_dir.text().as_str())),
             forwarded_socket_dir: None,
         }
+    }
+
+    fn uses_local_socket(&self) -> bool {
+        self.form.supports_local_socket && self.endpoint_combo.selected() == 1
     }
 
     fn refresh_driver_maturity_subtitle(&self) {
@@ -700,7 +770,7 @@ async fn run_connect(
     ssh: Option<SshInputs>,
     read_only: bool,
     environment: Environment,
-) -> Result<(SavedConnection, Vec<TableInfo>), String> {
+) -> Result<connection_service::PreparedConnection, String> {
     let stored_password: SecretString = opts.password.clone();
     let ssh_for_establish = ssh.as_ref().map(|s| vec![s.cfg.clone()]);
     let opts_clone = opts.clone();
@@ -723,6 +793,7 @@ async fn run_connect(
         driver_id: driver_id.clone(),
         host: opts_clone.host.clone(),
         port: opts_clone.port,
+        socket_dir: opts_clone.local_socket_dir.clone(),
         database: opts_clone.database.clone(),
         username: opts_clone.username.clone(),
         use_tls: tls_mode.encrypts(),
@@ -737,8 +808,25 @@ async fn run_connect(
 
     save_one(&saved).await.map_err(|e| format!("save: {e}"))?;
     match saved.auth_mode {
+        AuthMode::Password if stored_password.expose_secret().is_empty() => {
+            if let Err(error) = delete_password(saved.id).await {
+                rollback_saved_connection(existing.as_ref(), saved.id)
+                    .await
+                    .map_err(|rollback_error| {
+                        format!("delete obsolete stored password: {error}; restore saved connection: {rollback_error}")
+                    })?;
+                return Err(format!("delete obsolete stored password: {error}"));
+            }
+        }
         AuthMode::Password => {
-            let _ = store_password(saved.id, stored_password.expose_secret(), &label).await;
+            if let Err(error) = store_password(saved.id, stored_password.expose_secret(), &label).await {
+                rollback_saved_connection(existing.as_ref(), saved.id)
+                    .await
+                    .map_err(|rollback_error| {
+                        format!("store password: {error}; restore saved connection: {rollback_error}")
+                    })?;
+                return Err(format!("store password: {error}"));
+            }
         }
         AuthMode::Kerberos
             if existing
@@ -746,11 +834,11 @@ async fn run_connect(
                 .is_some_and(|connection| connection.auth_mode == AuthMode::Password) =>
         {
             if let Err(error) = delete_password(saved.id).await {
-                if let Some(previous) = &existing {
-                    save_one(previous)
-                        .await
-                        .map_err(|rollback_error| format!("restore saved connection: {rollback_error}"))?;
-                }
+                rollback_saved_connection(existing.as_ref(), saved.id)
+                    .await
+                    .map_err(|rollback_error| {
+                        format!("delete stored password: {error}; restore saved connection: {rollback_error}")
+                    })?;
                 return Err(format!("delete stored password: {error}"));
             }
         }
@@ -781,15 +869,31 @@ async fn run_connect(
         read_only,
         server_version,
     };
-    database_service::instance().add(saved.id, metadata, conn, tunnel, read_only, params);
-    Ok((saved, tables))
+    Ok(connection_service::PreparedConnection::new(
+        tables,
+        saved.driver_id.clone(),
+        metadata,
+        conn,
+        tunnel,
+        params,
+    ))
 }
 
 async fn save_one(connection: &SavedConnection) -> Result<(), tablepro_storage::StorageError> {
-    let mut existing = tablepro_storage::load_connections().await.unwrap_or_default();
+    let mut existing = tablepro_storage::load_connections().await?;
     existing.retain(|c| c.id != connection.id);
     existing.push(connection.clone());
     save_connections(&existing).await
+}
+
+async fn rollback_saved_connection(
+    previous: Option<&SavedConnection>,
+    id: Uuid,
+) -> Result<(), tablepro_storage::StorageError> {
+    match previous {
+        Some(connection) => save_one(connection).await,
+        None => tablepro_storage::delete_connection(id).await,
+    }
 }
 
 async fn find_existing(
@@ -830,7 +934,16 @@ fn matches_endpoint(
     if saved.driver_id != driver_id || saved.database != opts.database {
         return false;
     }
-    file_based || saved.host == opts.host && saved.port == opts.port && saved_ssh_matches(&saved.ssh, ssh)
+    if file_based {
+        return true;
+    }
+    match (&saved.socket_dir, &opts.local_socket_dir) {
+        (Some(saved_dir), Some(current_dir)) => {
+            saved_dir == current_dir && saved.port == opts.port && saved.ssh.is_none()
+        }
+        (None, None) => saved.host == opts.host && saved.port == opts.port && saved_ssh_matches(&saved.ssh, ssh),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -865,6 +978,7 @@ mod tests {
                 AuthFormState {
                     file_based: false,
                     supports_integrated: true,
+                    supports_local_socket: false,
                     selected: AuthMode::Password,
                 },
                 AuthMode::Password,
@@ -875,6 +989,7 @@ mod tests {
                 AuthFormState {
                     file_based: false,
                     supports_integrated: true,
+                    supports_local_socket: false,
                     selected: AuthMode::Kerberos,
                 },
                 AuthMode::Kerberos,
@@ -885,6 +1000,7 @@ mod tests {
                 AuthFormState {
                     file_based: false,
                     supports_integrated: false,
+                    supports_local_socket: false,
                     selected: AuthMode::Kerberos,
                 },
                 AuthMode::Password,
@@ -895,6 +1011,7 @@ mod tests {
                 AuthFormState {
                     file_based: true,
                     supports_integrated: true,
+                    supports_local_socket: false,
                     selected: AuthMode::Kerberos,
                 },
                 AuthMode::Password,
@@ -923,6 +1040,7 @@ mod tests {
             driver_id: driver_id.into(),
             host: "sql.corp.example".into(),
             port: 1433,
+            socket_dir: None,
             database: "sales".into(),
             username: username.into(),
             use_tls: false,
@@ -980,6 +1098,29 @@ mod tests {
             &entry,
             "mssql",
             &opts("", AuthMode::Kerberos),
+            false,
+            None
+        ));
+    }
+
+    #[test]
+    fn socket_entries_are_distinguished_from_network_entries() {
+        let mut entry = saved("postgres", "postgres", AuthMode::Password);
+        entry.port = 5432;
+        entry.socket_dir = Some(std::path::PathBuf::from("/run/postgresql"));
+        let socket_options = ConnectOptions {
+            port: 5432,
+            database: "sales".into(),
+            username: "postgres".into(),
+            local_socket_dir: Some(std::path::PathBuf::from("/run/postgresql")),
+            ..Default::default()
+        };
+
+        assert!(matches_existing(&entry, "postgres", &socket_options, false, None));
+        assert!(!matches_existing(
+            &entry,
+            "postgres",
+            &opts("postgres", AuthMode::Password),
             false,
             None
         ));

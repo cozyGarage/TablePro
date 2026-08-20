@@ -10,17 +10,17 @@
 - Hash-chained audit journal at `$XDG_DATA_HOME/tablepro/audit.jsonl`
 - Interactive `Connection::begin` transactions (PostgreSQL, MySQL, SQLite)
 - TLS modes including VerifyFull default for new TLS connections, with certificate hostname and authority failures reported as TLS errors
-- MCP bridge (stdio + loopback HTTP) with scoped tokens and rate limiting
-- Headless `tablepro-agentd` with required `--policy` and systemd user unit
+- MCP bridge (interactive-app loopback HTTP plus on-demand agentd stdio) with scoped tokens and rate limiting
+- Headless on-demand `tablepro-agentd` with required `--policy`
 - GTK approval dialog for policy `RequireApproval` decisions
 - Server activity SQL templates (sessions, locks, long-running, replication)
 - Example policy file and MSSQL in AppStream metainfo
 - SSH jump-host chains via nested `ssh.jump` in saved connections and `SshTunnel::open_chain`
 - Keyset pagination helper for browse Next past the OFFSET threshold when primary keys are known
-- Streaming CSV table export that pages rows instead of materializing the full set
+- Current-page CSV export with explicit non-snapshot semantics
 - EXPLAIN plan dialog from the SQL editor and main menu
 - Server version cached on connect and shown in the window subtitle
-- ClickHouse, Redis, DuckDB, MongoDB, and Oracle drivers (Oracle needs Instant Client)
+- ClickHouse, Redis, DuckDB, and MongoDB drivers; Oracle remains excluded until its optional implementation and fixture work
 - Preferences → MCP token pairing (libsecret + loopback endpoint)
 - Multi-window via New Window
 - Flathub submission notes and screenshot capture guide
@@ -39,6 +39,9 @@
 - Schema-aware editor completion that offers tables after FROM and JOIN, and the columns of the tables in the statement, including through table aliases
 - Saved query favorites in `favorites.json`, saved with Ctrl+D
 - Open Quickly (Ctrl+P) over favorites, open tabs, and saved connections
+- Direct PostgreSQL Unix-socket connections shared by GUI and agentd, with saved-path compatibility and a real socket fixture
+- Required GTK connection-isolation smoke plus a daily five-attempt retry-free soak workflow
+- Internal Arch RC packaging from an immutable commit archive and verified checksum
 
 ### Changed
 
@@ -57,6 +60,9 @@
 - Connect dialog TLS control is a mode picker (Disabled / Prefer / Require / Verify CA / Verify Full), defaulting to Verify Full for network drivers
 - Local and development human writes require audit by default; best-effort unaudited writes require an explicit policy setting
 - PostgreSQL query timeout and cancellation now wait within bounded deadlines for server confirmation before returning to GTK or MCP callers
+- Connection changes validate a candidate before exclusively replacing the old workspace; failed candidates and failed saves keep the old connection active
+- PostgreSQL browse pages resolve primary-key ordering before the first row fetch and append PK tie-breakers to user sorts
+- Public package metadata names only drivers that are actually shipped
 
 ### Fixed
 
@@ -69,7 +75,7 @@
 - Renaming a column in the structure editor applies the rename instead of failing, and the column's other edits apply to the new name
 - PostgreSQL foreign key ON DELETE and ON UPDATE actions are reported as they are defined instead of always reading as NO ACTION
 - Integer cells wider than 2^53 keep their exact value when edited instead of being rounded
-- CSV export reads from the connection that owns the table's tab instead of whichever connection is active
+- CSV export is limited to the loaded filtered page instead of silently paging an unordered changing table
 - ClickHouse integration tests connect over plain HTTP instead of default VerifyFull HTTPS
 - Flatpak CI bootstraps Rust 1.93 via rustup so the GNOME 47 SDK's older rust-stable extension is not required
 - MCP write preview and other `begin()` paths now run statements through PolicyGuard instead of a raw driver transaction
@@ -88,6 +94,7 @@
 ### Removed
 
 - Unused `Approve for session` approval outcome (no session-grant store existed)
+- Broken stdio-under-systemd agentd unit and generated Python bytecode tracked in the repository
 - MCP `search_query_history` until history can be connection-isolated, redacted, rate-limited, and audited
 
 ### Security

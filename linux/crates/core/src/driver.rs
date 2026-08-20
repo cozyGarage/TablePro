@@ -64,6 +64,10 @@ pub trait DatabaseDriver: Send + Sync {
         false
     }
 
+    fn supports_local_socket(&self) -> bool {
+        false
+    }
+
     /// File name a forwarded Unix socket must use for this driver to
     /// dial it while verifying TLS against the original service
     /// hostname. `None` means the driver has no socket transport and an

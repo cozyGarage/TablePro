@@ -36,15 +36,14 @@ done
 
 STAGE="$OUT/$PKG_NAME"
 rm -rf "$STAGE"
-install -Dm755 "$CARGO_TARGET_DIR/release/tablepro-app" "$STAGE/usr/bin/tablepro-app"
+install -Dm755 "$CARGO_TARGET_DIR/release/tablepro-app" "$STAGE/usr/bin/tablepro"
 install -Dm755 "$CARGO_TARGET_DIR/release/tablepro-agentd" "$STAGE/usr/bin/tablepro-agentd"
 install -Dm644 flatpak/com.tablepro.linux.desktop "$STAGE/usr/share/applications/com.tablepro.linux.desktop"
 install -Dm644 flatpak/com.tablepro.linux.metainfo.xml "$STAGE/usr/share/metainfo/com.tablepro.linux.metainfo.xml"
 install -Dm644 flatpak/icons/scalable/com.tablepro.linux.svg \
   "$STAGE/usr/share/icons/hicolor/scalable/apps/com.tablepro.linux.svg"
-install -Dm644 packaging/systemd/tablepro-agentd.service \
-  "$STAGE/usr/lib/systemd/user/tablepro-agentd.service"
 install -Dm644 packaging/policy.example.toml "$STAGE/usr/share/doc/tablepro/policy.example.toml"
+install -Dm644 LICENSE.md "$STAGE/usr/share/doc/tablepro/LICENSE.md"
 
 mkdir -p "$STAGE/DEBIAN"
 cat >"$STAGE/DEBIAN/control" <<EOF

@@ -128,6 +128,13 @@ impl DatabaseService {
         self.audit_available
     }
 
+    /// Whether a prior governed operation has an unresolved outcome.  The UI
+    /// uses this to stop a connection transition after cancelling running
+    /// work: switching databases must not hide a newly ambiguous write.
+    pub fn governed_writes_disabled(&self) -> bool {
+        self.audit_state.governed_writes_disabled()
+    }
+
     pub fn set_approval_sink(&self, sink: Arc<dyn tablepro_policy::ApprovalSink>) {
         *self.approval.lock().expect("database_service lock") = sink;
     }
@@ -138,7 +145,11 @@ impl DatabaseService {
         tracing::info!("policy reloaded");
     }
 
-    pub fn add(
+    /// Make a fully validated connection the only connection owned by this
+    /// application window. Callers must prepare the connection before this
+    /// method: activation itself is deliberately infallible and is the final
+    /// step of a connection switch.
+    pub fn activate_exclusive(
         &self,
         id: Uuid,
         metadata: ConnectionMetadata,
@@ -164,11 +175,13 @@ impl DatabaseService {
             cancel,
             _monitor: monitor,
         };
-        self.connections
-            .lock()
-            .expect("database_service lock")
-            .insert(id, entry);
-        *self.active.lock().expect("database_service lock") = Some(id);
+        let mut connections = self.connections.lock().expect("database_service lock");
+        for (_, previous) in connections.drain() {
+            previous.cancel.cancel();
+        }
+        connections.insert(id, entry);
+        let mut active = self.active.lock().expect("database_service lock");
+        *active = Some(id);
     }
 
     pub fn active_metadata(&self) -> Option<ConnectionMetadata> {
@@ -261,6 +274,7 @@ impl DatabaseService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tablepro_core::DatabaseDriver;
 
     #[test]
     fn instance_is_singleton() {
@@ -275,5 +289,40 @@ mod tests {
 
         assert!(!audit.available);
         assert!(audit.state.governed_writes_disabled());
+    }
+
+    #[tokio::test]
+    async fn exclusive_activation_removes_the_previous_connection() {
+        let service = DatabaseService::new();
+        let driver: Arc<dyn DatabaseDriver> = Arc::new(drivers_sqlite::SqliteDriver);
+
+        for (index, id) in [Uuid::new_v4(), Uuid::new_v4()].into_iter().enumerate() {
+            let options = ConnectOptions {
+                database: ":memory:".into(),
+                ..Default::default()
+            };
+            let connection = driver.connect(options.clone()).await.expect("sqlite connection");
+            service.activate_exclusive(
+                id,
+                ConnectionMetadata {
+                    id,
+                    name: format!("connection-{index}"),
+                    driver_id: "sqlite".into(),
+                    environment: Environment::Local,
+                    read_only: false,
+                    server_version: None,
+                },
+                connection,
+                None,
+                false,
+                ReconnectParams {
+                    driver: driver.clone(),
+                    opts: options,
+                    ssh: None,
+                },
+            );
+            assert_eq!(service.active_id(), Some(id));
+            assert_eq!(service.all_connections().len(), 1);
+        }
     }
 }

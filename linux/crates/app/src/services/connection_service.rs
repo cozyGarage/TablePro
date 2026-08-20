@@ -7,10 +7,66 @@ use tablepro_transport::TransportError;
 
 use super::database_service::{self, ConnectionMetadata, ReconnectParams};
 
-pub async fn open_saved(
-    registry: Arc<DriverRegistry>,
-    saved: SavedConnection,
-) -> Result<Vec<tablepro_core::TableInfo>, String> {
+/// A connection that has authenticated and completed its initial metadata
+/// query, but has not replaced the active application connection yet.
+/// Keeping preparation separate from activation makes failed switches leave
+/// the existing workspace and connection untouched.
+pub struct PreparedConnection {
+    pub tables: Vec<tablepro_core::TableInfo>,
+    pub driver_id: String,
+    id: uuid::Uuid,
+    metadata: ConnectionMetadata,
+    connection: Box<dyn Connection>,
+    tunnel: Option<SshTunnel>,
+    read_only: bool,
+    params: ReconnectParams,
+}
+
+impl std::fmt::Debug for PreparedConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedConnection")
+            .field("id", &self.id)
+            .field("driver_id", &self.driver_id)
+            .field("table_count", &self.tables.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PreparedConnection {
+    pub(crate) fn new(
+        tables: Vec<tablepro_core::TableInfo>,
+        driver_id: String,
+        metadata: ConnectionMetadata,
+        connection: Box<dyn Connection>,
+        tunnel: Option<SshTunnel>,
+        params: ReconnectParams,
+    ) -> Self {
+        Self {
+            tables,
+            driver_id,
+            id: metadata.id,
+            read_only: metadata.read_only,
+            metadata,
+            connection,
+            tunnel,
+            params,
+        }
+    }
+
+    pub fn activate(self) -> (Vec<tablepro_core::TableInfo>, String) {
+        database_service::instance().activate_exclusive(
+            self.id,
+            self.metadata,
+            self.connection,
+            self.tunnel,
+            self.read_only,
+            self.params,
+        );
+        (self.tables, self.driver_id)
+    }
+}
+
+pub async fn open_saved(registry: Arc<DriverRegistry>, saved: SavedConnection) -> Result<PreparedConnection, String> {
     let driver = registry
         .get(&saved.driver_id)
         .ok_or_else(|| format!("driver {} not registered", saved.driver_id))?;
@@ -37,8 +93,14 @@ pub async fn open_saved(
         opts,
         ssh: ssh_hops,
     };
-    database_service::instance().add(id, metadata, conn, tunnel, read_only, params);
-    Ok(tables)
+    Ok(PreparedConnection::new(
+        tables,
+        saved.driver_id,
+        metadata,
+        conn,
+        tunnel,
+        params,
+    ))
 }
 
 pub async fn establish(

@@ -333,6 +333,7 @@ impl RecordingProvider {
             driver_id: self.driver_id.clone(),
             host: "localhost".into(),
             port: 5432,
+            socket_dir: None,
             database: "stub".into(),
             username: "stub".into(),
             use_tls: false,

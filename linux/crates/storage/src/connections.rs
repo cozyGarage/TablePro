@@ -19,6 +19,10 @@ pub struct SavedConnection {
     pub driver_id: String,
     pub host: String,
     pub port: u16,
+    /// PostgreSQL local Unix-domain socket directory. Omitted for network
+    /// connections and legacy records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket_dir: Option<PathBuf>,
     pub database: String,
     pub username: String,
     /// Legacy boolean TLS flag. Prefer `tls_mode`. Kept for round-trip of
@@ -217,6 +221,7 @@ mod tests {
             driver_id: "postgres".into(),
             host: "localhost".into(),
             port: 5432,
+            socket_dir: None,
             database: "postgres".into(),
             username: "postgres".into(),
             use_tls: false,
@@ -246,6 +251,19 @@ mod tests {
         save_to(&path, &original).await.unwrap();
         let loaded = load_from(&path).await.unwrap();
         assert_eq!(original, loaded);
+    }
+
+    #[tokio::test]
+    async fn postgres_socket_directory_round_trips_without_a_version_bump() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let mut connection = sample_connection();
+        connection.socket_dir = Some(PathBuf::from("/run/postgresql"));
+        save_to(&path, std::slice::from_ref(&connection)).await.unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"version\": 1"));
+        assert_eq!(load_from(&path).await.unwrap(), vec![connection]);
     }
 
     #[tokio::test]
@@ -359,6 +377,7 @@ mod tests {
         tokio::fs::write(&path, legacy).await.unwrap();
         let loaded = load_from(&path).await.unwrap();
         assert_eq!(loaded.len(), 1);
+        assert!(loaded[0].socket_dir.is_none());
         assert!(loaded[0].ssh.is_none());
         assert_eq!(loaded[0].environment, Environment::Local);
         assert_eq!(loaded[0].effective_tls_mode(), TlsMode::Disabled);

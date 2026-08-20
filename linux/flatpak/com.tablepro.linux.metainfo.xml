@@ -8,14 +8,15 @@
   <description>
     <p>
       TablePro is a fast, native database client for Linux. It connects to
-      PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse, Redis, DuckDB,
-      MongoDB, and Oracle, and lets you browse tables, edit data in place,
+      PostgreSQL, MySQL, SQLite, SQL Server, and ClickHouse, with experimental
+      Redis and MongoDB support. It lets you browse tables, edit data in place,
       run SQL, and tunnel through SSH bastions, all from a clean GTK4 /
       libadwaita interface.
     </p>
     <p>Features:</p>
     <ul>
-      <li>PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse, Redis, DuckDB, MongoDB, and Oracle drivers</li>
+      <li>PostgreSQL, MySQL, SQLite, SQL Server, and ClickHouse drivers</li>
+      <li>PostgreSQL TCP, TLS, SSH, and local Unix-socket connections</li>
       <li>In-place cell editing with primary-key safety</li>
       <li>SQL editor with syntax highlighting and Run / Cancel</li>
       <li>SSH tunneling with TOFU host-key checking</li>
@@ -42,25 +43,23 @@
     <keyword>sqlserver</keyword>
     <keyword>clickhouse</keyword>
     <keyword>redis</keyword>
-    <keyword>duckdb</keyword>
     <keyword>mongodb</keyword>
-    <keyword>oracle</keyword>
     <keyword>database</keyword>
   </keywords>
   <content_rating type="oars-1.1" />
   <releases>
-    <release version="0.1.0" date="2026-07-30">
+    <release version="0.1.0rc1" date="2026-08-20">
       <description>
         <p>
-          Working client with four drivers, multi-tab workspace, SSH tunnels,
-          structure editor, and query history. Pre-release ahead of the
-          governed data-plane (policy + MCP) stages.
+          Internal Linux release candidate with governed writes, PostgreSQL
+          connection hardening, local Unix sockets, agent access, and GTK
+          installed-flow verification.
         </p>
       </description>
     </release>
   </releases>
   <provides>
-    <binary>tablepro-app</binary>
+    <binary>tablepro</binary>
   </provides>
   <recommends>
     <control>keyboard</control>

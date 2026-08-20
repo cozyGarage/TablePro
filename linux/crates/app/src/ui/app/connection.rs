@@ -9,16 +9,21 @@ use crate::services::database_service::ConnectionHealth;
 use crate::services::{connection_service, database_service};
 use crate::ui::connect_dialog::{ConnectDialog, ConnectDialogInit, ConnectDialogOutput};
 
-use super::{App, AppMsg, qualified_label};
+use super::{App, AppMsg, ConnectionTransition, SwitchDecision, qualified_label};
 
 impl App {
     pub(super) fn on_open_connect(&mut self, sender: ComponentSender<Self>) {
+        if self.connection_transition != ConnectionTransition::Idle || self.dialog.is_some() {
+            self.show_toast(&crate::tr!("A connection change is already in progress."));
+            return;
+        }
+        self.connection_transition = ConnectionTransition::Connecting;
         let dialog = ConnectDialog::builder()
             .launch(ConnectDialogInit {
                 registry: self.registry.clone(),
             })
             .forward(sender.input_sender(), |out| match out {
-                ConnectDialogOutput::Connected { tables, driver_id } => AppMsg::Connected { tables, driver_id },
+                ConnectDialogOutput::Prepared(prepared) => AppMsg::ConnectionPrepared(prepared),
                 ConnectDialogOutput::Closed => AppMsg::DialogClosed,
             });
         dialog.widget().present(Some(&self.window));
@@ -67,6 +72,12 @@ impl App {
     }
 
     pub(super) fn on_disconnect(&mut self, sender: ComponentSender<Self>) {
+        if self.connection_transition != ConnectionTransition::Idle {
+            self.show_toast(&crate::tr!(
+                "Finish or cancel the connection change before disconnecting."
+            ));
+            return;
+        }
         // Block disconnect when any tab has pending changes. The
         // teardown below clears all tracker registries, so dropping
         // the connection mid-edit silently destroys the user's work.
@@ -104,6 +115,13 @@ impl App {
     /// or from a clean `Disconnect` when no tracker has pending
     /// changes.
     pub(super) fn do_disconnect(&mut self, sender: ComponentSender<Self>) {
+        // Invalidate any candidate left behind by a stale dialog callback.
+        // A late preparation result is rejected unless the transition is
+        // still `Connecting`, so it cannot reconnect after this teardown.
+        self.prepared_connection = None;
+        self.switch_saves_pending.clear();
+        self.switch_cancel_audit_was_disabled = None;
+        self.connection_transition = ConnectionTransition::Idle;
         // Persist + tear down workspace tabs before dropping the
         // connection (persist needs the active connection_id).
         self.teardown_workspace_tabs();
@@ -209,24 +227,256 @@ impl App {
     }
 
     pub(super) fn on_open_saved(&mut self, saved: SavedConnection, sender: ComponentSender<Self>) {
+        if self.connection_transition != ConnectionTransition::Idle {
+            self.show_toast(&crate::tr!("A connection change is already in progress."));
+            return;
+        }
         self.connections_popover.popdown();
+        self.connection_transition = ConnectionTransition::Connecting;
         self.set_loading_page(
             &crate::tr!("Connecting…"),
             &crate::tr!("Opening {name}").replace("{name}", &saved.name),
         );
-        let driver_id = saved.driver_id.clone();
         let registry = self.registry.clone();
         let sender_clone = sender.clone();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
                     match connection_service::open_saved(registry, saved).await {
-                        Ok(tables) => sender_clone.input(AppMsg::Connected { tables, driver_id }),
-                        Err(e) => sender_clone.input(AppMsg::LoadFailed(None, e)),
+                        Ok(prepared) => sender_clone.input(AppMsg::ConnectionPrepared(Box::new(prepared))),
+                        Err(e) => sender_clone.input(AppMsg::ConnectionPrepareFailed(e)),
                     }
                 })
                 .drop_on_shutdown()
         });
+    }
+
+    pub(super) fn on_connection_prepared(
+        &mut self,
+        prepared: Box<connection_service::PreparedConnection>,
+        sender: ComponentSender<Self>,
+    ) {
+        if self.connection_transition != ConnectionTransition::Connecting {
+            tracing::warn!("discarding stale prepared connection");
+            return;
+        }
+        if !self.connected && database_service::instance().active_id().is_some() {
+            self.connection_transition = ConnectionTransition::Idle;
+            self.switch_cancel_audit_was_disabled = None;
+            self.dismiss_loading_page();
+            self.set_status_page(
+                super::StatusKind::Error,
+                &crate::tr!("Another window is connected"),
+                &crate::tr!(
+                    "This release supports one active database connection per TablePro process. Disconnect the other window first."
+                ),
+            );
+            return;
+        }
+        if self.prepared_connection.is_some() {
+            tracing::warn!("discarding duplicate prepared connection");
+            return;
+        }
+        self.dismiss_loading_page();
+        self.prepared_connection = Some(*prepared);
+        self.connection_transition = ConnectionTransition::AwaitingDecision;
+        self.continue_connection_switch(sender);
+    }
+
+    pub(super) fn on_connection_prepare_failed(&mut self, message: String) {
+        if self.connection_transition != ConnectionTransition::Connecting {
+            tracing::warn!(error = %message, "discarding stale connection failure");
+            return;
+        }
+        self.connection_transition = ConnectionTransition::Idle;
+        self.prepared_connection = None;
+        self.switch_cancel_audit_was_disabled = None;
+        self.dismiss_loading_page();
+        tracing::warn!(error = %message, "candidate connection failed");
+        self.set_status_page(super::StatusKind::Error, &crate::tr!("Connection failed"), &message);
+    }
+
+    pub(super) fn on_connect_dialog_closed(&mut self) {
+        self.dialog = None;
+        if self.connection_transition == ConnectionTransition::Connecting && self.prepared_connection.is_none() {
+            self.connection_transition = ConnectionTransition::Idle;
+            self.switch_cancel_audit_was_disabled = None;
+        }
+    }
+
+    /// Advance a prepared connection only when the old workspace is safe to
+    /// release. Called after preparation and every editor/save completion.
+    pub(super) fn continue_connection_switch(&mut self, sender: ComponentSender<Self>) {
+        if self.prepared_connection.is_none() {
+            return;
+        }
+        match self.connection_transition {
+            ConnectionTransition::WaitingForRuns if self.any_editor_running() => return,
+            ConnectionTransition::WaitingForSaves if !self.switch_saves_pending.is_empty() => return,
+            ConnectionTransition::Connecting | ConnectionTransition::Idle => return,
+            _ => {}
+        }
+
+        if self.connection_transition == ConnectionTransition::WaitingForRuns {
+            let was_disabled = self.switch_cancel_audit_was_disabled.take().unwrap_or(false);
+            if !was_disabled && database_service::instance().governed_writes_disabled() {
+                self.prepared_connection = None;
+                self.switch_saves_pending.clear();
+                self.connection_transition = ConnectionTransition::Idle;
+                self.show_toast(&crate::tr!(
+                    "Connection switch stopped because a running operation has an unknown outcome."
+                ));
+                return;
+            }
+        }
+
+        if self.any_editor_running() {
+            self.connection_transition = ConnectionTransition::AwaitingDecision;
+            let dialog = adw::AlertDialog::new(
+                Some(&crate::tr!("Cancel running queries and switch?")),
+                Some(&crate::tr!(
+                    "TablePro will wait for every running query to report cancellation before changing connections."
+                )),
+            );
+            dialog.add_response("stay", &crate::tr!("Stay"));
+            dialog.add_response("cancel-runs", &crate::tr!("Cancel queries and switch"));
+            dialog.set_response_appearance("cancel-runs", adw::ResponseAppearance::Destructive);
+            dialog.set_default_response(Some("stay"));
+            dialog.set_close_response("stay");
+            let response_sender = sender.clone();
+            dialog.connect_response(None, move |dialog, response| {
+                dialog.close();
+                response_sender.input(AppMsg::ConnectionSwitchDecision(if response == "cancel-runs" {
+                    SwitchDecision::CancelRuns
+                } else {
+                    SwitchDecision::Stay
+                }));
+            });
+            dialog.present(Some(&self.window));
+            return;
+        }
+
+        let has_pending = crate::services::change_tracker::any_pending_globally()
+            || crate::services::structure_tracker::any_pending_globally();
+        if has_pending {
+            self.connection_transition = ConnectionTransition::AwaitingDecision;
+            let dialog = adw::AlertDialog::new(
+                Some(&crate::tr!("Save changes before switching?")),
+                Some(&crate::tr!(
+                    "Pending row and structure changes belong to the current connection."
+                )),
+            );
+            dialog.add_response("stay", &crate::tr!("Stay"));
+            dialog.add_response("discard", &crate::tr!("Discard and switch"));
+            dialog.add_response("save", &crate::tr!("Save and switch"));
+            dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
+            dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
+            dialog.set_default_response(Some("save"));
+            dialog.set_close_response("stay");
+            let response_sender = sender.clone();
+            dialog.connect_response(None, move |dialog, response| {
+                dialog.close();
+                let decision = match response {
+                    "discard" => SwitchDecision::DiscardChanges,
+                    "save" => SwitchDecision::SaveChanges,
+                    _ => SwitchDecision::Stay,
+                };
+                response_sender.input(AppMsg::ConnectionSwitchDecision(decision));
+            });
+            dialog.present(Some(&self.window));
+            return;
+        }
+
+        self.activate_prepared_connection(sender);
+    }
+
+    pub(super) fn on_connection_switch_decision(&mut self, decision: SwitchDecision, sender: ComponentSender<Self>) {
+        match decision {
+            SwitchDecision::Stay => {
+                self.prepared_connection = None;
+                self.switch_saves_pending.clear();
+                self.switch_cancel_audit_was_disabled = None;
+                self.connection_transition = ConnectionTransition::Idle;
+                self.show_toast(&crate::tr!("Connection switch cancelled."));
+            }
+            SwitchDecision::CancelRuns => {
+                self.switch_cancel_audit_was_disabled = Some(database_service::instance().governed_writes_disabled());
+                self.connection_transition = ConnectionTransition::WaitingForRuns;
+                self.cancel_all_editor_runs();
+                self.continue_connection_switch(sender);
+            }
+            SwitchDecision::DiscardChanges => {
+                for id in crate::services::change_tracker::pending_tabs() {
+                    crate::services::change_tracker::with_tab(id, |tracker| tracker.clear());
+                }
+                for id in crate::services::structure_tracker::pending_tabs() {
+                    crate::services::structure_tracker::with_tab(id, |tracker| tracker.clear());
+                }
+                self.activate_prepared_connection(sender);
+            }
+            SwitchDecision::SaveChanges => {
+                let browse = crate::services::change_tracker::pending_tabs();
+                let structure = crate::services::structure_tracker::pending_tabs();
+                self.switch_saves_pending.clear();
+                for id in browse.iter().copied() {
+                    *self.switch_saves_pending.entry(id).or_insert(0) += 1;
+                }
+                for id in structure.iter().copied() {
+                    *self.switch_saves_pending.entry(id).or_insert(0) += 1;
+                }
+                self.connection_transition = ConnectionTransition::WaitingForSaves;
+                for id in browse {
+                    sender.input(AppMsg::SaveActiveBrowseTabById(id));
+                }
+                for id in structure {
+                    sender.input(AppMsg::SaveActiveStructureTabById(id));
+                }
+                self.continue_connection_switch(sender);
+            }
+        }
+    }
+
+    fn activate_prepared_connection(&mut self, sender: ComponentSender<Self>) {
+        let Some(prepared) = self.prepared_connection.take() else {
+            return;
+        };
+        if self.connected {
+            // Persist while the old connection id is still active. Only then
+            // dispose the old tab controllers and install the candidate.
+            self.teardown_workspace_tabs();
+            self.clear_closed_tabs_stack();
+        }
+        let (tables, driver_id) = prepared.activate();
+        self.connection_transition = ConnectionTransition::Idle;
+        self.switch_saves_pending.clear();
+        self.switch_cancel_audit_was_disabled = None;
+        self.on_connected(tables, driver_id, sender);
+    }
+
+    pub(super) fn connection_switch_save_succeeded(&mut self, tab_id: Uuid, sender: ComponentSender<Self>) {
+        if self.connection_transition != ConnectionTransition::WaitingForSaves {
+            return;
+        }
+        if let Some(remaining) = self.switch_saves_pending.get_mut(&tab_id) {
+            *remaining = remaining.saturating_sub(1);
+            if *remaining == 0 {
+                self.switch_saves_pending.remove(&tab_id);
+            }
+        }
+        self.continue_connection_switch(sender);
+    }
+
+    pub(super) fn connection_switch_save_failed(&mut self) {
+        if self.connection_transition != ConnectionTransition::WaitingForSaves {
+            return;
+        }
+        self.switch_saves_pending.clear();
+        self.prepared_connection = None;
+        self.switch_cancel_audit_was_disabled = None;
+        self.connection_transition = ConnectionTransition::Idle;
+        self.show_toast(&crate::tr!(
+            "Connection switch stopped because changes could not be saved."
+        ));
     }
 
     pub(super) fn repopulate_sidebar(&mut self, tables: &[TableInfo]) {

@@ -679,7 +679,10 @@ fn function_arguments_are_administrative(arguments: &FunctionArguments) -> bool 
 
 fn set_expr_writes(body: &SetExpr) -> bool {
     match body {
-        SetExpr::Insert(_) | SetExpr::Update(_) | SetExpr::Delete(_) | SetExpr::Values(_) => true,
+        SetExpr::Insert(_) | SetExpr::Update(_) | SetExpr::Delete(_) => true,
+        // VALUES is a read-only row constructor. INSERT ... VALUES is already
+        // represented by Statement::Insert and classified as a write above.
+        SetExpr::Values(_) => false,
         SetExpr::Query(q) => classify_query(q).writes,
         SetExpr::SetOperation { left, right, .. } => set_expr_writes(left) || set_expr_writes(right),
         SetExpr::Select(select) => select.projection.iter().any(|item| match item {
@@ -787,6 +790,18 @@ mod tests {
         let sql = "WITH d AS (DELETE FROM payments WHERE id = 1 RETURNING *) SELECT * FROM d";
         let f = classify(sql, "postgres");
         assert!(f.writes, "data-modifying CTE must report writes=true: {f:?}");
+    }
+
+    #[test]
+    fn values_and_recursive_values_cte_are_reads() {
+        for sql in [
+            "VALUES (1), (2)",
+            "WITH RECURSIVE counter(value) AS (VALUES(0) UNION ALL SELECT value + 1 FROM counter WHERE value < 10) SELECT sum(value) FROM counter",
+        ] {
+            let facts = classify(sql, "sqlite");
+            assert_eq!(facts.class, StatementClass::Select, "SQL: {sql}, facts: {facts:?}");
+            assert!(!facts.writes, "SQL: {sql}, facts: {facts:?}");
+        }
     }
 
     #[test]

@@ -57,6 +57,7 @@ The script runs:
 
 ```bash
 cargo test --test integration -p tablepro-driver-postgres -- --include-ignored --test-threads=1
+./scripts/test-postgres-socket.sh
 cargo test --test integration -p tablepro-driver-mysql -- --include-ignored --test-threads=1
 cargo test --test integration -p tablepro-driver-mssql -- --include-ignored --test-threads=1
 cargo test --test integration -p tablepro-driver-clickhouse -- --include-ignored --test-threads=1
@@ -97,6 +98,16 @@ For a PostgreSQL server you already run:
 
 The ignored smoke test creates and drops `tablepro_smoke_items`. Use a disposable database. Configure another target with `SMOKE_PG_HOST`, `SMOKE_PG_PORT`, `SMOKE_PG_USER`, `SMOKE_PG_PASS`, and `SMOKE_PG_DB`.
 
+For the deterministic direct Unix-socket fixture:
+
+```bash
+./scripts/test-postgres-socket.sh
+```
+
+It exposes a PostgreSQL 16 socket directory from a disposable container and
+verifies query, write, pre-dispatch cancellation, close, and reconnect without
+opening a TCP database port.
+
 ## GTK tests
 
 Run the installed safety suite with:
@@ -114,10 +125,14 @@ The suite verifies:
 3. Unavailable audit storage denies the mutation without showing an approval path around the failure.
 4. A named `:parameter` in the editor prompts for a value and writes the bound value, not the placeholder text.
 5. Ctrl+D saves the editor query as a favorite, and Ctrl+P finds it, opens it, and records the use.
+6. A successful saved-connection switch tears down the old workspace and sends writes only to the new database.
+7. A failed candidate connection leaves the original editor and database usable.
+8. A running read is cancelled and fully settles before the candidate connection is activated; subsequent writes reach only the new database.
+9. Current-page CSV export writes exactly the first 100 PK-ordered rows from a 150-row fixture through the real portal chooser.
 
 Each scenario declares its own fixture shape through `environment` and `audit_available` attributes, so a scenario can run against a local or production saved connection.
 
-The harness sends synthetic keyboard events only to a focused push button, so a stray key cannot reach an approval dialog, and each denial assertion requires the row count to hold for a settle window rather than matching once.
+Buttons and rows are invoked only through named AT-SPI actions; there is no Return-key fallback that can land in an unrelated dialog. Keyboard events remain only for the shortcuts under test. Each denial assertion requires the row count to hold for a settle window rather than matching once.
 
 On Arch or Omarchy, install the harness dependencies with:
 
@@ -125,7 +140,7 @@ On Arch or Omarchy, install the harness dependencies with:
 sudo pacman -S --needed dbus xorg-server-xvfb at-spi2-core python-atspi
 ```
 
-Ubuntu CI uses `dbus-daemon`, `xvfb`, `xauth`, `at-spi2-core`, and `python3-pyatspi`. The CI step remains non-blocking until it completes 30 retry-free scheduled runs. Service-level tests still cover pure state and policy behavior, but they do not replace these cross-layer tests.
+Ubuntu CI uses `dbus-daemon`, `gnome-keyring`, `xvfb`, `xauth`, `at-spi2-core`, `python3-pyatspi`, and `scrot`. The PR smoke job is required. A separate daily workflow runs five retry-free attempts and uploads stdout, stderr, accessibility snapshots, and screenshots on failure. RC promotion requires 30 consecutive attempts across at least six runs. Service-level tests still cover pure state and policy behavior, but they do not replace these cross-layer tests.
 
 For ordinary UI changes, test the affected flow manually and include before and after screenshots. Add deterministic automation when a regression can be reproduced without timing or desktop-session assumptions.
 
@@ -135,11 +150,13 @@ For ordinary UI changes, test the affected flow manually and include before and 
 
 1. Preflight on Rust 1.93 without the GTK application.
 2. GTK formatting, Clippy, and `cargo test --workspace --exclude tablepro-driver-duckdb --lib --bins` in Ubuntu 25.10.
-3. Installed GTK safety flows under Xvfb and PyAT-SPI, non-blocking during the soak period.
+3. Required installed GTK safety smoke under Xvfb and PyAT-SPI, including a real Secret Service round-trip.
 4. PostgreSQL, MySQL, SQL Server, and ClickHouse integration tests on Docker.
 5. The PostgreSQL release fixture with TLS, an SSH bastion, and Toxiproxy on Docker.
 6. Scheduled and manually triggered Clippy on current stable Rust.
 7. Supply-chain checks with `cargo deny` and `cargo audit` in the GTK job.
+
+`.github/workflows/gtk-soak.yml` supplies the independent daily five-attempt soak ledger.
 
 The Ubuntu 25.10 container provides the GLib version required by the selected libadwaita and Relm4 features.
 

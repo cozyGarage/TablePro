@@ -1,0 +1,67 @@
+name: GTK Safety Soak
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: gtk-safety-soak
+  cancel-in-progress: false
+
+jobs:
+  soak:
+    name: Five retry-free GTK attempts
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:25.10
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: linux
+      - name: Install GTK test dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl git pkg-config \
+            libgtk-4-dev libadwaita-1-dev libgtksourceview-5-dev \
+            libssl-dev libsecret-1-dev libkrb5-dev clang \
+            dbus-daemon gnome-keyring libglib2.0-bin xvfb xauth at-spi2-core python3-pyatspi scrot
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: 1.93
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: linux
+          prefix-key: linux-gtk-soak
+      - name: Build application once
+        run: |
+          cargo build --release --locked -p tablepro-app --bin tablepro-app
+          install -Dm755 target/release/tablepro-app target/installed/usr/bin/tablepro
+      - name: Five independent attempts
+        env:
+          TABLEPRO_GTK_BINARY: ${{ github.workspace }}/linux/target/installed/usr/bin/tablepro
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/gtk-artifacts"
+          for attempt in 1 2 3 4 5; do
+            export TABLEPRO_GTK_ARTIFACT_DIR="${GITHUB_WORKSPACE}/gtk-artifacts/attempt-${attempt}"
+            mkdir -p "$TABLEPRO_GTK_ARTIFACT_DIR"
+            if ./scripts/test-gtk-safety.sh >"$TABLEPRO_GTK_ARTIFACT_DIR/stdout.txt" 2>"$TABLEPRO_GTK_ARTIFACT_DIR/stderr.txt"; then
+              printf 'pass\n' >"$TABLEPRO_GTK_ARTIFACT_DIR/result.txt"
+            else
+              printf 'fail\n' >"$TABLEPRO_GTK_ARTIFACT_DIR/result.txt"
+              exit 1
+            fi
+          done
+      - name: Upload per-attempt diagnostics
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: gtk-soak-${{ github.run_id }}-${{ github.run_attempt }}
+          path: gtk-artifacts
+          if-no-files-found: error

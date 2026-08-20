@@ -30,6 +30,7 @@ pub struct EditorTabSlot {
     pub controller: Controller<SqlEditor>,
     pub page: adw::TabPage,
     pub query: String,
+    pub running: bool,
 }
 
 pub struct StructureTabSlot {
@@ -104,6 +105,24 @@ pub(super) fn read_workspace_tab_id(page: &adw::TabPage) -> Option<Uuid> {
 pub(super) enum ExportFormat {
     Csv,
     Json,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum ConnectionTransition {
+    #[default]
+    Idle,
+    Connecting,
+    AwaitingDecision,
+    WaitingForRuns,
+    WaitingForSaves,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchDecision {
+    Stay,
+    CancelRuns,
+    DiscardChanges,
+    SaveChanges,
 }
 
 #[derive(Debug, Clone, Copy)]

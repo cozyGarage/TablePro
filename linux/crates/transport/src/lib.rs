@@ -1,4 +1,5 @@
 use secrecy::SecretString;
+use std::os::unix::fs::FileTypeExt;
 use tablepro_core::{AuthMode, ConnectOptions, Connection, DatabaseDriver, DriverError, TlsConfig, TlsMode};
 use tablepro_ssh::{SshAuth, SshConfig, SshTunnel};
 use tablepro_storage::{
@@ -14,6 +15,14 @@ pub enum TransportError {
     Secret(String),
     #[error("integrated authentication is not supported by the {0} driver")]
     IntegratedAuthUnsupported(String),
+    #[error("local Unix sockets are not supported by the {0} driver")]
+    LocalSocketUnsupported(String),
+    #[error("a local Unix socket cannot be combined with SSH tunnelling")]
+    LocalSocketWithSsh,
+    #[error("TLS must be disabled for a local Unix socket")]
+    LocalSocketWithTls,
+    #[error("invalid local Unix socket: {0}")]
+    InvalidLocalSocket(String),
     #[error(transparent)]
     Driver(#[from] DriverError),
 }
@@ -59,6 +68,7 @@ pub async fn connect_options_for(saved: &SavedConnection) -> Result<ConnectOptio
         },
         auth_mode: saved.auth_mode,
         service_endpoint: None,
+        local_socket_dir: saved.socket_dir.clone(),
         forwarded_socket_dir: None,
     })
 }
@@ -76,6 +86,7 @@ pub async fn establish(
     ssh: Option<Vec<SshConfig>>,
 ) -> Result<(Box<dyn Connection>, Option<SshTunnel>), TransportError> {
     check_auth_mode(opts.auth_mode, driver.supports_integrated_auth(), driver.display_name())?;
+    validate_local_socket(&opts, driver, ssh.as_deref())?;
     opts.forwarded_socket_dir = None;
 
     let tunnel = if let Some(hops) = ssh {
@@ -99,6 +110,67 @@ pub async fn establish(
     };
     let raw = driver.connect(opts).await?;
     Ok((raw, tunnel))
+}
+
+fn validate_local_socket(
+    opts: &ConnectOptions,
+    driver: &dyn DatabaseDriver,
+    ssh: Option<&[SshConfig]>,
+) -> Result<(), TransportError> {
+    let Some(directory) = opts.local_socket_dir.as_deref() else {
+        return Ok(());
+    };
+    if !driver.supports_local_socket() {
+        return Err(TransportError::LocalSocketUnsupported(
+            driver.display_name().to_string(),
+        ));
+    }
+    if ssh.is_some() {
+        return Err(TransportError::LocalSocketWithSsh);
+    }
+    if opts.tls.mode != TlsMode::Disabled {
+        return Err(TransportError::LocalSocketWithTls);
+    }
+    if opts.port == 0 {
+        return Err(TransportError::InvalidLocalSocket(
+            "PostgreSQL socket port must be greater than zero".into(),
+        ));
+    }
+    if !directory.is_absolute() {
+        return Err(TransportError::InvalidLocalSocket(format!(
+            "socket directory must be absolute: {}",
+            directory.display()
+        )));
+    }
+    let metadata = std::fs::metadata(directory).map_err(|error| {
+        TransportError::InvalidLocalSocket(format!(
+            "cannot access socket directory {}: {error}",
+            directory.display()
+        ))
+    })?;
+    if !metadata.is_dir() {
+        return Err(TransportError::InvalidLocalSocket(format!(
+            "socket path is not a directory: {}",
+            directory.display()
+        )));
+    }
+    let socket = directory.join(format!(".s.PGSQL.{}", opts.port));
+    match std::fs::metadata(&socket) {
+        Ok(metadata) if metadata.file_type().is_socket() => {}
+        Ok(_) => {
+            return Err(TransportError::InvalidLocalSocket(format!(
+                "PostgreSQL socket path is not a socket: {}",
+                socket.display()
+            )));
+        }
+        Err(error) => {
+            return Err(TransportError::InvalidLocalSocket(format!(
+                "cannot access PostgreSQL socket {}: {error}",
+                socket.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn redirect_through_tunnel(opts: &mut ConnectOptions, service_endpoint: (String, u16), dial_endpoint: (String, u16)) {
@@ -224,6 +296,9 @@ mod tests {
         fn forwarded_socket_name(&self, service_port: u16) -> Option<String> {
             Some(format!(".s.PGSQL.{service_port}"))
         }
+        fn supports_local_socket(&self) -> bool {
+            true
+        }
         async fn connect(&self, _opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
             Err(DriverError::Unsupported("test driver".into()))
         }
@@ -263,6 +338,48 @@ mod tests {
     }
 
     #[test]
+    fn local_socket_validation_is_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = ConnectOptions {
+            host: "localhost".into(),
+            port: 5432,
+            local_socket_dir: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            validate_local_socket(&opts, &TcpOnlyDriver, None),
+            Err(TransportError::LocalSocketUnsupported(_))
+        ));
+        assert!(matches!(
+            validate_local_socket(&opts, &SocketDriver, Some(&[])),
+            Err(TransportError::LocalSocketWithSsh)
+        ));
+
+        opts.tls = tls_config(TlsMode::VerifyFull);
+        assert!(matches!(
+            validate_local_socket(&opts, &SocketDriver, None),
+            Err(TransportError::LocalSocketWithTls)
+        ));
+        opts.tls = tls_config(TlsMode::Disabled);
+        assert!(matches!(
+            validate_local_socket(&opts, &SocketDriver, None),
+            Err(TransportError::InvalidLocalSocket(_))
+        ));
+        opts.port = 0;
+        assert!(matches!(
+            validate_local_socket(&opts, &SocketDriver, None),
+            Err(TransportError::InvalidLocalSocket(_))
+        ));
+        opts.port = 5432;
+        opts.local_socket_dir = Some(std::path::PathBuf::from("relative"));
+        assert!(matches!(
+            validate_local_socket(&opts, &SocketDriver, None),
+            Err(TransportError::InvalidLocalSocket(_))
+        ));
+    }
+
+    #[test]
     fn socket_forwarding_keeps_the_service_hostname_for_tls() {
         let mut opts = ConnectOptions {
             host: String::new(),
@@ -284,6 +401,7 @@ mod tests {
                 directory: std::path::Path::new("/run/user/1000/tablepro-ssh-abc"),
                 identity_host: "db.corp.example",
                 identity_port: 5432,
+                origin: tablepro_core::SocketOrigin::Forwarded,
             }
         );
     }

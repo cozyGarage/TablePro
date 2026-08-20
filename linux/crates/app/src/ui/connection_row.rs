@@ -125,6 +125,15 @@ fn subtitle_for(saved: &SavedConnection) -> String {
     if saved.driver_id == "sqlite" {
         return format!("sqlite · {}", saved.database);
     }
+    if let Some(directory) = &saved.socket_dir {
+        return format!(
+            "{} · {}@{}/.s.PGSQL.{}",
+            saved.driver_id,
+            saved.username,
+            directory.display(),
+            saved.port
+        );
+    }
     match saved.auth_mode {
         AuthMode::Kerberos => format!("{} · {}:{}", saved.driver_id, saved.host, saved.port),
         AuthMode::Password => format!("{} · {}@{}:{}", saved.driver_id, saved.username, saved.host, saved.port),
@@ -143,6 +152,7 @@ mod tests {
             driver_id: "mssql".into(),
             host: "sql.corp.example".into(),
             port: 1433,
+            socket_dir: None,
             database: "sales".into(),
             username: username.into(),
             use_tls: true,

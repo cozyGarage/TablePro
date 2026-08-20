@@ -103,9 +103,6 @@ jobs:
         run: cargo clippy --workspace --exclude tablepro-driver-duckdb --all-targets -- -D warnings
       - name: Unit tests (build via test)
         run: cargo test --workspace --exclude tablepro-driver-duckdb --lib --bins
-      - name: GTK safety tests
-        continue-on-error: true
-        run: ./scripts/test-gtk-safety.sh
       - name: Install cargo-deny and cargo-audit
         run: |
           cargo install cargo-deny --locked
@@ -114,6 +111,50 @@ jobs:
         run: cargo deny check
       - name: cargo-audit
         run: cargo audit
+
+  gtk-safety:
+    name: Installed GTK safety smoke
+    runs-on: ubuntu-24.04
+    needs: fast
+    container:
+      image: ubuntu:25.10
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'linux' || github.ref }}
+      - name: Install GTK test dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl git pkg-config \
+            libgtk-4-dev libadwaita-1-dev libgtksourceview-5-dev \
+            libssl-dev libsecret-1-dev libkrb5-dev clang \
+            dbus-daemon gnome-keyring libglib2.0-bin xvfb xauth at-spi2-core python3-pyatspi scrot
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: 1.93
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: linux
+          prefix-key: linux-gtk-safety
+      - name: Secret Service round-trip
+        run: ./scripts/test-secret-service.sh
+      - name: GTK installed-flow smoke
+        env:
+          TABLEPRO_GTK_ARTIFACT_DIR: ${{ github.workspace }}/gtk-artifacts/smoke
+        run: ./scripts/test-gtk-safety.sh
+      - name: Upload GTK diagnostics
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: gtk-safety-${{ github.run_id }}-${{ github.run_attempt }}
+          path: gtk-artifacts
+          if-no-files-found: ignore
 
   current-stable-clippy:
     name: Current stable Clippy (scheduled)
@@ -190,6 +231,8 @@ jobs:
         run: docker version
       - name: Postgres integration tests
         run: cargo test --test integration -p tablepro-driver-postgres -- --include-ignored --test-threads=1
+      - name: PostgreSQL Unix-socket integration
+        run: ./scripts/test-postgres-socket.sh
       - name: MySQL integration tests
         run: cargo test --test integration -p tablepro-driver-mysql -- --include-ignored --test-threads=1
       - name: MSSQL integration tests

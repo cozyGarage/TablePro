@@ -567,9 +567,6 @@ impl PolicyGuard {
             }
             Err(error) => {
                 let terminal_status = controlled_error_terminal_status(error);
-                if matches!(error, DriverError::OperationOutcomeUnknown { .. }) {
-                    self.ctx.audit_state.disable_governed_writes();
-                }
                 self.record_outcome(
                     operation,
                     AuditOutcome {

@@ -4,11 +4,11 @@ TablePro is a Linux-only database client built with Rust, GTK4, libadwaita, and 
 
 ## Status
 
-The GTK application supports PostgreSQL, MySQL, SQLite, SQL Server, and ClickHouse. Redis and MongoDB are experimental. DuckDB and Oracle require the `duckdb` and `odpi` Cargo features.
+The GTK application supports PostgreSQL, MySQL, SQLite, SQL Server, and ClickHouse. Redis and MongoDB are experimental, and DuckDB is an optional build feature. Oracle is not shipped: its optional `odpi` implementation does not currently compile or have a release fixture.
 
 Current workflows include saved connections, SSH tunnels, browse and SQL tabs, structure editing, inline row changes, query history, policy checks, MCP access, and the headless `tablepro-agentd` process. See [ROADMAP.md](ROADMAP.md), [docs/connections.md](docs/connections.md), [docs/driver-maturity.md](docs/driver-maturity.md), and [docs/production-audit.md](docs/production-audit.md) for current limits.
 
-The application is suitable for development and personal testing. The PostgreSQL release fixture and the installed GTK safety flows pass locally: certificate hostname and authority checks, verified TLS through an SSH tunnel, read-only denial, rollback, blocking locks, reconnect, approval dismissal, approve-once scope, and unavailable audit storage. Trusted production writes and unattended agents still wait on hosted confirmation of those suites and on packaging verification.
+The application is suitable for development and personal testing. The audited predecessor passed hosted PostgreSQL, driver, GTK, and Flatpak jobs. The current RC work adds exclusive connection switching, deterministic PostgreSQL browse ordering, direct PostgreSQL Unix sockets, and a required GTK smoke job; the exact RC commit still needs hosted, soak, and installed-package evidence before trusted production use.
 
 ## Named query parameters
 
@@ -36,7 +36,7 @@ Running the statement asks for one value per name and sends them as driver-bound
 | Async work | Tokio for database and service work, GLib main context for GTK |
 | Drivers | sqlx, tiberius, clickhouse, and engine-specific Rust crates |
 | Storage | XDG JSON files, SQLite FTS5, JSONL audit journal, Secret Service through `oo7` |
-| Packaging | AUR and Omarchy first, Flatpak later |
+| Packaging | Internal Arch RC first; no public AUR or Flathub release yet |
 
 Drivers are linked at build time. TablePro does not load database drivers as runtime plugins. The UI uses native GTK widgets and does not embed a browser view.
 
@@ -94,18 +94,23 @@ To smoke-test a PostgreSQL server you already run:
 ./scripts/smoke-postgres.sh
 ```
 
+To run the disposable real Unix-socket fixture:
+
+```bash
+./scripts/test-postgres-socket.sh
+```
+
 If native development packages are unavailable, `scripts/dev-env.sh` can use Debian-family package payloads extracted under `../.local-deps/root/`.
 
 ## Packaging
 
-AUR packaging is the first release target, with Omarchy as the first supported desktop distribution. The current package recipe is in [packaging/aur/PKGBUILD](packaging/aur/PKGBUILD).
+The first package is an internal Arch RC. After the exact clean commit passes every gate and is tagged `linux-v0.1.0-rc1`:
 
 ```bash
-cd packaging/aur
-makepkg -si
+./scripts/build-arch-rc.sh
 ```
 
-Debian package and Flatpak files exist for development. Flatpak publication is planned after the native Arch and Omarchy path is release-verified. See [packaging/README.md](packaging/README.md).
+The helper pins the tag's commit archive and verifies a real checksum. It does not publish to AUR. Debian and Flatpak files remain development scaffolds; see [packaging/README.md](packaging/README.md).
 
 ## Documentation
 

@@ -25,6 +25,7 @@ where
         .placeholder_text(tr!("Search favorites, open tabs, and saved connections"))
         .hexpand(true)
         .build();
+    search.update_property(&[gtk::accessible::Property::Label("Open quickly search")]);
     let list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::Single)
         .css_classes(["boxed-list"])
@@ -63,39 +64,6 @@ where
     let visible: Rc<RefCell<Vec<QuickItem>>> = Rc::new(RefCell::new(Vec::new()));
     let on_choice: Rc<dyn Fn(QuickTarget)> = Rc::new(on_choice);
 
-    let rebuild = {
-        let list = list.clone();
-        let stack = stack.clone();
-        let items = items.clone();
-        let visible = visible.clone();
-        Rc::new(move |needle: &str| {
-            let matched = filter(&items, needle);
-            while let Some(child) = list.first_child() {
-                list.remove(&child);
-            }
-            for item in &matched {
-                let row = adw::ActionRow::builder()
-                    .title(glib::markup_escape_text(&item.title))
-                    .subtitle(glib::markup_escape_text(&item.subtitle))
-                    .activatable(true)
-                    .build();
-                let icon = match item.target {
-                    QuickTarget::Favorite(_) => "starred-symbolic",
-                    QuickTarget::Tab(_) => "tab-new-symbolic",
-                    QuickTarget::Connection(_) => "network-server-symbolic",
-                };
-                row.add_prefix(&gtk::Image::from_icon_name(icon));
-                list.append(&row);
-            }
-            stack.set_visible_child_name(if matched.is_empty() { "empty" } else { "results" });
-            if let Some(first) = list.first_child().and_downcast::<gtk::ListBoxRow>() {
-                list.select_row(Some(&first));
-            }
-            *visible.borrow_mut() = matched;
-        })
-    };
-    rebuild("");
-
     let activate = {
         let window = window.clone();
         let visible = visible.clone();
@@ -108,6 +76,51 @@ where
             }
         })
     };
+
+    let rebuild = {
+        let list = list.clone();
+        let stack = stack.clone();
+        let items = items.clone();
+        let visible = visible.clone();
+        let activate = activate.clone();
+        Rc::new(move |needle: &str| {
+            let matched = filter(&items, needle);
+            while let Some(child) = list.first_child() {
+                list.remove(&child);
+            }
+            for (index, item) in matched.iter().enumerate() {
+                let row = adw::ActionRow::builder()
+                    .title(glib::markup_escape_text(&item.title))
+                    .subtitle(glib::markup_escape_text(&item.subtitle))
+                    .activatable(true)
+                    .build();
+                let icon = match item.target {
+                    QuickTarget::Favorite(_) => "starred-symbolic",
+                    QuickTarget::Tab(_) => "tab-new-symbolic",
+                    QuickTarget::Connection(_) => "network-server-symbolic",
+                };
+                row.add_prefix(&gtk::Image::from_icon_name(icon));
+                let open_label = tr!("Open {name}").replace("{name}", &item.title);
+                let open = gtk::Button::builder()
+                    .icon_name("go-next-symbolic")
+                    .tooltip_text(&open_label)
+                    .valign(gtk::Align::Center)
+                    .css_classes(["flat"])
+                    .build();
+                open.update_property(&[gtk::accessible::Property::Label(&open_label)]);
+                let activate_for_button = activate.clone();
+                open.connect_clicked(move |_| activate_for_button(index));
+                row.add_suffix(&open);
+                list.append(&row);
+            }
+            stack.set_visible_child_name(if matched.is_empty() { "empty" } else { "results" });
+            if let Some(first) = list.first_child().and_downcast::<gtk::ListBoxRow>() {
+                list.select_row(Some(&first));
+            }
+            *visible.borrow_mut() = matched;
+        })
+    };
+    rebuild("");
 
     let rebuild_for_search = rebuild.clone();
     search.connect_search_changed(move |entry| rebuild_for_search(entry.text().as_str()));

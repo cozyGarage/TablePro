@@ -13,6 +13,7 @@ fn saved(tls_mode: Option<TlsMode>, use_tls: bool) -> SavedConnection {
         driver_id: "postgres".into(),
         host: "db.corp.example".into(),
         port: 5432,
+        socket_dir: None,
         database: "warehouse".into(),
         username: "reader".into(),
         use_tls,
@@ -71,6 +72,23 @@ async fn a_saved_certificate_authority_reaches_the_driver() {
         opts.tls.root_cert.as_deref(),
         Some(std::path::Path::new("/etc/tablepro/corp-ca.crt"))
     );
+}
+
+#[tokio::test]
+async fn a_saved_local_socket_reaches_gui_and_agent_connection_options() {
+    let mut connection = saved(Some(TlsMode::Disabled), false);
+    connection.socket_dir = Some(PathBuf::from("/run/postgresql"));
+
+    let opts = connect_options_for(&connection).await.expect("build connect options");
+
+    assert_eq!(opts.local_socket_dir, connection.socket_dir);
+    assert!(matches!(
+        opts.transport(),
+        Transport::Socket {
+            origin: tablepro_core::SocketOrigin::Local,
+            ..
+        }
+    ));
 }
 
 #[tokio::test]

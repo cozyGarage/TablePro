@@ -53,13 +53,7 @@ impl App {
             sender.input(AppMsg::LoadFailed(Some(tab_id), "no active connection".into()));
             return;
         };
-        let order_by = sort.and_then(|(idx, asc)| {
-            columns.get(idx).map(|c| {
-                let name = tablepro_core::sql_dialect::quote_ident(&driver_id, &c.name);
-                let dir = if asc { "ASC" } else { "DESC" };
-                format!("{name} {dir}")
-            })
-        });
+        let order_by = resolved_order_by(&driver_id, &columns, sort);
 
         let where_result = tablepro_core::build_filter_where(&driver_id, &columns, &filter);
         let (where_sql, mut params) = match where_result {
@@ -77,7 +71,7 @@ impl App {
             .map(|c| c.name.clone())
             .collect();
         let use_keyset = offset >= KEYSET_OFFSET_THRESHOLD
-            && order_by.is_none()
+            && sort.is_none()
             && !pk_names.is_empty()
             && keyset_cursor.as_ref().is_some_and(|c| c.len() == pk_names.len());
 
@@ -181,8 +175,12 @@ impl App {
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    if let Ok(columns) = conn.fetch_columns(schema.as_deref(), &table).await {
-                        sender_clone.input(AppMsg::ColumnsLoaded(tab_id, columns));
+                    match conn.fetch_columns(schema.as_deref(), &table).await {
+                        Ok(columns) => sender_clone.input(AppMsg::ColumnsLoaded(tab_id, columns)),
+                        Err(error) => sender_clone.input(AppMsg::LoadFailed(
+                            Some(tab_id),
+                            crate::ui::error_text::driver_message(&error),
+                        )),
                     }
                 })
                 .drop_on_shutdown()
@@ -255,8 +253,18 @@ impl App {
         });
     }
 
-    pub(super) fn on_browse_columns_loaded(&self, tab_id: Uuid, columns: Vec<ColumnInfo>) {
+    pub(super) fn on_browse_columns_loaded(
+        &self,
+        tab_id: Uuid,
+        columns: Vec<ColumnInfo>,
+        sender: ComponentSender<Self>,
+    ) {
         self.dispatch_to_tab(tab_id, BrowseTabInput::ColumnsLoaded(columns));
+        // Page order depends on the primary-key metadata, and filters depend
+        // on column types. Start both queries only after ColumnsLoaded has
+        // updated the tab model.
+        sender.input(AppMsg::FetchBrowseRowCount(tab_id));
+        sender.input(AppMsg::FetchBrowsePage(tab_id));
     }
 
     pub(super) fn on_browse_rows_loaded(&self, tab_id: Uuid, offset: u64, result: QueryResult) {
@@ -288,11 +296,6 @@ impl App {
             return;
         };
 
-        if matches!(format, ExportFormat::Csv) {
-            self.on_export_csv_streaming(schema, table);
-            return;
-        }
-
         let result = {
             let tabs = self.workspace_tabs.borrow();
             tabs.get(&active_id)
@@ -303,6 +306,10 @@ impl App {
             self.show_toast(&crate::tr!("Nothing to export"));
             return;
         };
+        if matches!(format, ExportFormat::Csv) {
+            self.on_export_csv_page(schema, table, result);
+            return;
+        }
         let table_label = match &schema {
             Some(s) => format!("{s}.{table}"),
             None => table.clone(),
@@ -315,7 +322,7 @@ impl App {
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         let dialog = gtk::FileDialog::builder()
-            .title(crate::tr!("Export as JSON"))
+            .title(crate::tr!("Export current page as JSON"))
             .modal(true)
             .initial_name(&suggested)
             .default_filter(&filter)
@@ -330,7 +337,7 @@ impl App {
             let bytes = render_json(&result);
             match std::fs::write(&path, bytes) {
                 Ok(()) => toast_overlay.add_toast(relm4::adw::Toast::new(
-                    &crate::tr!("Exported to {path}").replace("{path}", &path.display().to_string()),
+                    &crate::tr!("Exported the current page to {path}").replace("{path}", &path.display().to_string()),
                 )),
                 Err(e) => {
                     let alert = adw::AlertDialog::new(
@@ -350,7 +357,7 @@ impl App {
         });
     }
 
-    fn on_export_csv_streaming(&self, schema: Option<String>, table: String) {
+    fn on_export_csv_page(&self, schema: Option<String>, table: String, result: QueryResult) {
         let table_label = match &schema {
             Some(s) => format!("{s}.{table}"),
             None => table.clone(),
@@ -363,7 +370,7 @@ impl App {
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         let dialog = gtk::FileDialog::builder()
-            .title(crate::tr!("Export as CSV"))
+            .title(crate::tr!("Export current page as CSV"))
             .modal(true)
             .initial_name(&suggested)
             .default_filter(&filter)
@@ -372,59 +379,39 @@ impl App {
         let parent = self.window.clone();
         let parent_for_alert = parent.clone();
         let toast_overlay = self.toast_overlay.clone();
-        let Some(connection_id) = export_connection_id(
-            self.selected_browse_tab_connection(),
-            database_service::instance().active_id(),
-        ) else {
-            self.show_toast(&crate::tr!("no active connection"));
-            return;
-        };
-        let Some(conn) = database_service::instance().get(connection_id) else {
-            self.show_toast(&crate::tr!("The connection for this tab is closed."));
-            return;
-        };
         dialog.save(Some(&parent), gtk::gio::Cancellable::NONE, move |outcome| {
             let Ok(file) = outcome else { return };
             let Some(path) = file.path() else { return };
-            glib::spawn_future_local(async move {
-                let result = async {
-                    let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
-                    let n = tablepro_core::export::stream_table_to_csv(
-                        conn.as_ref(),
-                        schema.as_deref(),
-                        &table,
-                        &mut file,
-                        1_000,
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
-                    Ok::<_, String>(n)
+            let write_result = (|| {
+                let mut output = std::fs::File::create(&path).map_err(|error| error.to_string())?;
+                tablepro_core::export::write_csv_header(&mut output, &result.columns)
+                    .map_err(|error| error.to_string())?;
+                for row in &result.rows {
+                    tablepro_core::export::write_csv_row(&mut output, row).map_err(|error| error.to_string())?;
                 }
-                .await;
-                match result {
-                    Ok(n) => {
-                        toast_overlay.add_toast(relm4::adw::Toast::new(
-                            &crate::tr!("Exported {n} rows to {path}")
-                                .replace("{n}", &n.to_string())
-                                .replace("{path}", &path.display().to_string()),
-                        ));
-                    }
-                    Err(e) => {
-                        let alert = adw::AlertDialog::new(
-                            Some(&crate::tr!("Couldn't export")),
-                            Some(
-                                &crate::tr!("Writing {path} failed: {error}")
-                                    .replace("{path}", &path.display().to_string())
-                                    .replace("{error}", &e),
-                            ),
-                        );
-                        alert.add_response("close", &crate::tr!("Close"));
-                        alert.set_default_response(Some("close"));
-                        alert.set_close_response("close");
-                        alert.present(Some(&parent_for_alert));
-                    }
+                Ok::<_, String>(result.rows.len())
+            })();
+            match write_result {
+                Ok(n) => toast_overlay.add_toast(relm4::adw::Toast::new(
+                    &crate::tr!("Exported {n} rows from the current page to {path}")
+                        .replace("{n}", &n.to_string())
+                        .replace("{path}", &path.display().to_string()),
+                )),
+                Err(error) => {
+                    let alert = adw::AlertDialog::new(
+                        Some(&crate::tr!("Couldn't export")),
+                        Some(
+                            &crate::tr!("Writing {path} failed: {error}")
+                                .replace("{path}", &path.display().to_string())
+                                .replace("{error}", &error),
+                        ),
+                    );
+                    alert.add_response("close", &crate::tr!("Close"));
+                    alert.set_default_response(Some("close"));
+                    alert.set_close_response("close");
+                    alert.present(Some(&parent_for_alert));
                 }
-            });
+            }
         });
     }
 
@@ -473,26 +460,76 @@ impl App {
     }
 }
 
-fn export_connection_id(tab_connection: Option<Uuid>, active: Option<Uuid>) -> Option<Uuid> {
-    tab_connection.or(active)
+fn resolved_order_by(driver_id: &str, columns: &[ColumnInfo], sort: Option<(usize, bool)>) -> Option<String> {
+    let mut terms = Vec::new();
+    let selected = sort.and_then(|(index, ascending)| {
+        columns.get(index).map(|column| {
+            let direction = if ascending { "ASC" } else { "DESC" };
+            terms.push(format!(
+                "{} {direction}",
+                tablepro_core::sql_dialect::quote_ident(driver_id, &column.name)
+            ));
+            column.name.as_str()
+        })
+    });
+    for column in columns.iter().filter(|column| column.primary_key) {
+        if selected == Some(column.name.as_str()) {
+            continue;
+        }
+        terms.push(format!(
+            "{} ASC",
+            tablepro_core::sql_dialect::quote_ident(driver_id, &column.name)
+        ));
+    }
+    (!terms.is_empty()).then(|| terms.join(", "))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::export_connection_id;
-    use uuid::Uuid;
+    use super::resolved_order_by;
+    use tablepro_core::ColumnInfo;
 
-    #[test]
-    fn export_uses_the_tab_connection_even_when_another_one_is_active() {
-        let tab = Uuid::new_v4();
-        let active = Uuid::new_v4();
-        assert_eq!(export_connection_id(Some(tab), Some(active)), Some(tab));
+    fn column(name: &str, primary_key: bool) -> ColumnInfo {
+        ColumnInfo {
+            name: name.into(),
+            data_type: "text".into(),
+            nullable: false,
+            primary_key,
+            is_auto_increment: false,
+            default_value: None,
+            is_generated: false,
+        }
     }
 
     #[test]
-    fn export_falls_back_to_the_active_connection_for_a_tab_without_one() {
-        let active = Uuid::new_v4();
-        assert_eq!(export_connection_id(None, Some(active)), Some(active));
-        assert_eq!(export_connection_id(None, None), None);
+    fn default_order_uses_every_primary_key_column() {
+        let columns = vec![column("tenant", true), column("name", false), column("id", true)];
+        assert_eq!(
+            resolved_order_by("postgres", &columns, None).as_deref(),
+            Some("\"tenant\" ASC, \"id\" ASC")
+        );
+    }
+
+    #[test]
+    fn explicit_sort_appends_primary_key_tie_breakers() {
+        let columns = vec![column("tenant", true), column("name", false), column("id", true)];
+        assert_eq!(
+            resolved_order_by("postgres", &columns, Some((1, false))).as_deref(),
+            Some("\"name\" DESC, \"tenant\" ASC, \"id\" ASC")
+        );
+    }
+
+    #[test]
+    fn sorted_primary_key_is_not_duplicated() {
+        let columns = vec![column("tenant", true), column("id", true)];
+        assert_eq!(
+            resolved_order_by("postgres", &columns, Some((0, false))).as_deref(),
+            Some("\"tenant\" DESC, \"id\" ASC")
+        );
+    }
+
+    #[test]
+    fn table_without_pk_or_sort_has_no_promised_order() {
+        assert_eq!(resolved_order_by("postgres", &[column("name", false)], None), None);
     }
 }

@@ -1,6 +1,6 @@
 # TablePro Linux development plan
 
-Last audited: 2026-08-18
+Last audited: 2026-08-20
 
 This plan is the source of truth for the Linux application. It separates:
 
@@ -17,9 +17,9 @@ Audited branch state:
 
 - Safety baseline HEAD before repository extraction: `17a108b1`
 - Tracking branch: `fork/linux`
-- Rust workspace: 17 crates, 139 Rust source files, and 43,235 lines of Rust
+- Rust workspace: 19 members and approximately 49,000 lines of Rust
 - Stable drivers: PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse
-- Experimental drivers: Redis, MongoDB, DuckDB, Oracle
+- Experimental drivers: Redis, MongoDB, DuckDB; Oracle is excluded because its optional build is broken and unverified
 - No Linux account, subscription, receipt, license-key, or entitlement checks
 
 Verified locally on 2026-08-12:
@@ -285,9 +285,9 @@ MySQL, SQL Server, and ClickHouse still forward TCP for every TLS mode. MySQL ha
 
 ## Status
 
-Implemented and locally release-verified on 2026-08-17. The installed GTK suite is soaking in CI before it becomes a required PR check.
+Implemented and locally release-verified. The installed GTK smoke is a required independent PR job; a separate daily workflow runs five retry-free attempts toward the RC soak ledger.
 
-A local soak on 2026-08-18 found one failure in 14 runs where the harness's keyboard fallback could send a stray Return into the approval dialog. The harness now sends synthetic keys only to a focused push button, checks that the dialog is still open before dismissing it, and requires the row count to hold for a settle window instead of matching once. Twelve further runs passed. Production approval routing was unchanged by this work.
+A local soak on 2026-08-18 found one failure in 14 runs where a keyboard fallback could send a stray Return into the approval dialog. That fallback has been removed: named AT-SPI actions drive controls, and synthetic keys are limited to shortcuts under test. The suite now also proves successful and failed saved-connection switching against separate database files.
 
 Foundation:
 
@@ -301,7 +301,7 @@ Use SQLite, temporary XDG directories, `dbus-run-session`, Xvfb, and AT-SPI auto
 2. [x] `Approve once` performs exactly one mutation and asks again next time.
 3. [x] An unavailable audit journal cannot be bypassed through approval.
 
-Promote the installed test to a required PR check after 30 retry-free scheduled runs.
+Keep the PR smoke required. Promote an RC only after 30 consecutive retry-free attempts across at least six distinct daily/manual soak runs.
 
 ---
 
@@ -352,7 +352,7 @@ Track capabilities as planned, implemented, integrated, release-verified, deferr
 - SQL dump export and true large-result streaming
 - Connection URL import, groups, tags, and favorites
 - Reusable SSH profiles and custom CA/client certificates
-- Connection-layer defects and coverage gaps tracked in `linux/docs/connections.md`: MongoDB ignores its TLS setting, Redis cannot negotiate TLS at all, saved connections cannot carry a certificate authority, the SSH handshake has no timeout, and local Unix socket connections are not expressible
+- Connection-layer risks tracked in `linux/docs/connections.md`: SQL Server verification semantics, real Kerberos negotiation, client certificates, IPv6 URL construction, multi-hop/password SSH fixtures, secondary-driver cancellation/reconnect, and the broken optional Oracle build
 
 ### Priority B: platform transports and data systems
 
@@ -438,9 +438,9 @@ Before publishing:
 - Choose the final reverse-DNS application ID.
 - Preserve existing XDG directories, connection UUIDs, secrets, tokens, history, workspace, and audit data across any rename.
 
-AUR is the first distribution target. The package must use a versioned source archive and real checksum, install desktop/AppStream/icon/translation/license files, pass `makepkg --cleanbuild`, `namcap`, `desktop-file-validate`, and `appstreamcli validate`, and launch under a fresh D-Bus session.
+An internal Arch RC is the first distribution target; public AUR publication is explicitly deferred. The package resolves the signed-off RC tag to an immutable commit archive and real checksum, installs GUI/agentd plus desktop/AppStream/icon/translation/license/policy files, and must pass `makepkg --cleanbuild`, `namcap`, `desktop-file-validate`, `appstreamcli validate`, and a fresh D-Bus launch.
 
-Do not enable an agent daemon automatically. If packaged, it requires explicit user configuration, a valid policy, and a working audit journal.
+Do not install or enable an agent daemon service for this RC. Package agentd as an on-demand stdio CLI requiring explicit client configuration, a valid policy, and a working audit journal.
 
 Flatpak follows after the identity is final and offline Cargo sources, portals, Secret Service, SSH, Kerberos, export paths, and updates are verified.
 

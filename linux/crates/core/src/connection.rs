@@ -28,6 +28,9 @@ pub struct ConnectOptions {
     pub tls: TlsConfig,
     pub auth_mode: AuthMode,
     pub service_endpoint: Option<(String, u16)>,
+    /// Direct local Unix-domain socket directory selected by the user.
+    /// This remains distinct from SSH-created forwarding sockets.
+    pub local_socket_dir: Option<PathBuf>,
     pub forwarded_socket_dir: Option<PathBuf>,
 }
 
@@ -39,16 +42,23 @@ impl ConnectOptions {
     }
 
     pub fn transport(&self) -> Transport<'_> {
-        match &self.forwarded_socket_dir {
-            Some(dir) => {
+        match (&self.forwarded_socket_dir, &self.local_socket_dir) {
+            (Some(dir), _) => {
                 let (host, port) = self.service_address();
                 Transport::Socket {
                     directory: dir.as_path(),
                     identity_host: host,
                     identity_port: port,
+                    origin: SocketOrigin::Forwarded,
                 }
             }
-            None => Transport::Tcp {
+            (None, Some(dir)) => Transport::Socket {
+                directory: dir.as_path(),
+                identity_host: self.host.as_str(),
+                identity_port: self.port,
+                origin: SocketOrigin::Local,
+            },
+            (None, None) => Transport::Tcp {
                 host: self.host.as_str(),
                 port: self.port,
             },
@@ -66,7 +76,14 @@ pub enum Transport<'a> {
         directory: &'a Path,
         identity_host: &'a str,
         identity_port: u16,
+        origin: SocketOrigin,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketOrigin {
+    Local,
+    Forwarded,
 }
 
 impl Default for ConnectOptions {
@@ -80,6 +97,7 @@ impl Default for ConnectOptions {
             tls: TlsConfig::disabled(),
             auth_mode: AuthMode::Password,
             service_endpoint: None,
+            local_socket_dir: None,
             forwarded_socket_dir: None,
         }
     }
@@ -224,6 +242,27 @@ mod tests {
                 directory: Path::new("/run/user/1000/tablepro-ssh-abc"),
                 identity_host: "db.corp.example",
                 identity_port: 5432,
+                origin: SocketOrigin::Forwarded,
+            }
+        );
+    }
+
+    #[test]
+    fn transport_uses_a_distinct_local_socket_origin() {
+        let options = ConnectOptions {
+            host: "localhost".into(),
+            port: 5432,
+            local_socket_dir: Some(PathBuf::from("/run/postgresql")),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            options.transport(),
+            Transport::Socket {
+                directory: Path::new("/run/postgresql"),
+                identity_host: "localhost",
+                identity_port: 5432,
+                origin: SocketOrigin::Local,
             }
         );
     }

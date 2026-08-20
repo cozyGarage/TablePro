@@ -1,6 +1,6 @@
 # Connection handling
 
-Last audited: 2026-08-18
+Last audited: 2026-08-20
 
 TablePro is a connection engine before it is a grid. This document records what
 the connection layer actually does today, what is proven, what is known to be
@@ -39,12 +39,16 @@ Two ideas carry most of the security weight:
   chain forwards to a private directory (mode `0700`) instead of a loopback
   port. Nothing else on the machine can reach the forwarded database, and the
   TLS server name cannot be confused with `127.0.0.1`.
+- **Local and forwarded sockets are different transports.** A saved PostgreSQL
+  connection may name a local socket directory directly. Local sockets reject
+  SSH and TLS, while an SSH-created socket retains the remote service identity
+  required by certificate verification.
 
 ## Transport support by driver
 
 | Driver | TCP | Unix socket | HTTP(S) | TLS modes honoured | Custom CA | Client cert | Connect timeout |
 |---|---|---|---|---|---|---|---|
-| PostgreSQL | yes | via SSH forward only | n/a | all five | yes | no | pool acquire only |
+| PostgreSQL | yes | direct local and SSH-forwarded | n/a | all five on TCP; disabled locally | yes | no | pool acquire only |
 | MySQL | yes | no | n/a | all five | yes | no | pool acquire only |
 | SQL Server | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | no | no | 5 s |
 | SQLite | n/a | n/a (local file) | n/a | n/a | n/a | n/a | pool acquire only |
@@ -175,14 +179,15 @@ window stays responsive, but the connection attempt itself may never resolve.
 The existing regression tests use a refused port, which returns immediately and
 does not exercise this path.
 
-### 7. No local Unix socket connections
+### 7. No local Unix socket connections — fixed
 
-A Unix socket is only reachable as the far end of an SSH forward. A local
-PostgreSQL or MySQL on the same machine, which on most Linux distributions is
-listening on `/var/run/postgresql` and often configured for peer
-authentication, cannot be connected to at all. For a Linux-first database client
-this is a notable gap: the most common local setup is the one that is not
-expressible.
+**Closed on 2026-08-20 for PostgreSQL.** Saved records carry an optional socket
+directory without a schema-version bump. The GTK form exposes Network and Unix
+socket endpoints only for capable drivers, defaults to `/run/postgresql`, and
+keeps the port as the `.s.PGSQL.<port>` selector. Transport validation rejects
+relative paths, non-socket targets, TLS, SSH, and unsupported drivers. GUI and
+agentd both assemble the same `ConnectOptions`; a disposable real PostgreSQL
+socket fixture covers query, write, cancellation, close, and reconnect.
 
 ### 8. The agent daemon and the GUI recover differently
 
@@ -229,7 +234,7 @@ Ordered by how much risk the gap carries.
 | SSH jump chains of more than one hop | none — the fixture has a single bastion |
 | SSH password and passphrase authentication | none — every test uses an unencrypted private key |
 | Unreachable-but-silent hosts | none — tests use refused ports, which return immediately |
-| Custom certificate authority from a saved connection | not expressible, so not testable |
+| Custom certificate authority from a saved connection | assembly and driver fixture coverage; installed GTK selection remains untested |
 | Client certificates and pinned fingerprints | not implemented |
 | Reconnect on any driver but PostgreSQL | none |
 | The Oracle driver under its `odpi` feature | does not compile |
@@ -250,8 +255,7 @@ that would have caught both.
    rather than refusing them.
 5. **Remove or implement the dead TLS fields.** `client_cert`, `client_key`, and
    `pinned_fingerprint` should either work or not exist.
-6. **Local Unix socket connections.** A saved connection should be able to name a
-   socket directory directly, not only as the output of an SSH forward.
+6. ~~**Local Unix socket connections.**~~ Done for PostgreSQL on 2026-08-20.
 7. **A TLS fixture per network driver.** The PostgreSQL fixture is the model.
    Until MySQL, SQL Server, and ClickHouse have one, their TLS behaviour is
    asserted only by reading the code — which is how items 1, 2, and 5 survived.

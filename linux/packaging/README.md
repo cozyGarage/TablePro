@@ -1,61 +1,65 @@
 # Packaging
 
-Community packaging for TablePro Linux. Flathub remains the primary distribution channel; `.deb` and AUR are secondary.
+The first release target is an internal Arch Linux release candidate. Nothing
+in this directory is ready for AUR or Flathub publication; the product name,
+repository, application ID, portal permissions, and public update channel are
+still provisional.
 
-## Flatpak
+## Internal Arch RC
 
-Manifest: [`../flatpak/com.tablepro.linux.json`](../flatpak/com.tablepro.linux.json)
+The recipe in [`arch/PKGBUILD`](arch/PKGBUILD) accepts only an immutable commit
+archive and a real SHA-256 checksum. It installs `tablepro`,
+`tablepro-agentd`, desktop/AppStream/icon metadata, the license, the example
+policy, and any compiled translation catalogs. It deliberately does not ship a
+systemd unit: stdio agentd is launched on demand by its MCP client.
+
+After the exact commit passes the release gates and is tagged locally as
+`linux-v0.1.0-rc1`:
+
+```bash
+./scripts/build-arch-rc.sh
+```
+
+The helper refuses a dirty tree or a local/remote tag that does not identify
+`HEAD`, resolves the fork tag to a commit, downloads that immutable commit
+archive, calculates its checksum, runs `makepkg --cleanbuild`, and runs
+`namcap` plus package-content validation. Do not publish the resulting
+artifact to the AUR.
+
+Also validate the installed artifact in a clean Arch VM or container:
+
+```bash
+desktop-file-validate /usr/share/applications/com.tablepro.linux.desktop
+appstreamcli validate --no-net /usr/share/metainfo/com.tablepro.linux.metainfo.xml
+dbus-run-session -- tablepro
+tablepro-agentd --help
+```
+
+Test install, upgrade, downgrade, and removal. Package operations must leave
+the user's XDG configuration, data, state, and keyring records untouched.
+
+## Debian / Ubuntu development package
+
+The Debian files are a secondary development scaffold, not a release target.
+For a local binary package:
+
+```bash
+./scripts/preflight.sh
+./scripts/build-deb.sh
+sudo apt install ./packaging/out/tablepro_*.deb
+```
+
+The package installs the GUI as `/usr/bin/tablepro` and agentd as an on-demand
+`/usr/bin/tablepro-agentd` CLI. It does not install or enable a user service.
+
+## Flatpak development build
+
+The Flatpak manifest remains a non-release CI build:
 
 ```bash
 ./scripts/build-flatpak.sh
 ```
 
-CI: [`.github/workflows/flatpak-linux.yml`](../../.github/workflows/flatpak-linux.yml) builds the manifest on every Linux-path PR. The app module uses `--share=network` so Cargo can fetch crates during CI. Flathub forbids that, so generate offline sources before a Flathub submission:
-
-```bash
-git clone https://github.com/flatpak/flatpak-builder-tools
-./scripts/generate-cargo-sources.sh ./flatpak-builder-tools
-```
-
-Then wire `flatpak/generated-sources.json` into the module sources and set `CARGO_NET_OFFLINE=true` (see the script's output).
-## Debian / Ubuntu (`.deb`)
-
-You do **not** need a `.deb` for day-to-day development. Use `cargo run -p tablepro-app` and `./scripts/preflight.sh` while iterating. Rebuild the package only when you want to install/update the system binary, desktop entry, or `tablepro-agentd` unit.
-
-Debian source packaging lives in [`debian/`](debian/). For a quick local binary package without a full source upload:
-
-```bash
-./scripts/preflight.sh         # cheap gate first
-./scripts/build-deb.sh
-# → packaging/out/tablepro_<version>_amd64.deb
-sudo apt install ./packaging/out/tablepro_*.deb
-```
-
-Bump `DEB_VERSION` (default in `scripts/build-deb.sh`) when the binary changes,
-or apt will say the installed package is already the newest version. To force
-replace the same version without a bump:
-
-```bash
-sudo apt install --reinstall ./packaging/out/tablepro_0.1.0-1_amd64.deb
-```
-
-To repackage already-built release binaries without waiting on cargo:
-
-```bash
-DEB_SKIP_BUILD=1 ./scripts/build-deb.sh
-```
-
-Build-Depends (source package): `cargo`, `rustc (>= 1.93)`, `libgtk-4-dev`, `libadwaita-1-dev`, `libgtksourceview-5-dev`, `libssl-dev`, `libsecret-1-dev`, `libkrb5-dev`, `clang`, `gettext`.
-
-Default app builds omit the optional `duckdb` Cargo feature (bundled DuckDB is large). Pass `--features duckdb` to `cargo build` if you need that driver in a custom package.
-
-## Arch (AUR)
-
-[`aur/PKGBUILD`](aur/PKGBUILD) builds from the upstream `linux` branch.
-
-```bash
-cd packaging/aur
-makepkg -si
-```
-
-Pin a release tag / commit and fill `sha256sums` before submitting to the AUR.
+It still needs offline Cargo sources, a finalized identity, portal work, and a
+filesystem-permission review before any Flathub submission. A successful
+manifest build is not release evidence for the Arch RC.

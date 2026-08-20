@@ -47,6 +47,8 @@ run_full() {
 run_integration() {
   echo "==> Postgres integration"
   cargo test --test integration -p tablepro-driver-postgres -- --include-ignored --test-threads=1
+  echo "==> PostgreSQL Unix-socket integration"
+  ./scripts/test-postgres-socket.sh
   echo "==> MySQL integration"
   cargo test --test integration -p tablepro-driver-mysql -- --include-ignored --test-threads=1
   echo "==> MSSQL integration"
