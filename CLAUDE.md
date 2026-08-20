@@ -150,7 +150,7 @@ cargo clippy --manifest-path linux/Cargo.toml --workspace --exclude tablepro-dri
 cargo test --manifest-path linux/Cargo.toml --workspace --exclude tablepro-driver-duckdb --lib --bins
 cargo test --manifest-path linux/Cargo.toml -p tablepro-mcp --test enforce_policy
 cargo test --manifest-path linux/Cargo.toml -p tablepro-mcp --test timeout_audit
-cargo deny check --manifest-path linux/Cargo.toml
+cargo deny check   # run from linux/; it does not accept --manifest-path
 ```
 
 Driver integration tests require Docker or a compatible Podman socket:
