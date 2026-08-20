@@ -61,31 +61,9 @@ fn auth_mode_for_row(row: u32) -> AuthMode {
     AUTH_MODE_ROWS.get(row as usize).copied().unwrap_or_default()
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct AuthFormState {
-    file_based: bool,
-    supports_integrated: bool,
-    supports_local_socket: bool,
-    selected: AuthMode,
-}
+mod form;
 
-impl AuthFormState {
-    fn mode(self) -> AuthMode {
-        if self.shows_method() {
-            self.selected
-        } else {
-            AuthMode::Password
-        }
-    }
-
-    fn shows_method(self) -> bool {
-        !self.file_based && self.supports_integrated
-    }
-
-    fn shows_credentials(self) -> bool {
-        !self.file_based && self.mode() == AuthMode::Password
-    }
-}
+use form::{AuthFormState, EndpointFormState, resolved_socket_path, socket_directory_is_valid};
 
 pub struct ConnectDialogInit {
     pub registry: Arc<DriverRegistry>,
@@ -561,10 +539,9 @@ impl ConnectDialog {
         let username_required = self.form.shows_credentials() && !socket;
         let username_empty = username_required && self.username.text().trim().is_empty();
         toggle_error(&self.username, username_empty);
-        let socket_invalid = socket && !std::path::Path::new(self.socket_dir.text().as_str()).is_absolute();
+        let socket_invalid = socket && !socket_directory_is_valid(self.socket_dir.text().as_str());
         toggle_error(&self.socket_dir, socket_invalid);
-        let resolved = std::path::Path::new(self.socket_dir.text().as_str())
-            .join(format!(".s.PGSQL.{}", self.port.value() as u16));
+        let resolved = resolved_socket_path(self.socket_dir.text().as_str(), self.port.value() as u16);
         self.resolved_socket.set_subtitle(&resolved.display().to_string());
 
         let valid = self.is_form_valid();
@@ -580,7 +557,7 @@ impl ConnectDialog {
             if !self.uses_local_socket() && self.host.text().trim().is_empty() {
                 return false;
             }
-            if self.uses_local_socket() && !std::path::Path::new(self.socket_dir.text().as_str()).is_absolute() {
+            if self.uses_local_socket() && !socket_directory_is_valid(self.socket_dir.text().as_str()) {
                 return false;
             }
             if self.form.shows_credentials() && !self.uses_local_socket() && self.username.text().trim().is_empty() {
@@ -656,14 +633,14 @@ impl ConnectDialog {
     }
 
     fn apply_form_state(&self) {
-        let socket = self.uses_local_socket();
-        let network = !self.form.file_based && !socket;
-        self.endpoint_combo
-            .set_visible(!self.form.file_based && self.form.supports_local_socket);
+        let endpoint = self.endpoint_state();
+        let socket = endpoint.uses_local_socket();
+        let network = endpoint.shows_network();
+        self.endpoint_combo.set_visible(endpoint.shows_endpoint_choice());
         self.host.set_visible(network);
-        self.port.set_visible(!self.form.file_based);
-        self.socket_dir.set_visible(socket);
-        self.resolved_socket.set_visible(socket);
+        self.port.set_visible(endpoint.shows_port());
+        self.socket_dir.set_visible(endpoint.shows_socket_rows());
+        self.resolved_socket.set_visible(endpoint.shows_socket_rows());
         self.tls_mode.set_visible(network);
         self.auth_group.set_visible(!self.form.file_based);
         self.ssh.set_visible(network);
@@ -707,8 +684,16 @@ impl ConnectDialog {
         }
     }
 
+    fn endpoint_state(&self) -> EndpointFormState {
+        EndpointFormState {
+            file_based: self.form.file_based,
+            supports_local_socket: self.form.supports_local_socket,
+            socket_selected: self.endpoint_combo.selected() == 1,
+        }
+    }
+
     fn uses_local_socket(&self) -> bool {
-        self.form.supports_local_socket && self.endpoint_combo.selected() == 1
+        self.endpoint_state().uses_local_socket()
     }
 
     fn refresh_driver_maturity_subtitle(&self) {
@@ -969,62 +954,6 @@ fn saved_ssh_matches(saved: &Option<SavedSshConfig>, current: Option<&SshInputs>
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn auth_form_state_drives_mode_and_visibility() {
-        let cases = [
-            (AuthFormState::default(), AuthMode::Password, false, true),
-            (
-                AuthFormState {
-                    file_based: false,
-                    supports_integrated: true,
-                    supports_local_socket: false,
-                    selected: AuthMode::Password,
-                },
-                AuthMode::Password,
-                true,
-                true,
-            ),
-            (
-                AuthFormState {
-                    file_based: false,
-                    supports_integrated: true,
-                    supports_local_socket: false,
-                    selected: AuthMode::Kerberos,
-                },
-                AuthMode::Kerberos,
-                true,
-                false,
-            ),
-            (
-                AuthFormState {
-                    file_based: false,
-                    supports_integrated: false,
-                    supports_local_socket: false,
-                    selected: AuthMode::Kerberos,
-                },
-                AuthMode::Password,
-                false,
-                true,
-            ),
-            (
-                AuthFormState {
-                    file_based: true,
-                    supports_integrated: true,
-                    supports_local_socket: false,
-                    selected: AuthMode::Kerberos,
-                },
-                AuthMode::Password,
-                false,
-                false,
-            ),
-        ];
-        for (state, mode, method, credentials) in cases {
-            assert_eq!(state.mode(), mode, "{state:?}");
-            assert_eq!(state.shows_method(), method, "{state:?}");
-            assert_eq!(state.shows_credentials(), credentials, "{state:?}");
-        }
-    }
 
     #[test]
     fn auth_mode_rows_decode_to_their_modes() {
