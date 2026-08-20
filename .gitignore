@@ -6,6 +6,8 @@
 *.profdata
 lcov.info
 coverage/
+__pycache__/
+*.py[cod]
 
 # Local dependency sysroot and package output
 /.local-deps/
