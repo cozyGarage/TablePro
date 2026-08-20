@@ -11,6 +11,7 @@ use relm4::prelude::*;
 use relm4::{adw, gtk};
 use sourceview5::prelude::*;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use tablepro_core::{OperationControl, QueryResult};
 use tablepro_storage::query_history::{self, NewEntry, Outcome};
@@ -35,12 +36,14 @@ pub struct SqlEditor {
     executing_sql: Option<String>,
     executing_metadata: Option<ConnectionMetadata>,
     executing_started_at: Option<SystemTime>,
+    connection_id: Option<Uuid>,
 }
 
 pub struct SqlEditorInit {
     pub schema_buffer: gtk::TextBuffer,
     pub schema_index: std::rc::Rc<std::cell::RefCell<SchemaIndex>>,
     pub initial_query: Option<String>,
+    pub connection_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -343,6 +346,7 @@ impl SimpleComponent for SqlEditor {
             executing_sql: None,
             executing_metadata: None,
             executing_started_at: None,
+            connection_id: init.connection_id,
         };
         ComponentParts { model, widgets }
     }
@@ -378,7 +382,7 @@ impl SimpleComponent for SqlEditor {
                     buffer.text(&start, &end, true).to_string()
                 };
                 if let Some(window) = self.source_view.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                    crate::ui::explain_dialog::present(&window, &text);
+                    crate::ui::explain_dialog::present(&window, self.connection_id, &text);
                 }
             }
 
@@ -516,11 +520,16 @@ impl SimpleComponent for SqlEditor {
 }
 
 impl SqlEditor {
+    fn connection(&self) -> Option<std::sync::Arc<dyn tablepro_core::Connection>> {
+        database_service::instance().get(self.connection_id?)
+    }
+
+    fn metadata(&self) -> Option<ConnectionMetadata> {
+        database_service::instance().metadata(self.connection_id?)
+    }
+
     fn begin_run(&mut self, sql: String, sender: ComponentSender<Self>) {
-        let driver_id = database_service::instance()
-            .active_metadata()
-            .map(|metadata| metadata.driver_id)
-            .unwrap_or_default();
+        let driver_id = self.metadata().map(|metadata| metadata.driver_id).unwrap_or_default();
         let names = crate::services::query_parameters::statement_names(&sql, &driver_id);
         if names.is_empty() {
             self.execute_sql(sql, std::collections::HashMap::new(), sender);
@@ -549,7 +558,7 @@ impl SqlEditor {
         parameter_values: std::collections::HashMap<String, tablepro_core::Value>,
         sender: ComponentSender<Self>,
     ) {
-        let conn = match database_service::instance().active() {
+        let conn = match self.connection() {
             Some(c) => c,
             None => {
                 self.status.set_label(&crate::tr!("no active connection"));
@@ -571,13 +580,14 @@ impl SqlEditor {
         let _ = sender.output(SqlEditorOutput::RunStateChanged(true));
 
         self.executing_sql = Some(trimmed.clone());
-        self.executing_metadata = database_service::instance().active_metadata();
+        self.executing_metadata = self.metadata();
         self.executing_started_at = Some(SystemTime::now());
 
         let timeout_secs = crate::services::preferences::load().query_timeout_secs;
-        let driver_id = database_service::instance()
-            .active_metadata()
-            .map(|metadata| metadata.driver_id)
+        let driver_id = self
+            .executing_metadata
+            .as_ref()
+            .map(|metadata| metadata.driver_id.clone())
             .unwrap_or_default();
         let sender_clone = sender.clone();
         sender.command(move |_, shutdown| {

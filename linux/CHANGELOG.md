@@ -22,7 +22,7 @@
 - Server version cached on connect and shown in the window subtitle
 - ClickHouse, Redis, DuckDB, and MongoDB drivers; Oracle remains excluded until its optional implementation and fixture work
 - Preferences → MCP token pairing (libsecret + loopback endpoint)
-- Multi-window via New Window
+- Multi-window via New Window, with each window connecting on its own
 - Flathub submission notes and screenshot capture guide
 - Rust file-size guardrail in preflight: soft 1200 / hard 1800 lines, with ratchet ceilings in `file-size-baselines.txt`
 - Driver maturity labels in the Connect dialog (Experimental subtitle for Redis, MongoDB, DuckDB, and Oracle)
@@ -44,6 +44,7 @@
 - Internal Arch RC packaging from an immutable commit archive and verified checksum
 - Screen readers now announce the browse toolbar's insert-row button by name
 - Installed GTK checks that a connection switch gates pending row edits and that a browse tab reads the connection it was reopened against
+- Each window holds its own database connection, so several databases can be open at the same time in separate windows
 
 ### Changed
 

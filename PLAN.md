@@ -27,9 +27,9 @@ Verified locally on 2026-08-21 against Arch stable Rust 1.97.1:
 - File-size guard passes
 - `cargo fmt --all -- --check` passes
 - Full-workspace strict Clippy passes with `-D warnings`
-- The unit tier passes: 541 tests, one ignored Secret Service test
+- The unit tier passes: 543 tests, one ignored Secret Service test
 - The sandbox tier passes: 361 tests, two ignored
-- The installed GTK tier passes: 11 of 11 scenarios, retry-free
+- The installed GTK tier passes: 12 of 12 scenarios, retry-free
 - `cargo deny check` reports advisories, bans, licenses, and sources ok
 - All 27 Docker driver integration tests passed on 2026-08-12: PostgreSQL 4, MySQL 4, SQL Server 9, and ClickHouse 10
 
@@ -304,6 +304,7 @@ Use SQLite, temporary XDG directories, `dbus-run-session`, Xvfb, and AT-SPI auto
 3. [x] An unavailable audit journal cannot be bypassed through approval.
 4. [x] A connection switch with pending row edits offers Stay, Discard, and Save, and neither Stay nor Discard writes to the old database.
 5. [x] A browse tab reopened after a switch reads the new connection, and the previous page indicator does not survive the switch.
+6. [x] Two windows hold two connections at once, and each window's write reaches only its own database.
 
 Unix-socket endpoint behavior is form logic, so it is covered in the unit tier
 rather than the GTK tier: the endpoint choice appears only for a driver that
@@ -485,7 +486,10 @@ Removed material included retired application source, tests, project files, runt
 
 ## Status
 
-Not started. Planned on 2026-08-21, sequenced after the internal Arch RC is tagged.
+In progress since 2026-08-21. Slice 10.1 is implemented and locally
+release-verified: activation is additive, each window owns and releases its own
+connection, and the single-connection limit is gone. Slices 10.2 through 10.7
+are not started.
 
 The product is strong on safety and thin on operations. A DBA who manages many
 servers gets one active connection per process, an activity dialog that renders
@@ -641,8 +645,8 @@ Primary files:
 
 ## Acceptance criteria
 
-- [ ] Several connections are open at once, and a query result reaches only the tab that owns its connection.
-- [ ] Closing one connection leaves every other connection usable and ends only its own monitor task.
+- [x] Several connections are open at once, and a query result reaches only the tab that owns its connection.
+- [x] Closing one connection leaves every other connection usable and ends only its own monitor task.
 - [ ] Workspace restoration reopens every referenced connection, and a failed reconnect leaves that tab inert.
 - [ ] Saved connections group, tag, filter, and search, and legacy connection files without the new fields still load.
 - [ ] Each driver declares which activity queries it supports, and the UI offers only those.

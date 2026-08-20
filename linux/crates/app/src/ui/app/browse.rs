@@ -5,7 +5,6 @@ use relm4::{ComponentController, ComponentSender, adw, gtk};
 use tablepro_core::{ColumnInfo, KEYSET_OFFSET_THRESHOLD, QueryResult, keyset_order_by, keyset_where_clause};
 use uuid::Uuid;
 
-use crate::services::database_service;
 use crate::ui::browse_tab::BrowseTabInput;
 
 use super::{App, AppMsg, ExportFormat, OpenMode, render_json};
@@ -49,7 +48,7 @@ impl App {
             )
         };
 
-        let Some(conn) = database_service::instance().active() else {
+        let Some(conn) = self.window_connection() else {
             sender.input(AppMsg::LoadFailed(Some(tab_id), "no active connection".into()));
             return;
         };
@@ -168,7 +167,7 @@ impl App {
             (model.schema().map(str::to_owned), model.table().to_string())
         };
 
-        let Some(conn) = database_service::instance().active() else {
+        let Some(conn) = self.window_connection() else {
             return;
         };
         let sender_clone = sender.clone();
@@ -203,7 +202,7 @@ impl App {
             )
         };
 
-        let Some(conn) = database_service::instance().active() else {
+        let Some(conn) = self.window_connection() else {
             return;
         };
 

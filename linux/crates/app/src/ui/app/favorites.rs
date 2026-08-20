@@ -54,7 +54,7 @@ impl App {
         dialog.set_close_response("cancel");
 
         let driver_id = self.current_driver_id.clone();
-        let connection_id = crate::services::database_service::instance().active_id();
+        let connection_id = self.connection_id;
         let sender_for_response = sender.clone();
         dialog.connect_response(None, move |_, response| {
             if response != "save" {

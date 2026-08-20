@@ -5,13 +5,26 @@ use tablepro_core::TableInfo;
 use tablepro_storage::SavedConnection;
 use uuid::Uuid;
 
-use crate::services::database_service::ConnectionHealth;
+use crate::services::database_service::{ConnectionHealth, ConnectionMetadata};
 use crate::services::{connection_service, database_service};
 use crate::ui::connect_dialog::{ConnectDialog, ConnectDialogInit, ConnectDialogOutput};
 
 use super::{App, AppMsg, ConnectionTransition, SwitchDecision, qualified_label};
 
 impl App {
+    /// The policy-guarded connection this window owns, or `None` when the
+    /// window is disconnected. Never resolves through the process-wide focus,
+    /// so another window's connection can never answer for this one.
+    pub(super) fn window_connection(&self) -> Option<std::sync::Arc<dyn tablepro_core::Connection>> {
+        let id = self.connection_id?;
+        database_service::instance().get(id)
+    }
+
+    pub(super) fn window_metadata(&self) -> Option<ConnectionMetadata> {
+        let id = self.connection_id?;
+        database_service::instance().metadata(id)
+    }
+
     pub(super) fn on_open_connect(&mut self, sender: ComponentSender<Self>) {
         if self.connection_transition != ConnectionTransition::Idle || self.dialog.is_some() {
             self.show_toast(&crate::tr!("A connection change is already in progress."));
@@ -30,12 +43,18 @@ impl App {
         self.dialog = Some(dialog);
     }
 
-    pub(super) fn on_connected(&mut self, tables: Vec<TableInfo>, driver_id: String, sender: ComponentSender<Self>) {
+    pub(super) fn on_connected(
+        &mut self,
+        activated: connection_service::ActivatedConnection,
+        sender: ComponentSender<Self>,
+    ) {
+        let connection_service::ActivatedConnection { id, tables, driver_id } = activated;
         self.dismiss_loading_page();
         self.dialog = None;
         self.connected = true;
+        self.connection_id = Some(id);
         self.current_driver_id = Some(driver_id.clone());
-        self.read_only = database_service::instance().is_active_read_only();
+        self.read_only = self.window_metadata().map(|m| m.read_only).unwrap_or(false);
         self.read_only_badge.set_visible(self.read_only);
         self.split_view.set_show_sidebar(true);
         self.disconnect_action.set_enabled(true);
@@ -52,7 +71,7 @@ impl App {
         self.refresh_window_title();
         // Restore tabs (browse + editor) persisted from the prior session
         // for this connection.
-        if let Some(connection_id) = database_service::instance().active_id() {
+        if let Some(connection_id) = self.connection_id {
             self.restore_workspace_tabs(connection_id, sender.clone());
             // Stamp `last_opened_at = now()` then reload connections so
             // the popover + welcome view re-sort with the fresh
@@ -129,7 +148,9 @@ impl App {
         // connection we're about to release. Reopening one against a
         // different connection would target a non-existent table.
         self.clear_closed_tabs_stack();
-        database_service::instance().close_all();
+        if let Some(id) = self.connection_id.take() {
+            database_service::instance().close(id);
+        }
         self.schema_buffer.set_text(crate::ui::editor::SQL_KEYWORDS);
         self.current_driver_id = None;
         self.read_only = false;
@@ -178,7 +199,9 @@ impl App {
     }
 
     pub(super) fn on_poll_health(&mut self) {
-        let current = database_service::instance().active_health();
+        let current = self
+            .connection_id
+            .and_then(|id| database_service::instance().health(id));
         if current != self.health_state {
             self.refresh_health_banner(current.clone());
             self.health_state = current;
@@ -253,19 +276,6 @@ impl App {
     ) {
         if self.connection_transition != ConnectionTransition::Connecting {
             tracing::warn!("discarding stale prepared connection");
-            return;
-        }
-        if !self.connected && database_service::instance().active_id().is_some() {
-            self.connection_transition = ConnectionTransition::Idle;
-            self.switch_cancel_audit_was_disabled = None;
-            self.dismiss_loading_page();
-            self.set_status_page(
-                super::StatusKind::Error,
-                &crate::tr!("Another window is connected"),
-                &crate::tr!(
-                    "This release supports one active database connection per TablePro process. Disconnect the other window first."
-                ),
-            );
             return;
         }
         if self.prepared_connection.is_some() {
@@ -444,15 +454,14 @@ impl App {
         // Activation is additive, so this window releases the connection it is
         // replacing. Closing before activation keeps reconnecting to the same
         // saved connection correct: the identifier is reused, not cancelled.
-        let replaced = database_service::instance().active_id();
-        if let Some(previous) = replaced {
+        if let Some(previous) = self.connection_id.take() {
             database_service::instance().close(previous);
         }
-        let (tables, driver_id) = prepared.activate();
+        let activated = prepared.activate();
         self.connection_transition = ConnectionTransition::Idle;
         self.switch_saves_pending.clear();
         self.switch_cancel_audit_was_disabled = None;
-        self.on_connected(tables, driver_id, sender);
+        self.on_connected(activated, sender);
     }
 
     pub(super) fn connection_switch_save_succeeded(&mut self, tab_id: Uuid, sender: ComponentSender<Self>) {
@@ -522,7 +531,7 @@ impl App {
         // when the tab strip already serves that role. Matches GNOME
         // Builder (subtitle = branch name only) and Text Editor
         // (subtitle = filename only) — short, single-purpose.
-        let metadata = database_service::instance().active_metadata();
+        let metadata = self.window_metadata();
         let connection_name = metadata.as_ref().map(|m| m.name.as_str());
         let active = self.selected_browse_slot_table();
         let table_pair = active.as_ref().map(|(s, t)| (s.as_deref(), t.as_str()));

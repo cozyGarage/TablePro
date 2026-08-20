@@ -102,7 +102,6 @@ impl AuditRuntime {
 
 pub struct DatabaseService {
     connections: Mutex<HashMap<Uuid, Entry>>,
-    active: Mutex<Option<Uuid>>,
     policy: Mutex<Arc<PolicyConfig>>,
     audit: Arc<dyn tablepro_policy::AuditSink>,
     audit_available: bool,
@@ -115,7 +114,6 @@ impl DatabaseService {
         let audit = AuditRuntime::open_default();
         Self {
             connections: Mutex::new(HashMap::new()),
-            active: Mutex::new(None),
             policy: Mutex::new(Arc::new(load_policy())),
             audit: audit.sink,
             audit_available: audit.available,
@@ -179,12 +177,9 @@ impl DatabaseService {
         };
         let mut connections = self.connections.lock().expect("database_service lock");
         connections.insert(id, entry);
-        let mut active = self.active.lock().expect("database_service lock");
-        *active = Some(id);
     }
 
-    pub fn active_metadata(&self) -> Option<ConnectionMetadata> {
-        let id = self.active_id()?;
+    pub fn metadata(&self, id: Uuid) -> Option<ConnectionMetadata> {
         let entries = self.connections.lock().expect("database_service lock");
         entries.get(&id).map(|e| e.metadata.clone())
     }
@@ -219,35 +214,16 @@ impl DatabaseService {
         Some(Arc::new(PolicyGuard::new(inner.connection.clone(), ctx)) as Arc<dyn Connection>)
     }
 
-    pub fn active_handle(&self, principal: Principal) -> Option<Arc<dyn Connection>> {
-        let id = self.active_id()?;
-        self.handle(id, principal)
-    }
-
     /// Alias for [`handle`] with the human GUI principal.
     pub fn get(&self, id: Uuid) -> Option<Arc<dyn Connection>> {
         self.handle(id, Principal::human_gui())
     }
 
-    /// Human GUI convenience: active connection under the GUI principal.
-    pub fn active(&self) -> Option<Arc<dyn Connection>> {
-        self.active_handle(Principal::human_gui())
-    }
-
-    pub fn active_id(&self) -> Option<Uuid> {
-        *self.active.lock().expect("database_service lock")
-    }
-
-    pub fn active_health(&self) -> Option<ConnectionHealth> {
-        let id = self.active_id()?;
+    pub fn health(&self, id: Uuid) -> Option<ConnectionHealth> {
         let entries = self.connections.lock().expect("database_service lock");
         let entry = entries.get(&id)?;
         let inner = entry.inner.lock().expect("entry inner lock");
         Some(inner.health.clone())
-    }
-
-    pub fn is_active_read_only(&self) -> bool {
-        self.active_metadata().map(|m| m.read_only).unwrap_or(false)
     }
 
     pub fn close(&self, id: Uuid) {
@@ -255,18 +231,6 @@ impl DatabaseService {
         if let Some(entry) = entries.remove(&id) {
             entry.cancel.cancel();
         }
-        let mut active = self.active.lock().expect("database_service lock");
-        if *active == Some(id) {
-            *active = None;
-        }
-    }
-
-    pub fn close_all(&self) {
-        let mut entries = self.connections.lock().expect("database_service lock");
-        for (_, entry) in entries.drain() {
-            entry.cancel.cancel();
-        }
-        *self.active.lock().expect("database_service lock") = None;
     }
 }
 
@@ -321,15 +285,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn activation_is_additive_and_focuses_the_newest_connection() {
+    async fn activation_is_additive_and_keeps_earlier_connections() {
         let service = DatabaseService::new();
 
         let first = open_memory_connection(&service, "first").await;
-        assert_eq!(service.active_id(), Some(first));
         assert_eq!(service.all_connections().len(), 1);
 
         let second = open_memory_connection(&service, "second").await;
-        assert_eq!(service.active_id(), Some(second));
         assert_eq!(service.all_connections().len(), 2);
         assert!(service.handle(first, Principal::human_gui()).is_some());
         assert!(service.handle(second, Principal::human_gui()).is_some());
@@ -343,7 +305,6 @@ mod tests {
 
         service.close(second);
 
-        assert_eq!(service.active_id(), None);
         assert_eq!(service.all_connections().len(), 1);
         assert!(service.handle(second, Principal::human_gui()).is_none());
         let survivor = service.handle(first, Principal::human_gui()).expect("first survives");
@@ -351,27 +312,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closing_a_connection_that_is_not_focused_keeps_the_focus() {
+    async fn each_connection_keeps_its_own_metadata() {
         let service = DatabaseService::new();
         let first = open_memory_connection(&service, "first").await;
         let second = open_memory_connection(&service, "second").await;
 
+        assert_eq!(service.metadata(first).map(|m| m.name), Some("first".to_string()));
+        assert_eq!(service.metadata(second).map(|m| m.name), Some("second".to_string()));
+
         service.close(first);
 
-        assert_eq!(service.active_id(), Some(second));
-        assert_eq!(service.all_connections().len(), 1);
-        assert!(service.handle(second, Principal::human_gui()).is_some());
-    }
-
-    #[tokio::test]
-    async fn close_all_releases_every_connection() {
-        let service = DatabaseService::new();
-        open_memory_connection(&service, "first").await;
-        open_memory_connection(&service, "second").await;
-
-        service.close_all();
-
-        assert_eq!(service.active_id(), None);
-        assert!(service.all_connections().is_empty());
+        assert!(service.metadata(first).is_none());
+        assert_eq!(service.metadata(second).map(|m| m.name), Some("second".to_string()));
     }
 }

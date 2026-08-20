@@ -1,7 +1,5 @@
 use relm4::{ComponentController, ComponentSender};
 
-use crate::services::database_service;
-
 use super::{App, AppMsg};
 
 impl App {
@@ -18,7 +16,7 @@ impl App {
         if pending.is_empty() {
             return;
         }
-        let Some(conn) = database_service::instance().active() else {
+        let Some(conn) = self.window_connection() else {
             return;
         };
         let sender_clone = sender.clone();

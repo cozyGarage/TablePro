@@ -1,5 +1,6 @@
 //! Activity / monitoring dialog. Runs driver-specific activity SQL through
-//! the policy-gated active connection and shows the result grid.
+//! the policy-gated connection owned by the calling window and shows the
+//! result grid.
 
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk};
@@ -9,8 +10,17 @@ use tablepro_core::{ActivityQuery, Value, activity_sql, parse_session_id};
 use crate::services::database_service;
 use crate::tr;
 
-pub fn present(parent: &gtk::Window) {
-    let Some(meta) = database_service::instance().active_metadata() else {
+pub fn present(parent: &gtk::Window, connection_id: Option<uuid::Uuid>) {
+    let Some(connection) = connection_id else {
+        let alert = adw::AlertDialog::new(
+            Some(&tr!("No active connection")),
+            Some(&tr!("Open a connection before viewing server activity.")),
+        );
+        alert.add_response("ok", &tr!("OK"));
+        alert.present(Some(parent));
+        return;
+    };
+    let Some(meta) = database_service::instance().metadata(connection) else {
         let alert = adw::AlertDialog::new(
             Some(&tr!("No active connection")),
             Some(&tr!("Open a connection before viewing server activity.")),
@@ -72,7 +82,7 @@ pub fn present(parent: &gtk::Window) {
                 status_l.set_text(&tr!("Not supported for this driver."));
                 return;
             };
-            let Some(conn) = database_service::instance().active() else {
+            let Some(conn) = database_service::instance().get(connection) else {
                 status_l.set_text(&tr!("Connection closed."));
                 return;
             };
@@ -120,7 +130,7 @@ pub fn present(parent: &gtk::Window) {
             status_l.set_text(&tr!("Kill not supported for this driver."));
             return;
         };
-        let Some(conn) = database_service::instance().active() else {
+        let Some(conn) = database_service::instance().get(connection) else {
             return;
         };
         let text_buf = text_buf.clone();

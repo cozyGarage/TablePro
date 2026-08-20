@@ -117,6 +117,10 @@ pub struct App {
     default_page_size: u64,
     saved_connections: Vec<SavedConnection>,
     connected: bool,
+    /// The connection this window owns. Activation is process-wide and
+    /// additive, so a window must resolve its own connection rather than
+    /// whichever one was focused most recently.
+    connection_id: Option<Uuid>,
     /// Serialized connection-switch state. The candidate is fully validated
     /// before it can replace the active connection.
     connection_transition: ConnectionTransition,
@@ -881,6 +885,7 @@ impl SimpleComponent for App {
             default_page_size: crate::services::preferences::load().default_page_size,
             saved_connections: Vec::new(),
             connected: false,
+            connection_id: None,
             connection_transition: ConnectionTransition::Idle,
             prepared_connection: None,
             switch_saves_pending: std::collections::HashMap::new(),
@@ -1110,12 +1115,19 @@ impl SimpleComponent for App {
             AppMsg::ShowShortcuts => self.on_show_shortcuts(),
             AppMsg::ShowAbout => self.on_show_about(),
             AppMsg::ShowActivity => {
-                crate::ui::activity_dialog::present(self.window.upcast_ref::<gtk::Window>());
+                crate::ui::activity_dialog::present(self.window.upcast_ref::<gtk::Window>(), self.connection_id);
             }
             AppMsg::ExplainActiveQuery => self.on_explain_active_query(),
             AppMsg::ShowPreferences => super::preferences::present(&self.window),
             AppMsg::NewWindow => {
                 let ctrl = App::builder().launch(self.registry.clone()).detach();
+                // Only the window relm4 starts the application with is
+                // presented for us. A window spawned here stays unmapped
+                // unless it joins the application and is presented.
+                if let Some(application) = self.window.application() {
+                    ctrl.widget().set_application(Some(&application));
+                }
+                ctrl.widget().present();
                 self.extra_windows.push(ctrl);
             }
             AppMsg::ExportCsv => self.on_export(ExportFormat::Csv),

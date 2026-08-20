@@ -7,7 +7,6 @@ use relm4::{Component, ComponentController, ComponentSender, adw, gtk};
 
 use uuid::Uuid;
 
-use crate::services::database_service;
 use crate::services::workspace_state::{self, WorkspaceTabRecord};
 use crate::ui::browse_tab::{BrowseTab, BrowseTabInit, BrowseTabInput, BrowseTabOutput};
 use crate::ui::editor::{SqlEditor, SqlEditorInit, SqlEditorInput, SqlEditorOutput, derive_tab_label};
@@ -158,10 +157,14 @@ impl App {
         let schema_buffer_for_create = self.schema_buffer.clone();
         let schema_index_for_create = self.schema_index.clone();
         let sender_for_create = sender.clone();
+        // The workspace root is rebuilt on every connect, so the identifier
+        // captured here always belongs to the connection this window owns.
+        let connection_id_for_create = self.connection_id;
         tab_overview.connect_create_tab(move |_| {
             let tab_id = Uuid::new_v4();
             let editor = SqlEditor::builder()
                 .launch(SqlEditorInit {
+                    connection_id: connection_id_for_create,
                     schema_buffer: schema_buffer_for_create.clone(),
                     schema_index: schema_index_for_create.clone(),
                     initial_query: None,
@@ -355,7 +358,7 @@ impl App {
         };
         let tab_id = Uuid::new_v4();
         let driver_id = self.driver_id().to_string();
-        let connection_id = database_service::instance().active_id();
+        let connection_id = self.connection_id;
         let read_only = self.read_only;
 
         let browse_init = BrowseTabInit {
@@ -497,6 +500,7 @@ impl App {
         let query = initial_query.clone().unwrap_or_default();
         let editor = SqlEditor::builder()
             .launch(SqlEditorInit {
+                connection_id: self.connection_id,
                 schema_buffer: self.schema_buffer.clone(),
                 schema_index: self.schema_index.clone(),
                 initial_query,

@@ -3,7 +3,6 @@ use relm4::adw::prelude::*;
 use relm4::gtk::glib;
 use uuid::Uuid;
 
-use crate::services::database_service;
 use crate::services::workspace_state::{self, ConnectionWorkspaceState, WorkspaceTabRecord};
 
 use super::types::read_workspace_tab_id;
@@ -18,22 +17,28 @@ impl App {
         let pending = self.persist_pending.clone();
         let workspace_tabs = self.workspace_tabs.clone();
         let tab_view = self.workspace_tab_view.clone();
+        let connection_id = self.connection_id;
         glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
             pending.set(false);
-            do_persist_workspace_state(&workspace_tabs, tab_view.as_ref());
+            do_persist_workspace_state(connection_id, &workspace_tabs, tab_view.as_ref());
         });
     }
 
     pub(super) fn do_persist_workspace_state_now(&self) {
-        do_persist_workspace_state(&self.workspace_tabs, self.workspace_tab_view.as_ref());
+        do_persist_workspace_state(
+            self.connection_id,
+            &self.workspace_tabs,
+            self.workspace_tab_view.as_ref(),
+        );
     }
 }
 
 fn do_persist_workspace_state(
+    connection_id: Option<Uuid>,
     workspace_tabs: &std::rc::Rc<std::cell::RefCell<std::collections::HashMap<Uuid, WorkspaceTab>>>,
     tab_view: Option<&relm4::adw::TabView>,
 ) {
-    let Some(connection_id) = database_service::instance().active_id() else {
+    let Some(connection_id) = connection_id else {
         return;
     };
     let tabs = workspace_tabs.borrow();

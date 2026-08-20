@@ -72,6 +72,62 @@ def find_node(name=None, role=None):
     return None
 
 
+def find_within(root, name=None, role=None):
+    for node in descendants(root):
+        if name is not None and node_name(node) != name:
+            continue
+        if role is not None and node_role(node) != role:
+            continue
+        return node
+    return None
+
+
+def wait_within(root, name=None, role=None, present=True, timeout=WAIT_SECONDS):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        node = find_within(root, name=name, role=role)
+        if (node is not None) == present:
+            return node
+        time.sleep(POLL_SECONDS)
+    expectation = "appear" if present else "disappear"
+    raise AssertionError(
+        f"expected {name!r} to {expectation} inside {node_name(root)!r}:\n{accessible_snapshot()}"
+    )
+
+
+def invoke_named_action_within_node(root, anchor_name, action_name):
+    anchor = wait_within(root, name=anchor_name, role=pyatspi.ROLE_LIST_ITEM)
+    for node in descendants(anchor):
+        if node_name(node) == action_name:
+            invoke(node)
+            return
+    raise AssertionError(
+        f"no action {action_name!r} within {anchor_name!r}:\n{accessible_snapshot()}"
+    )
+
+
+def set_editor_text_within(root, sql):
+    candidates = []
+    for node in descendants(root):
+        if node_role(node) != pyatspi.ROLE_TEXT:
+            continue
+        try:
+            editable = node.queryEditableText()
+            candidates.append((node, editable))
+        except Exception:
+            continue
+    if not candidates:
+        raise AssertionError(f"no SQL editor inside {node_name(root)!r}:\n{accessible_snapshot()}")
+    node, editable = max(candidates, key=lambda candidate: candidate[0].queryText().characterCount)
+    editable.setTextContents(sql)
+    return node
+
+
+def run_sql_within(root, sql):
+    set_editor_text_within(root, sql)
+    invoke(wait_within(root, name="Run", role=pyatspi.ROLE_PUSH_BUTTON))
+
+
 def find_node_containing(text, role=None):
     for application in desktop_applications():
         for node in descendants(application):
@@ -860,6 +916,35 @@ def a_browse_tab_reads_the_new_connection_after_a_switch(database, base):
 a_browse_tab_reads_the_new_connection_after_a_switch.environment = "local"
 
 
+def two_windows_hold_two_connections(database, base):
+    database_b = base / "safety-b.sqlite"
+
+    invoke_accessible_action("win.new-window")
+    second_window = wait_for_node(name="TablePro", role=pyatspi.ROLE_FRAME)
+    invoke_named_action_within_node(second_window, CONNECTION_B_NAME, "Open connection")
+    second_window = wait_for_frame_containing(f"{CONNECTION_B_NAME} — TablePro")
+    invoke(wait_within(second_window, name="Open SQL editor"))
+    wait_within(second_window, name="Run", role=pyatspi.ROLE_PUSH_BUTTON)
+
+    first_window = find_frame_containing(f"{CONNECTION_NAME} — TablePro")
+    assert first_window is not None, (
+        f"the first window lost its connection when the second one connected:\n{accessible_snapshot()}"
+    )
+
+    run_sql_within(second_window, "INSERT INTO safety_items(id) VALUES (77)")
+    wait_for_database_count(database_b, 1)
+    assert database_ids(database) == [], "the second window wrote to the first window's database"
+
+    run_sql_within(first_window, "INSERT INTO safety_items(id) VALUES (88)")
+    wait_for_database_count(database, 1)
+
+    assert database_ids(database) == [88], f"first window database: {database_ids(database)}"
+    assert database_ids(database_b) == [77], f"second window database: {database_ids(database_b)}"
+
+
+two_windows_hold_two_connections.environment = "local"
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: gtk_safety.py /path/to/tablepro-app")
@@ -878,6 +963,7 @@ def main():
         current_page_csv_export_is_pk_ordered,
         pending_edits_gate_a_connection_switch,
         a_browse_tab_reads_the_new_connection_after_a_switch,
+        two_windows_hold_two_connections,
     ]
     selected = os.environ.get("TABLEPRO_GTK_SCENARIO")
     if selected:

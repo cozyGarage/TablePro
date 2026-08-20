@@ -4,6 +4,7 @@ use tablepro_core::{ConnectOptions, Connection, DriverRegistry};
 use tablepro_ssh::{SshConfig, SshTunnel};
 use tablepro_storage::SavedConnection;
 use tablepro_transport::TransportError;
+use uuid::Uuid;
 
 use super::database_service::{self, ConnectionMetadata, ReconnectParams};
 
@@ -32,6 +33,12 @@ impl std::fmt::Debug for PreparedConnection {
     }
 }
 
+pub struct ActivatedConnection {
+    pub id: Uuid,
+    pub tables: Vec<tablepro_core::TableInfo>,
+    pub driver_id: String,
+}
+
 impl PreparedConnection {
     pub(crate) fn new(
         tables: Vec<tablepro_core::TableInfo>,
@@ -53,16 +60,21 @@ impl PreparedConnection {
         }
     }
 
-    pub fn activate(self) -> (Vec<tablepro_core::TableInfo>, String) {
+    pub fn activate(self) -> ActivatedConnection {
+        let id = self.id;
         database_service::instance().activate(
-            self.id,
+            id,
             self.metadata,
             self.connection,
             self.tunnel,
             self.read_only,
             self.params,
         );
-        (self.tables, self.driver_id)
+        ActivatedConnection {
+            id,
+            tables: self.tables,
+            driver_id: self.driver_id,
+        }
     }
 }
 

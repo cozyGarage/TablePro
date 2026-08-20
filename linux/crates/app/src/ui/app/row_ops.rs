@@ -25,7 +25,7 @@ impl App {
         sources: Vec<StatementSource>,
         sender: ComponentSender<App>,
     ) {
-        let Some(conn) = crate::services::database_service::instance().active() else {
+        let Some(conn) = self.window_connection() else {
             self.dispatch_to_tab(tab_id, BrowseTabInput::SaveFailed(crate::tr!("No active connection")));
             return;
         };

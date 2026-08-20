@@ -118,10 +118,11 @@ impl App {
         let schema_for_msg = schema.clone();
         let table_for_msg = table.clone();
         let sender_for_cmd = sender.clone();
+        let connection_id = self.connection_id;
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    let Some(conn) = database_service::instance().active() else {
+                    let Some(conn) = connection_id.and_then(|id| database_service::instance().get(id)) else {
                         sender_for_cmd.input(AppMsg::ShowAlert {
                             title: crate::tr!("Cannot drop table"),
                             body: crate::tr!("No active connection."),
@@ -291,10 +292,11 @@ impl App {
 
         self.in_flight_saves.set(self.in_flight_saves.get() + 1);
         let sender_for_cmd = sender.clone();
+        let connection_id = self.connection_id;
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    let Some(conn) = database_service::instance().active() else {
+                    let Some(conn) = connection_id.and_then(|id| database_service::instance().get(id)) else {
                         sender_for_cmd.input(AppMsg::StructureSaveFailed(tab_id, crate::tr!("No active connection.")));
                         return;
                     };
@@ -463,10 +465,11 @@ impl App {
         let sender_for_cmd = sender.clone();
         let table_for_cmd = table.clone();
         let schema_for_cmd = schema.clone();
+        let connection_id = self.connection_id;
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    let Some(conn) = database_service::instance().active() else {
+                    let Some(conn) = connection_id.and_then(|id| database_service::instance().get(id)) else {
                         sender_for_cmd.input(AppMsg::ShowToast(crate::tr!("No active connection.")));
                         return;
                     };
@@ -548,10 +551,11 @@ impl App {
             (schema.map(str::to_owned), table.to_string())
         };
         let sender_for_cmd = sender.clone();
+        let connection_id = self.connection_id;
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    let Some(conn) = database_service::instance().active() else {
+                    let Some(conn) = connection_id.and_then(|id| database_service::instance().get(id)) else {
                         sender_for_cmd.input(AppMsg::StructureLoadFailed {
                             tab_id,
                             message: crate::tr!("No active connection."),
@@ -646,10 +650,11 @@ impl App {
         }
         // Sidebar refresh: re-list tables and rebuild the factory.
         let sender_for_cmd = sender.clone();
+        let connection_id = self.connection_id;
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    let Some(conn) = database_service::instance().active() else {
+                    let Some(conn) = connection_id.and_then(|id| database_service::instance().get(id)) else {
                         return;
                     };
                     if let Ok(tables) = conn.list_tables().await {
