@@ -78,8 +78,7 @@ impl App {
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    let result = if use_keyset {
-                        let cursor = keyset_cursor.expect("guarded by use_keyset");
+                    let result = if let Some(cursor) = keyset_cursor.filter(|_| use_keyset) {
                         let qualified = match &schema {
                             Some(s) => format!(
                                 "{}.{}",
