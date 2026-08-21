@@ -27,11 +27,12 @@ Verified locally on 2026-08-21 against Arch stable Rust 1.97.1:
 - File-size guard passes
 - `cargo fmt --all -- --check` passes
 - Full-workspace strict Clippy passes with `-D warnings`
-- The unit tier passes: 543 tests, one ignored Secret Service test
-- The sandbox tier passes: 361 tests, two ignored
+- The unit tier passes: 575 tests, one ignored Secret Service test
+- The sandbox tier passes: 431 tests, two ignored
 - The installed GTK tier passes: 12 of 12 scenarios, retry-free
 - `cargo deny check` reports advisories, bans, licenses, and sources ok
-- All 27 Docker driver integration tests passed on 2026-08-12: PostgreSQL 4, MySQL 4, SQL Server 9, and ClickHouse 10
+- All 45 Docker driver integration tests passed on 2026-08-22: PostgreSQL 9, MySQL 7, SQL Server 12, ClickHouse 12, and SQLite 5 without Docker
+- The PostgreSQL release fixture passes 44 tests
 
 Verified on hosted CI on 2026-08-21 at commit `c8f91f06`, the first fully green
 run: preflight and sandbox, fast checks, driver integration, the driver TLS
@@ -39,6 +40,22 @@ fixture, the PostgreSQL release fixture, and the installed GTK safety smoke all
 pass. Before this the GTK gate had never been green, because the Secret Service
 step called `secret-tool` and the job installed `libsecret-1-dev` without
 `libsecret-tools`. The Phase 4 soak ledger starts from this run.
+
+The ledger then recorded one failure, at `74d037c3a`, in
+`current_page_csv_export_is_pk_ordered`: the export read back only 24 of 100
+rows. The cause was in the product, not the test. A current-page export wrote
+row by row straight to the destination file, so any reader that opened it after
+the header had landed saw a truncated export; the local machine simply won the
+race. Exports now write to a sibling temporary file and rename over the
+destination, and `tablepro_core::export` carries a test asserting the
+destination cannot be opened while the export is still being written. Two runs
+on 2026-08-22, at `712efeb02` and `9ecd184c8`, are fully green across all six
+jobs.
+
+Note for the ledger: `712efeb02` still carried the non-atomic export and passed
+anyway, which is what makes this class of defect worth a deterministic unit test
+rather than soak attempts. Retry-free attempts stand at 3 of the 30 required,
+across 3 runs of the 6 required.
 
 Run `cargo deny check` from `linux/`. It does not accept `--manifest-path`.
 
