@@ -39,18 +39,27 @@ fn main() {
     };
 
     let prefs = services::preferences::load();
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
         .build()
-        .expect("history runtime");
-    runtime.block_on(async {
-        if let Err(e) = tablepro_storage::query_history::init().await {
-            tracing::warn!(error = %e, "history init failed; feature disabled");
-        } else if let Err(e) = tablepro_storage::query_history::prune_older_than(prefs.history_retention_days).await {
-            tracing::warn!(error = %e, "history prune failed");
+    {
+        Ok(runtime) => Some(runtime),
+        Err(e) => {
+            tracing::warn!(error = %e, "history runtime unavailable; feature disabled");
+            None
         }
-    });
+    };
+    if let Some(runtime) = runtime.as_ref() {
+        runtime.block_on(async {
+            if let Err(e) = tablepro_storage::query_history::init().await {
+                tracing::warn!(error = %e, "history init failed; feature disabled");
+            } else if let Err(e) = tablepro_storage::query_history::prune_older_than(prefs.history_retention_days).await
+            {
+                tracing::warn!(error = %e, "history prune failed");
+            }
+        });
+    }
 
     let registry = Arc::new(build_registry());
     tracing::info!(drivers = registry.len(), "starting tablepro-app");
@@ -74,7 +83,9 @@ fn main() {
     // longer applies — the history pool sits in a global OnceLock
     // and stays usable from relm4's runtime; this runtime here is
     // only used for the startup init / prune block_on above.
-    runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+    if let Some(runtime) = runtime {
+        runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+    }
 }
 
 fn build_registry() -> DriverRegistry {

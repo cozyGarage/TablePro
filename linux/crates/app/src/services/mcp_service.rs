@@ -48,23 +48,25 @@ pub fn start_background() -> Option<Arc<McpBridge>> {
     let bridge = Arc::new(McpBridge::new(Arc::new(AppConnectionProvider), tokens));
     let _ = BRIDGE.set(bridge.clone());
     let bridge_http = bridge.clone();
+    let config = tablepro_mcp::McpServerConfig::default();
+    tracing::info!(host = %config.bind_host, port = config.bind_port, "MCP HTTP server starting");
     std::thread::Builder::new()
         .name("tablepro-mcp".into())
         .spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("mcp runtime");
+            let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    tracing::warn!(error = %e, "MCP runtime unavailable; MCP HTTP server not started");
+                    return;
+                }
+            };
             rt.block_on(async move {
-                if let Err(e) =
-                    tablepro_mcp::serve_streamable_http(bridge_http, tablepro_mcp::McpServerConfig::default()).await
-                {
+                if let Err(e) = tablepro_mcp::serve_streamable_http(bridge_http, config).await {
                     tracing::warn!(error = %e, "MCP HTTP server stopped");
                 }
             });
         })
         .ok();
-    tracing::info!("MCP HTTP listening on 127.0.0.1:17432");
     Some(bridge)
 }
 
