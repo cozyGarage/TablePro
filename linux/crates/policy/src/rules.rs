@@ -208,7 +208,10 @@ fn evaluate_agent_write(
             reason: format!("{:?} requires approval for agent writes", facts.class),
             preview: Some(format!("tables: {}", facts.tables.join(", "))),
         },
-        crate::config::WritePolicy::Deny => unreachable!(),
+        crate::config::WritePolicy::Deny => Decision::Deny {
+            rule: "agent_writes_denied".into(),
+            message: format!("agent writes are denied in {}", environment.as_str()),
+        },
     }
 }
 
@@ -289,6 +292,27 @@ mod tests {
 
     fn env_policy(environment: Environment) -> EnvPolicy {
         PolicyConfig::default().for_environment(environment)
+    }
+
+    #[test]
+    fn deny_write_policy_denies_every_agent_write_route() {
+        let policy = EnvPolicy {
+            agent_writes: WritePolicy::Deny,
+            ..env_policy(Environment::Prod)
+        };
+        for sql in [
+            "UPDATE t SET a = 1 WHERE id = 1",
+            "DELETE FROM t WHERE id = 1",
+            "CREATE TABLE t (id int)",
+            "INSERT INTO t VALUES (1)",
+        ] {
+            let facts = classify(sql, "postgres");
+            let decision = evaluate_agent_write(Environment::Prod, &facts, &policy, Some(1));
+            let Decision::Deny { rule, .. } = &decision else {
+                panic!("{sql} produced {decision:?}");
+            };
+            assert_eq!(rule, "agent_writes_denied", "{sql}");
+        }
     }
 
     #[test]
