@@ -502,8 +502,28 @@ fn extract_value(row: &SqliteRow, idx: usize) -> Value {
             .map(Value::DateTime)
             .or_else(|_| row.try_get::<String, _>(idx).map(Value::Text))
             .unwrap_or(Value::Null),
-        _ => row.try_get::<String, _>(idx).map(Value::Text).unwrap_or(Value::Null),
+        _ => untyped_value(row, idx),
     }
+}
+
+/// A column with no declared type - every expression, aggregate and
+/// `count(*)` - reaches here. SQLite decides the value's type at
+/// runtime, so the decode is tried in the order the storage classes can
+/// hold, and `Option` keeps a real NULL distinct from a type mismatch.
+fn untyped_value(row: &SqliteRow, idx: usize) -> Value {
+    if let Ok(value) = row.try_get::<Option<i64>, _>(idx) {
+        return value.map_or(Value::Null, Value::Int);
+    }
+    if let Ok(value) = row.try_get::<Option<f64>, _>(idx) {
+        return value.map_or(Value::Null, Value::Float);
+    }
+    if let Ok(value) = row.try_get::<Option<String>, _>(idx) {
+        return value.map_or(Value::Null, Value::Text);
+    }
+    row.try_get::<Option<Vec<u8>>, _>(idx)
+        .ok()
+        .flatten()
+        .map_or(Value::Null, Value::Bytes)
 }
 
 fn bind_sqlite_params<'q>(
@@ -582,6 +602,35 @@ mod tests {
         let d = SqliteDriver;
         assert_eq!(d.id(), "sqlite");
         assert_eq!(d.display_name(), "SQLite");
+    }
+
+    #[tokio::test]
+    async fn an_expression_column_decodes_by_its_runtime_type() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("untyped.db");
+        let conn = SqliteDriver.connect(opts_for(path.to_str().unwrap())).await.unwrap();
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, label TEXT)")
+            .await
+            .unwrap();
+        conn.execute("INSERT INTO t (label) VALUES ('a'), ('b')").await.unwrap();
+
+        let counted = conn.query("SELECT count(*) FROM t").await.unwrap();
+        assert_eq!(counted.rows, vec![vec![Value::Int(2)]]);
+
+        let mixed = conn
+            .query("SELECT 1, 2.5, 'text', NULL, group_concat(label) FROM t")
+            .await
+            .unwrap();
+        assert_eq!(
+            mixed.rows,
+            vec![vec![
+                Value::Int(1),
+                Value::Float(2.5),
+                Value::Text("text".into()),
+                Value::Null,
+                Value::Text("a,b".into()),
+            ]]
+        );
     }
 
     #[tokio::test]
