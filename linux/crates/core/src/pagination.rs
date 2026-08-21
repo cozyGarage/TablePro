@@ -66,8 +66,8 @@ pub fn keyset_where_clause(
         placeholder_idx += 1;
         params.push(last_values[depth].clone());
 
-        if and_parts.len() == 1 {
-            or_arms.push(and_parts.pop().unwrap());
+        if let [only] = and_parts.as_slice() {
+            or_arms.push(only.clone());
         } else {
             or_arms.push(format!("({})", and_parts.join(" AND ")));
         }
@@ -77,8 +77,8 @@ pub fn keyset_where_clause(
         return Err(KeysetError::AllNullKeys);
     }
 
-    let sql = if or_arms.len() == 1 {
-        or_arms.pop().unwrap()
+    let sql = if let [only] = or_arms.as_slice() {
+        only.clone()
     } else {
         format!("({})", or_arms.join(" OR "))
     };

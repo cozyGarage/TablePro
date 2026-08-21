@@ -177,8 +177,8 @@ pub fn build_filter_where(
         Combinator::And => " AND ",
         Combinator::Or => " OR ",
     };
-    let sql = if clauses.len() == 1 {
-        clauses.into_iter().next().unwrap()
+    let sql = if let [only] = clauses.as_slice() {
+        only.clone()
     } else {
         format!("({})", clauses.join(joiner))
     };
@@ -210,7 +210,7 @@ fn build_rule_sql(
                 FilterOp::LtEq => "<=",
                 FilterOp::Gt => ">",
                 FilterOp::GtEq => ">=",
-                _ => unreachable!(),
+                _ => return Err(BuildFilterError::WrongValueShape { op: rule.op }),
             };
             Ok(format!("{col_sql} {op_sql} {ph}"))
         }
@@ -222,7 +222,7 @@ fn build_rule_sql(
                 FilterOp::Contains => format!("%{escaped}%"),
                 FilterOp::StartsWith => format!("{escaped}%"),
                 FilterOp::EndsWith => format!("%{escaped}"),
-                _ => unreachable!(),
+                _ => return Err(BuildFilterError::WrongValueShape { op: rule.op }),
             };
             let ph = placeholder_for(driver_id, *placeholder_idx);
             *placeholder_idx += 1;
