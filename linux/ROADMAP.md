@@ -159,4 +159,4 @@ Phase 10 is in progress. Its first slice retired the one-active-connection limit
 
 ## Next implementation target
 
-The immediate target is the internal Arch RC: run the exact-commit hosted jobs, accumulate the Phase 4 soak ledger, and verify install/upgrade/rollback on Wayland. Those gates are mostly waiting, so Phase 10 feature work runs in parallel on `linux` while the candidate stays frozen on a release branch. Phase 10 comes before full-table snapshot export and Phase 6 object administration; new drivers come after both.
+The immediate target is the internal Arch RC. The exact-commit hosted jobs first ran fully green on 2026-08-21 at `c8f91f06`, so the Phase 4 soak ledger has started and needs 30 consecutive retry-free attempts across at least six runs. What remains is accumulating that ledger and verifying install/upgrade/rollback on Wayland. Those gates are mostly waiting, so Phase 10 feature work runs in parallel on `linux` while the candidate stays frozen on a release branch. Phase 10 comes before full-table snapshot export and Phase 6 object administration; new drivers come after both.

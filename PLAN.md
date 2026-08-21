@@ -33,6 +33,13 @@ Verified locally on 2026-08-21 against Arch stable Rust 1.97.1:
 - `cargo deny check` reports advisories, bans, licenses, and sources ok
 - All 27 Docker driver integration tests passed on 2026-08-12: PostgreSQL 4, MySQL 4, SQL Server 9, and ClickHouse 10
 
+Verified on hosted CI on 2026-08-21 at commit `c8f91f06`, the first fully green
+run: preflight and sandbox, fast checks, driver integration, the driver TLS
+fixture, the PostgreSQL release fixture, and the installed GTK safety smoke all
+pass. Before this the GTK gate had never been green, because the Secret Service
+step called `secret-tool` and the job installed `libsecret-1-dev` without
+`libsecret-tools`. The Phase 4 soak ledger starts from this run.
+
 Run `cargo deny check` from `linux/`. It does not accept `--manifest-path`.
 
 The repository pins Rust 1.93, but an OS-packaged `/usr/bin/cargo` does not honor `rust-toolchain.toml` without rustup. CI must test the MSRV, while local development and a scheduled job should also test the current stable compiler.
