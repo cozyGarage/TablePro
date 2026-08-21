@@ -20,6 +20,7 @@ CONNECTION_B_NAME = "Safety SQLite B"
 BROKEN_CONNECTION_NAME = "Broken SQLite"
 WAIT_SECONDS = 15
 POLL_SECONDS = 0.05
+FILE_CHOOSER_ROLES = (pyatspi.ROLE_FILE_CHOOSER, pyatspi.ROLE_DIALOG)
 SETTLE_SECONDS = 3.0
 
 
@@ -47,6 +48,14 @@ def node_role(node):
         return pyatspi.ROLE_INVALID
 
 
+def role_matches(node, role):
+    if role is None:
+        return True
+    if isinstance(role, tuple):
+        return node_role(node) in role
+    return node_role(node) == role
+
+
 def application_node():
     desktop = pyatspi.Registry.getDesktop(0)
     for application in desktop:
@@ -66,7 +75,7 @@ def find_node(name=None, role=None):
         for node in descendants(application):
             if name is not None and node_name(node) != name:
                 continue
-            if role is not None and node_role(node) != role:
+            if not role_matches(node, role):
                 continue
             return node
     return None
@@ -76,7 +85,7 @@ def find_within(root, name=None, role=None):
     for node in descendants(root):
         if name is not None and node_name(node) != name:
             continue
-        if role is not None and node_role(node) != role:
+        if not role_matches(node, role):
             continue
         return node
     return None
@@ -131,7 +140,7 @@ def run_sql_within(root, sql):
 def find_node_containing(text, role=None):
     for application in desktop_applications():
         for node in descendants(application):
-            if role is not None and node_role(node) != role:
+            if not role_matches(node, role):
                 continue
             if text in node_name(node):
                 return node
@@ -824,10 +833,10 @@ def current_page_csv_export_is_pk_ordered(database, base):
     invoke_named_action_within("safety_items", "Open safety_items")
     wait_for_node(name="Rows 1 – 100")
     invoke_accessible_action("win.export-csv")
-    wait_for_node(name="Export current page as CSV", role=pyatspi.ROLE_FILE_CHOOSER)
+    wait_for_node(name="Export current page as CSV", role=FILE_CHOOSER_ROLES)
     set_visible_editable_within(
         "Export current page as CSV",
-        pyatspi.ROLE_FILE_CHOOSER,
+        FILE_CHOOSER_ROLES,
         str(base / "home" / "current-page.csv"),
     )
     invoke(wait_for_node(name="Save", role=pyatspi.ROLE_PUSH_BUTTON))
