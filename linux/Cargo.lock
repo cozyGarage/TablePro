@@ -6275,6 +6275,7 @@ name = "tablepro-agentd"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "clap",
  "secrecy",
  "tablepro-core",

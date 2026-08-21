@@ -36,12 +36,39 @@ struct Args {
     #[arg(long, default_value = "deny")]
     approval: ApprovalMode,
 
-    /// Issue a new read-write token and print it, then exit.
+    /// Issue a new token and print it, then exit.
     #[arg(long)]
     issue_token: Option<String>,
 
     #[arg(long, requires = "issue_token")]
     connection: Vec<Uuid>,
+
+    /// Scope for --issue-token. Defaults to the least privilege that is useful.
+    #[arg(long, requires = "issue_token", default_value = "read-only")]
+    permissions: TokenScope,
+
+    /// Expire the issued token after this many days.
+    #[arg(long, requires = "issue_token")]
+    expires_days: Option<u32>,
+
+    /// Write the issued token here with owner-only permissions instead of to stdout.
+    #[arg(long, requires = "issue_token")]
+    token_file: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum TokenScope {
+    ReadOnly,
+    ReadWrite,
+}
+
+impl From<TokenScope> for TokenPermissions {
+    fn from(scope: TokenScope) -> Self {
+        match scope {
+            TokenScope::ReadOnly => TokenPermissions::ReadOnly,
+            TokenScope::ReadWrite => TokenPermissions::ReadWrite,
+        }
+    }
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -52,25 +79,66 @@ enum ApprovalMode {
 
 struct TtyApprovalSink;
 
+const MAX_TTY_ANSWER_BYTES: u64 = 64;
+
 #[async_trait]
 impl ApprovalSink for TtyApprovalSink {
     async fn request(&self, req: ApprovalRequest) -> ApprovalOutcome {
-        use std::io::{Write, stdin, stdout};
-        let _ = writeln!(
-            stdout(),
+        let prompt = format!(
             "\n[tablepro-agentd] approval required\n  connection: {}\n  rule: {}\n  reason: {}\n  sql: {}\nApprove? [y/N] ",
-            req.connection_name,
-            req.rule,
-            req.reason,
-            req.sql
+            req.connection_name, req.rule, req.reason, req.sql
         );
-        let _ = stdout().flush();
-        let mut line = String::new();
-        match stdin().read_line(&mut line) {
-            Ok(_) if line.trim().eq_ignore_ascii_case("y") => ApprovalOutcome::AllowOnce,
-            _ => ApprovalOutcome::Deny,
-        }
+        tokio::task::spawn_blocking(move || ask_on_controlling_terminal(&prompt))
+            .await
+            .unwrap_or(ApprovalOutcome::Deny)
     }
+}
+
+fn ask_on_controlling_terminal(prompt: &str) -> ApprovalOutcome {
+    use std::io::{BufRead, BufReader, Read, Write};
+
+    let terminal = match std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty") {
+        Ok(terminal) => terminal,
+        Err(error) => {
+            tracing::warn!(%error, "no controlling terminal for approval; denying");
+            return ApprovalOutcome::Deny;
+        }
+    };
+    let mut writer = match terminal.try_clone() {
+        Ok(writer) => writer,
+        Err(error) => {
+            tracing::warn!(%error, "controlling terminal is not writable; denying");
+            return ApprovalOutcome::Deny;
+        }
+    };
+    if writer.write_all(prompt.as_bytes()).is_err() || writer.flush().is_err() {
+        return ApprovalOutcome::Deny;
+    }
+
+    let mut answer = String::new();
+    let mut reader = BufReader::new(terminal).take(MAX_TTY_ANSWER_BYTES);
+    match reader.read_line(&mut answer) {
+        Ok(_) if answer.trim().eq_ignore_ascii_case("y") => ApprovalOutcome::AllowOnce,
+        _ => ApprovalOutcome::Deny,
+    }
+}
+
+fn write_token_file(path: &std::path::Path, plaintext: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut handle = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    handle
+        .write_all(plaintext.as_bytes())
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    handle.sync_all().map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(())
 }
 
 fn validate_token_connections(requested: &[Uuid], saved: &[SavedConnection]) -> Result<(), String> {
@@ -110,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
     if !args.policy.exists() {
-        eprintln!("policy file not found: {}", args.policy.display());
+        tracing::error!(path = %args.policy.display(), "policy file not found");
         std::process::exit(2);
     }
     let policy = Arc::new(load_from_path(&args.policy).map_err(|e| e.to_string())?);
@@ -119,8 +187,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(name) = args.issue_token {
         let saved = load_connections().await?;
         validate_token_connections(&args.connection, &saved)?;
-        let (_meta, plain) = tokens.issue(name, TokenPermissions::ReadWrite, args.connection, None)?;
-        println!("{plain}");
+        let expires_at = match args.expires_days {
+            Some(days) => Some(
+                chrono::Utc::now()
+                    .checked_add_signed(chrono::TimeDelta::days(i64::from(days)))
+                    .ok_or("--expires-days is too large")?,
+            ),
+            None => None,
+        };
+        let (_meta, plain) = tokens.issue(name, args.permissions.into(), args.connection, expires_at)?;
+        match args.token_file {
+            Some(path) => write_token_file(&path, &plain)?,
+            None => println!("{plain}"),
+        }
         return Ok(());
     }
 
@@ -176,6 +255,50 @@ mod tests {
             ssh: None,
             last_opened_at: None,
         }
+    }
+
+    #[test]
+    fn an_issued_token_is_read_only_unless_asked_otherwise() {
+        let id = Uuid::new_v4();
+        let args = Args::parse_from([
+            "tablepro-agentd",
+            "--policy",
+            "policy.toml",
+            "--issue-token",
+            "agent",
+            "--connection",
+            &id.to_string(),
+        ]);
+        assert!(matches!(args.permissions, TokenScope::ReadOnly));
+        assert!(args.expires_days.is_none());
+        assert!(args.token_file.is_none());
+
+        let elevated = Args::parse_from([
+            "tablepro-agentd",
+            "--policy",
+            "policy.toml",
+            "--issue-token",
+            "agent",
+            "--connection",
+            &id.to_string(),
+            "--permissions",
+            "read-write",
+            "--expires-days",
+            "7",
+        ]);
+        assert!(matches!(elevated.permissions, TokenScope::ReadWrite));
+        assert_eq!(elevated.expires_days, Some(7));
+    }
+
+    #[test]
+    fn a_token_file_is_written_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("token");
+        write_token_file(&path, "secret").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "token file mode was {mode:o}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "secret");
     }
 
     #[test]

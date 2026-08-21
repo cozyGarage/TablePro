@@ -11,7 +11,7 @@
 - Interactive `Connection::begin` transactions (PostgreSQL, MySQL, SQLite)
 - TLS modes including VerifyFull default for new TLS connections, with certificate hostname and authority failures reported as TLS errors
 - MCP bridge (interactive-app loopback HTTP plus on-demand agentd stdio) with scoped tokens and rate limiting
-- Headless on-demand `tablepro-agentd` with required `--policy`
+- Headless on-demand `tablepro-agentd` with required `--policy`, issuing read-only tokens by default, with an optional expiry and a way to write the token to an owner-only file instead of the terminal
 - GTK approval dialog for policy `RequireApproval` decisions
 - Server activity SQL templates (sessions, locks, long-running, replication)
 - Example policy file and MSSQL in AppStream metainfo
