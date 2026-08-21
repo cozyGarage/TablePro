@@ -17,7 +17,7 @@
 - Example policy file and MSSQL in AppStream metainfo
 - SSH jump-host chains via nested `ssh.jump` in saved connections and `SshTunnel::open_chain`
 - Keyset pagination helper for browse Next past the OFFSET threshold when primary keys are known
-- Current-page CSV export with explicit non-snapshot semantics
+- Current-page CSV export with explicit non-snapshot semantics, written so another program never reads a half-finished file
 - EXPLAIN plan dialog from the SQL editor and main menu
 - Server version cached on connect and shown in the window subtitle
 - ClickHouse, Redis, DuckDB, and MongoDB drivers; Oracle remains excluded until its optional implementation and fixture work

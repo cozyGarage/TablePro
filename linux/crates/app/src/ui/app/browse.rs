@@ -340,7 +340,7 @@ impl App {
             let Ok(file) = outcome else { return };
             let Some(path) = file.path() else { return };
             let bytes = render_json(&result);
-            match std::fs::write(&path, bytes) {
+            match tablepro_core::export::write_atomically(&path, |output| output.write_all(&bytes)) {
                 Ok(()) => toast_overlay.add_toast(relm4::adw::Toast::new(
                     &crate::tr!("Exported the current page to {path}").replace("{path}", &path.display().to_string()),
                 )),
@@ -387,15 +387,15 @@ impl App {
         dialog.save(Some(&parent), gtk::gio::Cancellable::NONE, move |outcome| {
             let Ok(file) = outcome else { return };
             let Some(path) = file.path() else { return };
-            let write_result = (|| {
-                let mut output = std::fs::File::create(&path).map_err(|error| error.to_string())?;
-                tablepro_core::export::write_csv_header(&mut output, &result.columns)
-                    .map_err(|error| error.to_string())?;
+            let write_result = tablepro_core::export::write_atomically(&path, |mut output| {
+                tablepro_core::export::write_csv_header(&mut output, &result.columns)?;
                 for row in &result.rows {
-                    tablepro_core::export::write_csv_row(&mut output, row).map_err(|error| error.to_string())?;
+                    tablepro_core::export::write_csv_row(&mut output, row)?;
                 }
-                Ok::<_, String>(result.rows.len())
-            })();
+                Ok(())
+            })
+            .map(|()| result.rows.len())
+            .map_err(|error| error.to_string());
             match write_result {
                 Ok(n) => toast_overlay.add_toast(relm4::adw::Toast::new(
                     &crate::tr!("Exported {n} rows from the current page to {path}")
