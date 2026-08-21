@@ -2,6 +2,15 @@ use super::*;
 
 #[async_trait]
 impl Connection for PolicyGuard {
+    /// The guard adds policy, not a driver. Whether an interrupted
+    /// operation can be stopped on the server is a property of the
+    /// connection underneath, and the interface only ever holds guarded
+    /// connections, so failing to forward this would report every engine
+    /// as unable to cancel.
+    fn supports_server_cancellation(&self) -> bool {
+        self.inner.supports_server_cancellation()
+    }
+
     async fn list_tables(&self) -> Result<Vec<TableInfo>, DriverError> {
         let operation = self.metadata_operation("LIST TABLES", Vec::new());
         self.prepare_governed_read(&operation).await?;
