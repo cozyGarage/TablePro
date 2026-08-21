@@ -9,8 +9,9 @@ use sqlx::{Column, Connection as SqlxConnection, Pool, Postgres, Row, TypeInfo};
 use futures::stream::StreamExt;
 
 use tablepro_core::{
-    ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, ForeignKeyInfo, IndexInfo,
-    MAX_QUERY_ROWS, OperationControl, QueryResult, TableInfo, Transport, Value,
+    CONTROL_SETUP_TIMEOUT, ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult,
+    ForeignKeyInfo, IndexInfo, MAX_QUERY_ROWS, OperationControl, QueryResult, TableInfo, Transport, Value,
+    check_pre_dispatch, run_controlled_setup, run_server_cancellable,
 };
 
 pub struct PgDriver;
@@ -93,16 +94,6 @@ struct PgConnection {
     pool: Pool<Postgres>,
     cancellation_pool: Pool<Postgres>,
 }
-
-#[derive(Clone, Copy)]
-enum Interruption {
-    Cancelled,
-    TimedOut,
-}
-
-const CONTROL_SETUP_TIMEOUT: Duration = Duration::from_secs(2);
-const CANCELLATION_GRACE: Duration = Duration::from_secs(5);
-const CANCELLATION_DISPATCH_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[async_trait]
 impl Connection for PgConnection {
@@ -398,6 +389,10 @@ impl Connection for PgConnection {
             .collect())
     }
 
+    fn supports_server_cancellation(&self) -> bool {
+        true
+    }
+
     async fn ping(&self) -> Result<(), DriverError> {
         sqlx::query("SELECT 1")
             .execute(&self.pool)
@@ -578,36 +573,6 @@ async fn backend_pid_controlled(
     run_controlled_setup(backend_pid(connection), control).await?
 }
 
-async fn run_controlled_setup<T, F>(operation: F, control: &OperationControl) -> Result<T, DriverError>
-where
-    F: std::future::Future<Output = T>,
-{
-    check_pre_dispatch(control)?;
-    let setup_deadline = control
-        .deadline()
-        .map(|deadline| deadline.min(tokio::time::Instant::now() + CONTROL_SETUP_TIMEOUT))
-        .unwrap_or_else(|| tokio::time::Instant::now() + CONTROL_SETUP_TIMEOUT);
-    tokio::select! {
-        biased;
-        _ = control.cancellation_token().cancelled() => Err(DriverError::Cancelled),
-        _ = tokio::time::sleep_until(setup_deadline) => Err(DriverError::TimedOut),
-        result = operation => Ok(result),
-    }
-}
-
-fn check_pre_dispatch(control: &OperationControl) -> Result<(), DriverError> {
-    if control.cancellation_token().is_cancelled() {
-        return Err(DriverError::Cancelled);
-    }
-    if control
-        .deadline()
-        .is_some_and(|deadline| deadline <= tokio::time::Instant::now())
-    {
-        return Err(DriverError::TimedOut);
-    }
-    Ok(())
-}
-
 async fn backend_pid(connection: &mut PoolConnection<Postgres>) -> Result<i32, DriverError> {
     sqlx::query_scalar("SELECT pg_backend_pid()")
         .fetch_one(&mut **connection)
@@ -623,24 +588,13 @@ async fn controlled_query(
     params: &[Value],
     control: &OperationControl,
 ) -> (Option<PoolConnection<Postgres>>, Result<QueryResult, DriverError>) {
-    if let Err(error) = check_pre_dispatch(control) {
-        return (Some(connection), Err(error));
-    }
-    let mut operation = Box::pin(query_connection(&mut connection, sql, params));
-    let interruption = match tokio::select! {
-        biased;
-        result = &mut operation => Ok(result),
-        _ = control.cancellation_token().cancelled() => Err(Interruption::Cancelled),
-        _ = wait_for_deadline(control.deadline()) => Err(Interruption::TimedOut),
-    } {
-        Ok(result) => {
-            drop(operation);
-            return (Some(connection), result);
-        }
-        Err(interruption) => interruption,
-    };
-    let result = finish_interrupted_operation(&mut operation, cancellation_pool, backend_pid, interruption).await;
-    drop(operation);
+    let result = run_server_cancellable(
+        query_connection(&mut connection, sql, params),
+        request_cancellation(cancellation_pool, backend_pid),
+        confirms_cancellation,
+        control,
+    )
+    .await;
     finish_connection(connection, result).await
 }
 
@@ -652,64 +606,36 @@ async fn controlled_execute(
     params: &[Value],
     control: &OperationControl,
 ) -> (Option<PoolConnection<Postgres>>, Result<ExecResult, DriverError>) {
-    if let Err(error) = check_pre_dispatch(control) {
-        return (Some(connection), Err(error));
-    }
-    let mut operation = Box::pin(execute_connection(&mut connection, sql, params));
-    let interruption = match tokio::select! {
-        biased;
-        result = &mut operation => Ok(result),
-        _ = control.cancellation_token().cancelled() => Err(Interruption::Cancelled),
-        _ = wait_for_deadline(control.deadline()) => Err(Interruption::TimedOut),
-    } {
-        Ok(result) => {
-            drop(operation);
-            return (Some(connection), result);
-        }
-        Err(interruption) => interruption,
-    };
-    let result = finish_interrupted_operation(&mut operation, cancellation_pool, backend_pid, interruption).await;
-    drop(operation);
+    let result = run_server_cancellable(
+        execute_connection(&mut connection, sql, params),
+        request_cancellation(cancellation_pool, backend_pid),
+        confirms_cancellation,
+        control,
+    )
+    .await;
     finish_connection(connection, result).await
 }
 
-async fn finish_interrupted_operation<T, F>(
-    operation: &mut std::pin::Pin<Box<F>>,
-    cancellation_pool: &Pool<Postgres>,
-    backend_pid: i32,
-    interruption: Interruption,
-) -> Result<T, DriverError>
-where
-    F: std::future::Future<Output = Result<T, DriverError>>,
-{
-    let mut dispatch = Box::pin(tokio::time::timeout(
-        CANCELLATION_DISPATCH_TIMEOUT,
-        request_cancellation(cancellation_pool, backend_pid),
-    ));
-    tokio::select! {
-        result = &mut *operation => return classify_interrupted_result(result, interruption),
-        _ = &mut dispatch => {}
-    }
-    match tokio::time::timeout(CANCELLATION_GRACE, &mut *operation).await {
-        Ok(result) => classify_interrupted_result(result, interruption),
-        Err(_) => Err(unknown_interruption(interruption)),
-    }
+fn confirms_cancellation(error: &DriverError) -> bool {
+    matches!(
+        error,
+        DriverError::Query {
+            sqlstate: Some(sqlstate),
+            ..
+        } if sqlstate == "57014"
+    )
 }
 
 async fn finish_connection<T>(
     connection: PoolConnection<Postgres>,
     result: Result<T, DriverError>,
 ) -> (Option<PoolConnection<Postgres>>, Result<T, DriverError>) {
-    if is_unconfirmed_interruption(&result) {
+    if matches!(result, Err(DriverError::OperationOutcomeUnknown { .. })) {
         let raw_connection = connection.detach();
         let _ = raw_connection.close_hard().await;
         return (None, result);
     }
     (Some(connection), result)
-}
-
-fn is_unconfirmed_interruption<T>(result: &Result<T, DriverError>) -> bool {
-    matches!(result, Err(DriverError::OperationOutcomeUnknown { .. }))
 }
 
 async fn request_cancellation(pool: &Pool<Postgres>, backend_pid: i32) -> Result<(), DriverError> {
@@ -724,42 +650,6 @@ async fn request_cancellation(pool: &Pool<Postgres>, backend_pid: i32) -> Result
         Err(DriverError::Internal(
             "PostgreSQL rejected the cancellation request".into(),
         ))
-    }
-}
-
-async fn wait_for_deadline(deadline: Option<tokio::time::Instant>) {
-    match deadline {
-        Some(deadline) => tokio::time::sleep_until(deadline).await,
-        None => std::future::pending().await,
-    }
-}
-
-fn classify_interrupted_result<T>(
-    result: Result<T, DriverError>,
-    interruption: Interruption,
-) -> Result<T, DriverError> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(DriverError::Query {
-            sqlstate: Some(sqlstate),
-            ..
-        }) if sqlstate == "57014" => Err(interruption_error(interruption)),
-        Err(error) => Err(DriverError::OperationOutcomeUnknown {
-            source: Box::new(error),
-        }),
-    }
-}
-
-fn interruption_error(interruption: Interruption) -> DriverError {
-    match interruption {
-        Interruption::Cancelled => DriverError::Cancelled,
-        Interruption::TimedOut => DriverError::TimedOut,
-    }
-}
-
-fn unknown_interruption(interruption: Interruption) -> DriverError {
-    DriverError::OperationOutcomeUnknown {
-        source: Box::new(interruption_error(interruption)),
     }
 }
 

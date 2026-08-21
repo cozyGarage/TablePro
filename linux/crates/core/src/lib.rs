@@ -20,7 +20,10 @@ pub use connection::{AuthMode, ConnectOptions, Connection, SocketOrigin, Transpo
 pub use driver::{DatabaseDriver, DriverMaturity};
 pub use error::DriverError;
 pub use filter::{BuildFilterError, Combinator, FilterOp, FilterRule, FilterSet, FilterValue, build_filter_where};
-pub use operation::OperationControl;
+pub use operation::{
+    CANCELLATION_DISPATCH_TIMEOUT, CANCELLATION_GRACE, CONTROL_SETUP_TIMEOUT, Interruption, OperationControl,
+    check_pre_dispatch, run_controlled_setup, run_server_cancellable,
+};
 pub use pagination::{KEYSET_OFFSET_THRESHOLD, KeysetError, keyset_order_by, keyset_where_clause};
 pub use params::{NamedParameters, ParameterKind, extract_named_parameters, parse_parameter_value};
 pub use query::{ColumnInfo, ExecResult, ForeignKeyInfo, IndexInfo, MAX_QUERY_ROWS, QueryResult, TableInfo, Value};

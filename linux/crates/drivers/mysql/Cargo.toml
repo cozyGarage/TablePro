@@ -27,3 +27,4 @@ secrecy.workspace = true
 testcontainers.workspace = true
 testcontainers-modules = { workspace = true, features = ["mysql"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio-util.workspace = true

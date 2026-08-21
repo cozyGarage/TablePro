@@ -5,7 +5,7 @@ use rust_decimal::Decimal;
 use serde_json::json;
 
 use drivers_mysql::MysqlDriver;
-use tablepro_core::{ConnectOptions, Connection, DatabaseDriver, Value};
+use tablepro_core::{ConnectOptions, Connection, DatabaseDriver, DriverError, OperationControl, Value};
 use testcontainers::ContainerAsync;
 use testcontainers::ImageExt;
 use testcontainers_modules::mysql::Mysql;
@@ -34,6 +34,50 @@ async fn start_mysql() -> (ContainerAsync<Mysql>, ConnectOptions) {
 
 async fn connect(opts: ConnectOptions) -> Box<dyn Connection> {
     MysqlDriver.connect(opts).await.expect("connect")
+}
+
+async fn tagged_query_is_active(connection: &dyn Connection, tag: &str) -> bool {
+    let sql = format!(
+        "SELECT count(*) FROM information_schema.processlist \
+         WHERE info LIKE '%{tag}%' AND info NOT LIKE '%processlist%'"
+    );
+    let result = connection.query(&sql).await.expect("inspect the processlist");
+    matches!(result.rows.first().and_then(|row| row.first()), Some(Value::Int(count)) if *count > 0)
+}
+
+/// MySQL's `SLEEP()` returns 1 when interrupted instead of raising an
+/// error, so it cannot prove a cancellation reached the server. A
+/// cross join with a non-indexable predicate is interruptible and
+/// reports `ER_QUERY_INTERRUPTED`, which is the outcome under test.
+async fn create_long_query_source(connection: &dyn Connection) {
+    connection
+        .execute("CREATE TABLE cancel_probe (x int NOT NULL)")
+        .await
+        .expect("create the probe table");
+    connection
+        .execute(
+            "INSERT INTO cancel_probe (x) \
+             WITH RECURSIVE s AS (SELECT 1 AS x UNION ALL SELECT x + 1 FROM s WHERE x < 999) SELECT x FROM s",
+        )
+        .await
+        .expect("fill the probe table");
+}
+
+fn long_query(tag: &str) -> String {
+    format!(
+        "SELECT count(*) FROM cancel_probe a, cancel_probe b, cancel_probe c \
+         WHERE a.x + b.x + c.x > 0 /* {tag} */"
+    )
+}
+
+async fn wait_for_tagged_query(connection: &dyn Connection, tag: &str, active: bool) {
+    for _ in 0..200 {
+        if tagged_query_is_active(connection, tag).await == active {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("query tag {tag} did not reach active={active}");
 }
 
 #[tokio::test]
@@ -231,5 +275,76 @@ async fn bad_sql_returns_query_error() {
     assert!(
         msg.contains("no_such_table") || msg.contains("doesn't exist") || msg.contains("table"),
         "expected error to mention missing table, got: {msg}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn the_driver_declares_server_side_cancellation() {
+    let (_container, opts) = start_mysql().await;
+    let connection = connect(opts).await;
+    assert!(connection.supports_server_cancellation());
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn a_cancelled_query_is_killed_on_the_server_and_the_pool_stays_usable() {
+    let (_container, opts) = start_mysql().await;
+    let connection: std::sync::Arc<dyn Connection> = MysqlDriver.connect(opts.clone()).await.expect("connect").into();
+    let observer = connect(opts).await;
+    let token = tokio_util::sync::CancellationToken::new();
+    let control = OperationControl::new(token.clone(), None);
+    create_long_query_source(observer.as_ref()).await;
+    let sql = long_query("tablepro_mysql_cancel");
+    let operation_connection = connection.clone();
+    let task = tokio::spawn(async move { operation_connection.query_controlled(&sql, &control).await });
+
+    wait_for_tagged_query(observer.as_ref(), "tablepro_mysql_cancel", true).await;
+    token.cancel();
+    let error = task
+        .await
+        .expect("query task")
+        .expect_err("the query must be cancelled");
+    assert!(matches!(error, DriverError::Cancelled), "unexpected error: {error:?}");
+    wait_for_tagged_query(observer.as_ref(), "tablepro_mysql_cancel", false).await;
+
+    let result = connection.query("SELECT 1").await.expect("the pool remains usable");
+    assert_eq!(result.rows, vec![vec![Value::Int(1)]]);
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn a_timed_out_write_is_killed_on_the_server_and_reports_a_timeout() {
+    let (_container, opts) = start_mysql().await;
+    let connection: std::sync::Arc<dyn Connection> = MysqlDriver.connect(opts.clone()).await.expect("connect").into();
+    let observer = connect(opts).await;
+    create_long_query_source(observer.as_ref()).await;
+    connection
+        .execute("CREATE TABLE cancel_sink (total bigint)")
+        .await
+        .expect("create the sink table");
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let control = OperationControl::new(tokio_util::sync::CancellationToken::new(), Some(deadline));
+    let sql = format!(
+        "INSERT INTO cancel_sink (total) {}",
+        long_query("tablepro_mysql_timeout")
+    );
+    let operation_connection = connection.clone();
+    let task = tokio::spawn(async move { operation_connection.execute_controlled(&sql, &control).await });
+
+    wait_for_tagged_query(observer.as_ref(), "tablepro_mysql_timeout", true).await;
+    let error = task.await.expect("execute task").expect_err("the write must time out");
+    assert!(matches!(error, DriverError::TimedOut), "unexpected error: {error:?}");
+    wait_for_tagged_query(observer.as_ref(), "tablepro_mysql_timeout", false).await;
+
+    let rows = connection
+        .query("SELECT count(*) FROM cancel_sink")
+        .await
+        .expect("the pool remains usable");
+    assert_eq!(
+        rows.rows,
+        vec![vec![Value::Int(0)]],
+        "the aborted insert must not commit"
     );
 }

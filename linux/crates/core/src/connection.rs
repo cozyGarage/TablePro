@@ -189,6 +189,13 @@ pub trait Connection: Send + Sync {
     async fn server_version(&self) -> Result<Option<String>, DriverError> {
         Ok(None)
     }
+    /// Whether an interrupted `*_controlled` call asks the server to
+    /// stop the statement. When false the driver can only drop its own
+    /// future, so the statement may still be running and the outcome is
+    /// unknown; callers must not offer a Stop that cannot stop.
+    fn supports_server_cancellation(&self) -> bool {
+        false
+    }
     async fn ping(&self) -> Result<(), DriverError>;
     async fn close(self: Box<Self>) -> Result<(), DriverError>;
 }

@@ -3,13 +3,15 @@ use std::time::Duration;
 use async_trait::async_trait;
 use secrecy::ExposeSecret;
 use sqlx::mysql::{MySql, MySqlConnectOptions, MySqlPoolOptions, MySqlRow};
-use sqlx::{Column, Pool, Row, TypeInfo};
+use sqlx::pool::PoolConnection;
+use sqlx::{Column, Connection as SqlxConnection, Pool, Row, TypeInfo};
 
 use futures::stream::StreamExt;
 
 use tablepro_core::{
     ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, ForeignKeyInfo, IndexInfo,
-    MAX_QUERY_ROWS, QueryResult, TableInfo, Value,
+    MAX_QUERY_ROWS, OperationControl, QueryResult, TableInfo, Value, check_pre_dispatch, run_controlled_setup,
+    run_server_cancellable,
 };
 
 pub struct MysqlDriver;
@@ -46,18 +48,29 @@ impl DatabaseDriver for MysqlDriver {
         if let Some(path) = &opts.tls.root_cert {
             mysql_opts = mysql_opts.ssl_ca(path);
         }
+        let cancellation_options = mysql_opts.clone();
         let pool = MySqlPoolOptions::new()
             .max_connections(4)
             .acquire_timeout(Duration::from_secs(5))
             .connect_with(mysql_opts)
             .await
             .map_err(map_sqlx_error)?;
-        Ok(Box::new(MysqlConnection { pool }))
+        let cancellation_pool = MySqlPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(5))
+            .connect_with(cancellation_options)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(Box::new(MysqlConnection {
+            pool,
+            cancellation_pool,
+        }))
     }
 }
 
 struct MysqlConnection {
     pool: Pool<MySql>,
+    cancellation_pool: Pool<MySql>,
 }
 
 #[async_trait]
@@ -162,47 +175,30 @@ impl Connection for MysqlConnection {
     }
 
     async fn query_params(&self, sql: &str, params: &[Value]) -> Result<QueryResult, DriverError> {
-        let q = bind_mysql_params(sqlx::query(sql), params);
-        let mut stream = q.fetch(&self.pool);
-        let mut collected: Vec<MySqlRow> = Vec::new();
-        let mut truncated = false;
-        while let Some(row_result) = stream.next().await {
-            let row = row_result.map_err(map_sqlx_error)?;
-            if collected.len() >= MAX_QUERY_ROWS {
-                truncated = true;
-                break;
-            }
-            collected.push(row);
-        }
-        if collected.is_empty() {
-            return Ok(QueryResult {
-                columns: Vec::new(),
-                rows: Vec::new(),
-                truncated,
-            });
-        }
-        let columns: Vec<ColumnInfo> = collected[0]
-            .columns()
-            .iter()
-            .map(|c| ColumnInfo {
-                name: c.name().to_string(),
-                data_type: c.type_info().name().to_string(),
-                nullable: true,
-                primary_key: false,
-                is_auto_increment: false,
-                default_value: None,
-                is_generated: false,
-            })
-            .collect();
-        let data: Vec<Vec<Value>> = collected
-            .iter()
-            .map(|r| (0..columns.len()).map(|i| extract_value(r, i)).collect())
-            .collect();
-        Ok(QueryResult {
-            columns,
-            rows: data,
-            truncated,
-        })
+        params_into_result(&self.pool, sql, params, MAX_QUERY_ROWS).await
+    }
+
+    async fn query_controlled(&self, sql: &str, control: &OperationControl) -> Result<QueryResult, DriverError> {
+        self.query_params_controlled(sql, &[], control).await
+    }
+
+    async fn query_params_controlled(
+        &self,
+        sql: &str,
+        params: &[Value],
+        control: &OperationControl,
+    ) -> Result<QueryResult, DriverError> {
+        let mut connection = acquire_controlled(&self.pool, control).await?;
+        let connection_id = connection_id_controlled(&mut connection, control).await?;
+        let result = run_server_cancellable(
+            params_into_result(&mut *connection, sql, params, MAX_QUERY_ROWS),
+            request_cancellation(&self.cancellation_pool, connection_id),
+            confirms_cancellation,
+            control,
+        )
+        .await;
+        release_connection(connection, &result).await;
+        result
     }
 
     async fn execute(&self, sql: &str) -> Result<ExecResult, DriverError> {
@@ -218,6 +214,33 @@ impl Connection for MysqlConnection {
         Ok(ExecResult {
             rows_affected: res.rows_affected(),
         })
+    }
+
+    async fn execute_controlled(&self, sql: &str, control: &OperationControl) -> Result<ExecResult, DriverError> {
+        self.execute_params_controlled(sql, &[], control).await
+    }
+
+    async fn execute_params_controlled(
+        &self,
+        sql: &str,
+        params: &[Value],
+        control: &OperationControl,
+    ) -> Result<ExecResult, DriverError> {
+        let mut connection = acquire_controlled(&self.pool, control).await?;
+        let connection_id = connection_id_controlled(&mut connection, control).await?;
+        let result = run_server_cancellable(
+            execute_on(&mut *connection, sql, params),
+            request_cancellation(&self.cancellation_pool, connection_id),
+            confirms_cancellation,
+            control,
+        )
+        .await;
+        release_connection(connection, &result).await;
+        result
+    }
+
+    fn supports_server_cancellation(&self) -> bool {
+        true
     }
 
     async fn execute_in_transaction(&self, statements: &[(String, Vec<Value>)]) -> Result<Vec<u64>, DriverError> {
@@ -427,8 +450,11 @@ impl tablepro_core::Transaction for MysqlTransaction {
     }
 }
 
-async fn stream_into_result(pool: &Pool<MySql>, sql: &str, limit: usize) -> Result<QueryResult, DriverError> {
-    let mut stream = sqlx::query(sql).fetch(pool);
+async fn stream_into_result<'e, E>(executor: E, sql: &str, limit: usize) -> Result<QueryResult, DriverError>
+where
+    E: sqlx::Executor<'e, Database = MySql>,
+{
+    let mut stream = sqlx::query(sql).fetch(executor);
     let mut collected: Vec<MySqlRow> = Vec::new();
     let mut truncated = false;
     while let Some(row_result) = stream.next().await {
@@ -439,14 +465,18 @@ async fn stream_into_result(pool: &Pool<MySql>, sql: &str, limit: usize) -> Resu
         }
         collected.push(row);
     }
-    if collected.is_empty() {
-        return Ok(QueryResult {
+    Ok(rows_into_result(&collected, truncated))
+}
+
+fn rows_into_result(collected: &[MySqlRow], truncated: bool) -> QueryResult {
+    let Some(first) = collected.first() else {
+        return QueryResult {
             columns: Vec::new(),
             rows: Vec::new(),
             truncated,
-        });
-    }
-    let columns: Vec<ColumnInfo> = collected[0]
+        };
+    };
+    let columns: Vec<ColumnInfo> = first
         .columns()
         .iter()
         .map(|c| ColumnInfo {
@@ -459,15 +489,15 @@ async fn stream_into_result(pool: &Pool<MySql>, sql: &str, limit: usize) -> Resu
             is_generated: false,
         })
         .collect();
-    let data: Vec<Vec<Value>> = collected
+    let rows: Vec<Vec<Value>> = collected
         .iter()
         .map(|r| (0..columns.len()).map(|i| extract_value(r, i)).collect())
         .collect();
-    Ok(QueryResult {
+    QueryResult {
         columns,
-        rows: data,
+        rows,
         truncated,
-    })
+    }
 }
 
 fn extract_value(row: &MySqlRow, idx: usize) -> Value {
@@ -506,6 +536,98 @@ fn extract_value(row: &MySqlRow, idx: usize) -> Value {
             row.try_get::<Vec<u8>, _>(idx).map(Value::Bytes).unwrap_or(Value::Null)
         }
         _ => row.try_get::<String, _>(idx).map(Value::Text).unwrap_or(Value::Null),
+    }
+}
+
+async fn params_into_result<'e, E>(
+    executor: E,
+    sql: &str,
+    params: &[Value],
+    limit: usize,
+) -> Result<QueryResult, DriverError>
+where
+    E: sqlx::Executor<'e, Database = MySql>,
+{
+    if params.is_empty() {
+        return stream_into_result(executor, sql, limit).await;
+    }
+    let query = bind_mysql_params(sqlx::query(sql), params);
+    let mut stream = query.fetch(executor);
+    let mut collected: Vec<MySqlRow> = Vec::new();
+    let mut truncated = false;
+    while let Some(row_result) = stream.next().await {
+        let row = row_result.map_err(map_sqlx_error)?;
+        if collected.len() >= limit {
+            truncated = true;
+            break;
+        }
+        collected.push(row);
+    }
+    Ok(rows_into_result(&collected, truncated))
+}
+
+async fn execute_on<'e, E>(executor: E, sql: &str, params: &[Value]) -> Result<ExecResult, DriverError>
+where
+    E: sqlx::Executor<'e, Database = MySql>,
+{
+    let query = bind_mysql_params(sqlx::query(sql), params);
+    let result = query.execute(executor).await.map_err(map_sqlx_error)?;
+    Ok(ExecResult {
+        rows_affected: result.rows_affected(),
+    })
+}
+
+async fn acquire_controlled(
+    pool: &Pool<MySql>,
+    control: &OperationControl,
+) -> Result<PoolConnection<MySql>, DriverError> {
+    check_pre_dispatch(control)?;
+    run_controlled_setup(pool.acquire(), control)
+        .await?
+        .map_err(map_sqlx_error)
+}
+
+async fn connection_id_controlled(
+    connection: &mut PoolConnection<MySql>,
+    control: &OperationControl,
+) -> Result<u64, DriverError> {
+    run_controlled_setup(connection_id(connection), control).await?
+}
+
+async fn connection_id(connection: &mut PoolConnection<MySql>) -> Result<u64, DriverError> {
+    sqlx::query_scalar("SELECT CONNECTION_ID()")
+        .fetch_one(&mut **connection)
+        .await
+        .map_err(map_sqlx_error)
+}
+
+/// MySQL has no request-scoped cancel channel, so the statement is
+/// stopped by `KILL QUERY` from a second session. That aborts the
+/// running statement and leaves the session alive, which is what makes
+/// the connection reusable afterwards.
+async fn request_cancellation(pool: &Pool<MySql>, connection_id: u64) -> Result<(), DriverError> {
+    sqlx::query(&format!("KILL QUERY {connection_id}"))
+        .execute(pool)
+        .await
+        .map_err(map_sqlx_error)?;
+    Ok(())
+}
+
+/// `ER_QUERY_INTERRUPTED` is the only outcome that proves the server
+/// aborted the statement rather than the client giving up on it.
+fn confirms_cancellation(error: &DriverError) -> bool {
+    matches!(
+        error,
+        DriverError::Query {
+            sqlstate: Some(sqlstate),
+            ..
+        } if sqlstate == "70100"
+    )
+}
+
+async fn release_connection<T>(connection: PoolConnection<MySql>, result: &Result<T, DriverError>) {
+    if matches!(result, Err(DriverError::OperationOutcomeUnknown { .. })) {
+        let _ = connection.detach().close_hard().await;
     }
 }
 

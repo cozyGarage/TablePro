@@ -74,7 +74,11 @@ async fn a_dollar_quoted_function_body_executes_as_one_statement() {
                   SELECT release_split_probe(20)";
 
     let statements = split_statements(script, "postgres");
-    assert_eq!(statements.len(), 2, "the function body must not split at its internal semicolons");
+    assert_eq!(
+        statements.len(),
+        2,
+        "the function body must not split at its internal semicolons"
+    );
 
     for statement in &statements[..1] {
         connection.execute(statement).await.expect("create the function");

@@ -48,6 +48,7 @@
 
 ### Changed
 
+- Stop and the query timeout now ask MySQL to abort the running statement, so the statement stops on the server and the session can keep writing afterwards
 - MSSQL uses native TLS and keeps its Kerberos service identity when SSH forwards the socket through localhost
 - Workspace crates declare AGPL-3.0-or-later; cargo-deny allows that license and documents the rsa Marvin advisory ignore
 - Linux UI and DDL modules split by domain: browse tab, grid, editor, app workspace helpers, and `sql_ddl` are directories of focused files instead of multi-thousand-line units
