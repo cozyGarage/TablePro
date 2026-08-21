@@ -9,13 +9,14 @@ use tiberius::{
     AuthMethod, Client, Column, ColumnData, ColumnType, Config, EncryptionLevel, FromSql, QueryItem, ToSql,
 };
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 use tablepro_core::sql_dialect::build_order_and_pagination;
 use tablepro_core::{
     AuthMode, ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, ForeignKeyInfo,
-    IndexInfo, MAX_QUERY_ROWS, QueryResult, TableInfo, Value,
+    IndexInfo, MAX_QUERY_ROWS, OperationControl, QueryResult, TableInfo, Value, check_pre_dispatch,
+    run_server_cancellable,
 };
 
 type MssqlClient = Client<Compat<TcpStream>>;
@@ -75,9 +76,7 @@ impl DatabaseDriver for MssqlDriver {
             AuthMode::Kerberos => open_kerberos_client(target).await?,
         };
 
-        Ok(Box::new(MssqlConnection {
-            client: Mutex::new(client),
-        }))
+        Ok(Box::new(MssqlConnection::new(client)))
     }
 }
 
@@ -153,6 +152,47 @@ async fn open_client(target: MssqlTarget) -> Result<MssqlClient, DriverError> {
 
 struct MssqlConnection {
     client: Mutex<MssqlClient>,
+    usable: AtomicBool,
+}
+
+impl MssqlConnection {
+    fn new(client: MssqlClient) -> Self {
+        Self {
+            client: Mutex::new(client),
+            usable: AtomicBool::new(true),
+        }
+    }
+
+    /// Every statement goes through here so an abandoned one cannot
+    /// strand the next caller. tiberius has no way to resynchronise a
+    /// client whose token stream was left half-read, and the client sits
+    /// behind a mutex, so a single abandoned statement would otherwise
+    /// block every later operation on this connection forever.
+    async fn client(&self) -> Result<MutexGuard<'_, MssqlClient>, DriverError> {
+        if !self.usable.load(Ordering::Acquire) {
+            return Err(DriverError::Disconnected);
+        }
+        Ok(self.client.lock().await)
+    }
+
+    /// Runs `operation` under the caller's cancellation and deadline.
+    /// tiberius 0.12 exposes no way to send the TDS attention packet, so
+    /// an interruption cannot stop the statement on the server: the
+    /// outcome stays unknown and the connection is retired rather than
+    /// reused. `supports_server_cancellation` reports false for exactly
+    /// this reason.
+    async fn run_abandonable<T, F>(&self, operation: F, control: &OperationControl) -> Result<T, DriverError>
+    where
+        F: std::future::Future<Output = Result<T, DriverError>>,
+    {
+        check_pre_dispatch(control)?;
+        run_server_cancellable(operation, self.retire(), |_| false, control).await
+    }
+
+    async fn retire(&self) -> Result<(), DriverError> {
+        self.usable.store(false, Ordering::Release);
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -162,7 +202,7 @@ impl Connection for MssqlConnection {
                    FROM sys.tables t \
                    JOIN sys.schemas s ON t.schema_id = s.schema_id \
                    ORDER BY s.name, t.name";
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await?;
         let result = run_query(&mut client, sql, &[], MAX_QUERY_ROWS).await?;
         Ok(result
             .rows
@@ -207,7 +247,7 @@ impl Connection for MssqlConnection {
                    ) pk ON pk.object_id = c.object_id AND pk.column_id = c.column_id \
                    WHERE o.name = @P1 AND sc.name = COALESCE(@P2, SCHEMA_NAME()) \
                    ORDER BY c.column_id";
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await?;
         let result = run_query(
             &mut client,
             sql,
@@ -230,34 +270,66 @@ impl Connection for MssqlConnection {
             qualified(schema, table),
             build_order_and_pagination("mssql", None, limit, offset)
         );
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await?;
         run_query(&mut client, &sql, &[], limit as usize).await
     }
 
     async fn query(&self, sql: &str) -> Result<QueryResult, DriverError> {
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await?;
         run_query(&mut client, sql, &[], MAX_QUERY_ROWS).await
     }
 
+    async fn query_controlled(&self, sql: &str, control: &OperationControl) -> Result<QueryResult, DriverError> {
+        self.query_params_controlled(sql, &[], control).await
+    }
+
+    async fn query_params_controlled(
+        &self,
+        sql: &str,
+        params: &[Value],
+        control: &OperationControl,
+    ) -> Result<QueryResult, DriverError> {
+        let mut client = self.client().await?;
+        self.run_abandonable(run_query(&mut client, sql, params, MAX_QUERY_ROWS), control)
+            .await
+    }
+
+    async fn execute_controlled(&self, sql: &str, control: &OperationControl) -> Result<ExecResult, DriverError> {
+        self.execute_params_controlled(sql, &[], control).await
+    }
+
+    async fn execute_params_controlled(
+        &self,
+        sql: &str,
+        params: &[Value],
+        control: &OperationControl,
+    ) -> Result<ExecResult, DriverError> {
+        let mut client = self.client().await?;
+        let rows_affected = self
+            .run_abandonable(run_execute(&mut client, sql, params), control)
+            .await?;
+        Ok(ExecResult { rows_affected })
+    }
+
     async fn query_params(&self, sql: &str, params: &[Value]) -> Result<QueryResult, DriverError> {
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await?;
         run_query(&mut client, sql, params, MAX_QUERY_ROWS).await
     }
 
     async fn execute(&self, sql: &str) -> Result<ExecResult, DriverError> {
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await?;
         let rows_affected = run_execute(&mut client, sql, &[]).await?;
         Ok(ExecResult { rows_affected })
     }
 
     async fn execute_params(&self, sql: &str, params: &[Value]) -> Result<ExecResult, DriverError> {
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await?;
         let rows_affected = run_execute(&mut client, sql, params).await?;
         Ok(ExecResult { rows_affected })
     }
 
     async fn execute_in_transaction(&self, statements: &[(String, Vec<Value>)]) -> Result<Vec<u64>, DriverError> {
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await?;
         exec_simple(&mut client, "BEGIN TRANSACTION").await?;
         let mut affected = Vec::with_capacity(statements.len());
         for (idx, (sql, params)) in statements.iter().enumerate() {
@@ -294,7 +366,7 @@ impl Connection for MssqlConnection {
                      AND i.name IS NOT NULL AND i.type > 0 \
                      AND ic.is_included_column = 0 \
                    ORDER BY i.name, ic.key_ordinal";
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await?;
         let result = run_query(
             &mut client,
             sql,
@@ -341,7 +413,7 @@ impl Connection for MssqlConnection {
                    JOIN sys.columns cref ON cref.object_id = fk.referenced_object_id AND cref.column_id = fkc.referenced_column_id \
                    WHERE o.name = @P1 AND s.name = COALESCE(@P2, SCHEMA_NAME()) \
                    ORDER BY fk.name, fkc.constraint_column_id";
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await?;
         let result = run_query(
             &mut client,
             sql,
@@ -376,11 +448,18 @@ impl Connection for MssqlConnection {
     }
 
     async fn ping(&self) -> Result<(), DriverError> {
-        let mut client = self.client.lock().await;
+        let mut client = self.client().await?;
         exec_simple(&mut client, "SELECT 1").await
     }
 
+    fn supports_server_cancellation(&self) -> bool {
+        false
+    }
+
     async fn close(self: Box<Self>) -> Result<(), DriverError> {
+        if !self.usable.load(Ordering::Acquire) {
+            return Ok(());
+        }
         self.client.into_inner().close().await.map_err(map_tiberius_error)
     }
 }

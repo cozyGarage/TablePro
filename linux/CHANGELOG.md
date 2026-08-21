@@ -49,6 +49,7 @@
 ### Changed
 
 - Stop and the query timeout now abort the running statement on MySQL, ClickHouse and SQLite, so the statement stops in the database and the session can keep writing afterwards
+- A cancelled or timed-out SQL Server statement now reports that its outcome is unknown and closes the connection, instead of leaving every later query on that connection waiting forever
 - SQLite results show the value of a computed column instead of a blank cell, so counts, aggregates and literal expressions read correctly
 - MSSQL uses native TLS and keeps its Kerberos service identity when SSH forwards the socket through localhost
 - Workspace crates declare AGPL-3.0-or-later; cargo-deny allows that license and documents the rsa Marvin advisory ignore

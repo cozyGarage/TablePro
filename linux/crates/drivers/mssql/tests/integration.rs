@@ -367,3 +367,69 @@ async fn empty_result_set_still_reports_columns() {
     assert!(paged.rows.is_empty());
     assert_eq!(paged.columns.len(), 2);
 }
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn the_driver_does_not_claim_server_side_cancellation() {
+    let (_c, opts) = start_mssql().await;
+    let connection = connect(opts).await;
+    assert!(
+        !connection.supports_server_cancellation(),
+        "tiberius cannot send the TDS attention packet, so a Stop must not be offered"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn an_interrupted_statement_retires_the_connection_instead_of_stranding_it() {
+    let (_c, opts) = start_mssql().await;
+    let connection: std::sync::Arc<dyn Connection> = MssqlDriver.connect(opts).await.expect("connect").into();
+
+    let token = tokio_util::sync::CancellationToken::new();
+    let control = tablepro_core::OperationControl::new(token.clone(), None);
+    let running = connection.clone();
+    let task = tokio::spawn(async move {
+        running
+            .query_controlled(
+                "WAITFOR DELAY '00:00:30'; SELECT 1 /* tablepro_mssql_retire */",
+                &control,
+            )
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    token.cancel();
+
+    let error = task
+        .await
+        .expect("query task")
+        .expect_err("an interrupted query must not succeed");
+    assert!(
+        matches!(error, tablepro_core::DriverError::OperationOutcomeUnknown { .. }),
+        "the statement may still be running, so the outcome must be unknown: {error:?}"
+    );
+
+    // The regression: this used to block forever on the poisoned client.
+    let reused = tokio::time::timeout(std::time::Duration::from_secs(5), connection.query("SELECT 1")).await;
+    let reused = reused.expect("a retired connection must answer instead of hanging");
+    assert!(
+        matches!(reused, Err(tablepro_core::DriverError::Disconnected)),
+        "a retired connection must report itself disconnected: {reused:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn a_completed_controlled_statement_leaves_the_connection_usable() {
+    let (_c, opts) = start_mssql().await;
+    let connection = connect(opts).await;
+    let control = tablepro_core::OperationControl::new(tokio_util::sync::CancellationToken::new(), None);
+
+    let first = connection
+        .query_controlled("SELECT 1", &control)
+        .await
+        .expect("an uninterrupted controlled query returns rows");
+    assert_eq!(first.rows, vec![vec![Value::Int(1)]]);
+
+    let second = connection.query("SELECT 2").await.expect("the connection stays usable");
+    assert_eq!(second.rows, vec![vec![Value::Int(2)]]);
+}

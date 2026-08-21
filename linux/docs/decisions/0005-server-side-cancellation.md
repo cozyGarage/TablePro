@@ -25,6 +25,10 @@ This is deliberately strict. A statement that completes normally during the inte
 
 **SQLite interrupts in process.** It has no second session to kill from, so the driver keeps the raw `sqlite3` handle for the life of the operation and calls `sqlite3_interrupt`, which SQLite documents as safe from another thread. sqlx's progress handler was rejected as the mechanism: it only fires between virtual-machine instructions, so it cannot stop a statement waiting on a database lock, which is one of the cases a Stop has to cover. The unsafe call is isolated in one module holding one pointer and one function.
 
+**SQL Server cannot do this yet, and says so.** tiberius 0.12 defines the TDS attention packet but exposes no way to send one, so there is no mechanism to abort a statement on the connection running it. Measured behaviour before this change: abandoning the statement left it running on the server *and* left the tiberius client with a half-read token stream, so - because the client sits behind a mutex - every later operation on that connection blocked forever. A hang, not an error.
+
+So SQL Server keeps `supports_server_cancellation` false and, on an interruption, retires the connection: the outcome is reported unknown, and every later call fails fast with `Disconnected` instead of stranding the caller. The only alternative mechanism, `KILL <spid>` from a second connection, stops the statement but destroys the session, which is a different product decision - whether Stop should drop your SQL Server connection - and is tracked separately rather than decided here.
+
 **A driver declares the capability.** `Connection::supports_server_cancellation` defaults to false. Where it is false the outcome of an interrupted operation is genuinely unknown, poisoning is correct, and the UI must not offer a Stop that cannot stop.
 
 ## Rationale
@@ -55,4 +59,6 @@ Gained:
 
 **Treating a dispatched cancellation as confirmation.** Rejected. It would clear the poison flag while a write might still be running, which is the failure mode the audit rules exist to prevent.
 
-**Leaving non-PostgreSQL drivers on the dropped-future default and hiding Stop.** Rejected for the four SQL engines, where a real mechanism exists. Retained for Redis, MongoDB, DuckDB and Oracle, which now declare the capability as false.
+**Leaving non-PostgreSQL drivers on the dropped-future default and hiding Stop.** Rejected for PostgreSQL, MySQL, ClickHouse and SQLite, where a real mechanism exists. Retained for SQL Server, Redis, MongoDB, DuckDB and Oracle, which declare the capability as false.
+
+**`KILL <spid>` for SQL Server.** Deferred, not rejected. It does stop the statement and roll it back, and the session's disappearance from `sys.dm_exec_sessions` would be real confirmation. It also ends the session, so Stop would cost the user their connection, and confirmation would come from the cancellation request rather than from the statement's own error - a weaker proof than the rule above allows. Both need deciding before it ships.
