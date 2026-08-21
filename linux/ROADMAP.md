@@ -1,6 +1,6 @@
 # TablePro Linux roadmap
 
-Last audited: 2026-08-21
+Last audited: 2026-08-22
 
 The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Linux capability backlog. This file is the concise status view.
 
@@ -22,11 +22,12 @@ Status terms:
 
 | Area | Status | Notes |
 |---|---|---|
-| PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse | Implemented | PostgreSQL is release-verified through the fixture; the other engines have container integration tests only |
+| PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse | Implemented | PostgreSQL is release-verified through the fixture; the other engines have container integration tests only. Server-side cancellation is verified against a real engine on PostgreSQL, MySQL, ClickHouse and SQLite; SQL Server declares it unsupported because tiberius cannot send the TDS attention packet |
 | Redis, MongoDB, DuckDB | Implemented | Experimental; DuckDB requires a Cargo feature. Redis and MongoDB TLS is release-verified |
 | Oracle | Broken | Does not compile under its `odpi` feature against oracle 0.6.3 |
 | Browse/edit/filter/sort/pagination | Implemented | Keyset helper exists; integers wider than 2^53 edit exactly; large-result behavior needs release tests |
-| SQL editor and multiple result tabs | Integrated | PostgreSQL timeout and cancel stop the server query and wait for terminal audit state |
+| SQL editor and multiple result tabs | Integrated | PostgreSQL timeout and cancel stop the server query and wait for terminal audit state. One dialect-aware lexer sets statement boundaries, so a PostgreSQL function body runs whole |
+| Bounded operations | Integrated | Every database call the interface starts carries a deadline, gated by `scripts/check-bounded-operations.sh` |
 | Structure editor | Implemented | Tables, columns, indexes, and foreign keys |
 | Saved connections and libsecret | Implemented | Keyring failure UX needs hardening |
 | SSH and jump chains | Integrated | A verifying PostgreSQL connection forwards through a private Unix socket and is release-verified, headlessly as well as in the GUI; jump chains are JSON-only in the current GTK form |
