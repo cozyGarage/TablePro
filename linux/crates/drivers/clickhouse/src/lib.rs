@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use tablepro_core::{
     ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, ForeignKeyInfo, IndexInfo,
-    MAX_QUERY_ROWS, QueryResult, TableInfo, Value, sql_dialect::quote_ident,
+    MAX_QUERY_ROWS, OperationControl, QueryResult, TableInfo, Value, run_server_cancellable, sql_dialect::quote_ident,
 };
 
 const DRIVER_ID: &str = "clickhouse";
@@ -115,9 +115,11 @@ impl ClickhouseConnection {
     /// nothing, which is why the driver declares
     /// `reports_rows_affected() == false`.
     async fn execute_reporting(&self, sql: &str) -> Result<u64, DriverError> {
-        let mut cursor = self
-            .client
-            .query(&escape_bind_markers(sql))
+        self.execute_tagged(sql, None).await
+    }
+
+    async fn execute_tagged(&self, sql: &str, query_id: Option<&str>) -> Result<u64, DriverError> {
+        let mut cursor = tag_query(self.client.query(&escape_bind_markers(sql)), query_id)
             // The summary header is sent before the body, so its counts
             // are only complete once the server has finished the query.
             .with_setting("wait_end_of_query", "1")
@@ -227,11 +229,64 @@ impl Connection for ClickhouseConnection {
     ) -> Result<QueryResult, DriverError> {
         let qualified = qualify(self.database_of(schema), table);
         let sql = format!("SELECT * FROM {qualified} LIMIT {limit} OFFSET {offset}");
-        fetch_result(&self.client, &sql, limit as usize).await
+        fetch_result(&self.client, &sql, limit as usize, None).await
     }
 
     async fn query(&self, sql: &str) -> Result<QueryResult, DriverError> {
-        fetch_result(&self.client, sql, MAX_QUERY_ROWS).await
+        fetch_result(&self.client, sql, MAX_QUERY_ROWS, None).await
+    }
+
+    async fn query_controlled(&self, sql: &str, control: &OperationControl) -> Result<QueryResult, DriverError> {
+        let query_id = new_query_id();
+        run_server_cancellable(
+            fetch_result(&self.client, sql, MAX_QUERY_ROWS, Some(&query_id)),
+            request_cancellation(&self.client, &query_id),
+            confirms_cancellation,
+            control,
+        )
+        .await
+    }
+
+    async fn query_params_controlled(
+        &self,
+        sql: &str,
+        params: &[Value],
+        control: &OperationControl,
+    ) -> Result<QueryResult, DriverError> {
+        if params.is_empty() {
+            return self.query_controlled(sql, control).await;
+        }
+        let bound = bind_placeholders(sql, params)?;
+        self.query_controlled(&bound, control).await
+    }
+
+    async fn execute_controlled(&self, sql: &str, control: &OperationControl) -> Result<ExecResult, DriverError> {
+        let query_id = new_query_id();
+        let rows_affected = run_server_cancellable(
+            self.execute_tagged(sql, Some(&query_id)),
+            request_cancellation(&self.client, &query_id),
+            confirms_cancellation,
+            control,
+        )
+        .await?;
+        Ok(ExecResult { rows_affected })
+    }
+
+    async fn execute_params_controlled(
+        &self,
+        sql: &str,
+        params: &[Value],
+        control: &OperationControl,
+    ) -> Result<ExecResult, DriverError> {
+        if params.is_empty() {
+            return self.execute_controlled(sql, control).await;
+        }
+        let bound = bind_placeholders(sql, params)?;
+        self.execute_controlled(&bound, control).await
+    }
+
+    fn supports_server_cancellation(&self) -> bool {
+        true
     }
 
     async fn query_params(&self, sql: &str, params: &[Value]) -> Result<QueryResult, DriverError> {
@@ -384,9 +439,52 @@ fn parse_line<T: serde::de::DeserializeOwned>(line: &[u8]) -> Result<T, DriverEr
     serde_json::from_slice(line).map_err(|e| DriverError::Internal(format!("clickhouse response parse: {e}")))
 }
 
-async fn fetch_result(client: &clickhouse::Client, sql: &str, max_rows: usize) -> Result<QueryResult, DriverError> {
-    let cursor = client
-        .query(&escape_bind_markers(sql))
+/// `query_id` is a caller-generated UUID, so `KILL QUERY` can name the
+/// statement later. ClickHouse's HTTP interface accepts it as a request
+/// parameter; the server rejects a duplicate, which is why each call
+/// mints a fresh one.
+fn tag_query(query: clickhouse::query::Query, query_id: Option<&str>) -> clickhouse::query::Query {
+    match query_id {
+        Some(query_id) => query.with_setting("query_id", query_id),
+        None => query,
+    }
+}
+
+fn new_query_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+/// ClickHouse has no per-request cancel channel, so the statement is
+/// stopped by `KILL QUERY` naming the id the request was tagged with.
+/// The id is a UUID rendered as hex and dashes, so it cannot carry SQL.
+async fn request_cancellation(client: &clickhouse::Client, query_id: &str) -> Result<(), DriverError> {
+    let sql = format!("KILL QUERY WHERE query_id = '{query_id}'");
+    let mut cursor = client
+        .query(&sql)
+        .fetch_bytes(ROW_FORMAT)
+        .map_err(map_clickhouse_error)?;
+    while cursor.next().await.map_err(map_clickhouse_error)?.is_some() {}
+    Ok(())
+}
+
+/// ClickHouse reports an aborted statement as `QUERY_WAS_CANCELLED`
+/// (code 394). The driver never populates `sqlstate`, so the code has
+/// to be read out of the server's message.
+fn confirms_cancellation(error: &DriverError) -> bool {
+    let DriverError::Query { message, .. } = error else {
+        return false;
+    };
+    let lowered = message.to_lowercase();
+    lowered.contains("code: 394") || lowered.contains("query was cancelled")
+}
+
+async fn fetch_result(
+    client: &clickhouse::Client,
+    sql: &str,
+    max_rows: usize,
+    query_id: Option<&str>,
+) -> Result<QueryResult, DriverError> {
+    let cursor = tag_query(client.query(&escape_bind_markers(sql)), query_id)
         .fetch_bytes(ROW_FORMAT)
         .map_err(map_clickhouse_error)?;
     let mut reader = LineReader::new(cursor);

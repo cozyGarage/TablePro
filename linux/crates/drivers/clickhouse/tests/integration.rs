@@ -1,6 +1,6 @@
 use drivers_clickhouse::ClickhouseDriver;
 use tablepro_core::sql_dialect::{build_full_row_update, build_single_cell_update};
-use tablepro_core::{ColumnInfo, ConnectOptions, DatabaseDriver, TlsConfig, Value};
+use tablepro_core::{ColumnInfo, ConnectOptions, DatabaseDriver, DriverError, OperationControl, TlsConfig, Value};
 use testcontainers::core::wait::HttpWaitStrategy;
 use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
@@ -338,4 +338,75 @@ async fn bad_sql_returns_query_error() {
         .await
         .unwrap_err();
     assert!(matches!(err, tablepro_core::DriverError::Query { .. }));
+}
+
+async fn running_query_count(connection: &dyn tablepro_core::Connection, query_id: &str) -> i64 {
+    let sql = format!("SELECT count() FROM system.processes WHERE query_id = '{query_id}'");
+    let result = connection.query(&sql).await.expect("inspect system.processes");
+    match result.rows.first().and_then(|row| row.first()) {
+        Some(Value::Int(count)) => *count,
+        other => panic!("unexpected count row: {other:?}"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn the_driver_declares_server_side_cancellation() {
+    let (_container, opts) = start_clickhouse().await;
+    let connection = connect(opts).await;
+    assert!(connection.supports_server_cancellation());
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn a_cancelled_query_is_killed_on_the_server_and_the_client_stays_usable() {
+    let (_container, opts) = start_clickhouse().await;
+    let connection: std::sync::Arc<dyn tablepro_core::Connection> =
+        ClickhouseDriver.connect(opts.clone()).await.expect("connect").into();
+    let observer = connect(opts).await;
+
+    let token = tokio_util::sync::CancellationToken::new();
+    let control = OperationControl::new(token.clone(), None);
+    let operation_connection = connection.clone();
+    let task = tokio::spawn(async move {
+        operation_connection
+            .query_controlled("SELECT count() FROM numbers(200000000000)", &control)
+            .await
+    });
+
+    let mut running = String::new();
+    for _ in 0..200 {
+        let result = observer
+            .query("SELECT query_id FROM system.processes WHERE query LIKE '%numbers(200000000000)%'")
+            .await
+            .expect("inspect system.processes");
+        if let Some(Value::Text(query_id)) = result.rows.first().and_then(|row| row.first()) {
+            running = query_id.clone();
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(!running.is_empty(), "the probe query never reached system.processes");
+
+    token.cancel();
+    let error = task
+        .await
+        .expect("query task")
+        .expect_err("the query must be cancelled");
+    assert!(matches!(error, DriverError::Cancelled), "unexpected error: {error:?}");
+
+    for _ in 0..200 {
+        if running_query_count(observer.as_ref(), &running).await == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        running_query_count(observer.as_ref(), &running).await,
+        0,
+        "the killed query must leave system.processes"
+    );
+
+    let result = connection.query("SELECT 1").await.expect("the client remains usable");
+    assert_eq!(result.rows, vec![vec![Value::Int(1)]]);
 }
