@@ -133,7 +133,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             build-essential ca-certificates curl git pkg-config \
             libgtk-4-dev libadwaita-1-dev libgtksourceview-5-dev \
-            libssl-dev libsecret-1-dev libkrb5-dev clang \
+            libssl-dev libsecret-1-dev libsecret-tools libkrb5-dev clang \
             dbus-daemon gnome-keyring libglib2.0-bin xvfb xauth at-spi2-core python3-pyatspi scrot
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
