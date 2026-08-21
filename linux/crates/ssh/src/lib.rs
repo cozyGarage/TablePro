@@ -215,7 +215,7 @@ impl SshTunnel {
             upstream.push(tunnel);
         }
 
-        unreachable!("open_chain loop always returns on last hop")
+        Err(SshError::EmptyChain)
     }
 
     pub fn local_port(&self) -> u16 {
@@ -422,7 +422,7 @@ async fn connect_and_auth(cfg: &SshConfig, tcp_host: &str, tcp_port: u16) -> Res
         Err(_) => return Err(timeout_error("ssh handshake", cfg, CONNECT_TIMEOUT)),
     };
 
-    match outcome.lock().ok().and_then(|s| s.clone()) {
+    match outcome.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone() {
         Some(HostKeyOutcome::LearnedNew { fingerprint }) => tracing::info!(
             host = %cfg.host,
             port = cfg.port,
@@ -431,7 +431,15 @@ async fn connect_and_auth(cfg: &SshConfig, tcp_host: &str, tcp_port: u16) -> Res
         ),
         Some(HostKeyOutcome::Trusted) => tracing::debug!(host = %cfg.host, "ssh: host key matches known_hosts"),
         Some(HostKeyOutcome::KnownHostsIo(e)) => return Err(SshError::KnownHosts(e)),
-        Some(HostKeyOutcome::Changed { .. }) => unreachable!("connect should fail on key mismatch"),
+        Some(HostKeyOutcome::Changed { fingerprint, line }) => {
+            return Err(SshError::HostKeyMismatch {
+                host: cfg.host.clone(),
+                port: cfg.port,
+                new_fingerprint: fingerprint,
+                line,
+                known_hosts: known_hosts_path.clone(),
+            });
+        }
         None => {}
     }
 
