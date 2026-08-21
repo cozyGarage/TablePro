@@ -111,7 +111,7 @@ pub(super) fn install_window_shortcuts(window: &adw::ApplicationWindow) {
 
 fn make_shortcut(trigger: &str, action: &str) -> gtk::Shortcut {
     gtk::Shortcut::builder()
-        .trigger(&gtk::ShortcutTrigger::parse_string(trigger).expect("valid trigger"))
+        .trigger(&crate::ui::shortcut::parse(trigger))
         .action(&gtk::NamedAction::new(action))
         .build()
 }

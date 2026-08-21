@@ -274,7 +274,7 @@ impl FactoryComponent for SidebarRow {
         // the row centre (no pointer position).
         let popover_for_menu = popover;
         let menu_shortcut = gtk::Shortcut::builder()
-            .trigger(&gtk::ShortcutTrigger::parse_string("Menu").expect("valid trigger"))
+            .trigger(&crate::ui::shortcut::parse("Menu"))
             .action(&gtk::CallbackAction::new(move |_, _| {
                 popover_for_menu.popup();
                 glib::Propagation::Stop

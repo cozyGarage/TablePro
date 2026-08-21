@@ -15,6 +15,7 @@ mod parameters_dialog;
 mod preferences;
 mod quick_switcher_dialog;
 mod row_object;
+pub(crate) mod shortcut;
 mod sidebar_row;
 mod ssh_section;
 mod structure_tab;

@@ -257,7 +257,7 @@ impl SimpleComponent for SqlEditor {
         });
 
         let run_shortcut = gtk::Shortcut::builder()
-            .trigger(&gtk::ShortcutTrigger::parse_string("<Primary>Return").expect("valid trigger"))
+            .trigger(&crate::ui::shortcut::parse("<Primary>Return"))
             .action(&gtk::CallbackAction::new({
                 let sender = sender.clone();
                 move |_, _| {
@@ -267,7 +267,7 @@ impl SimpleComponent for SqlEditor {
             }))
             .build();
         let cancel_shortcut = gtk::Shortcut::builder()
-            .trigger(&gtk::ShortcutTrigger::parse_string("Escape").expect("valid trigger"))
+            .trigger(&crate::ui::shortcut::parse("Escape"))
             .action(&gtk::CallbackAction::new({
                 let sender = sender.clone();
                 move |_, _| {
@@ -277,7 +277,7 @@ impl SimpleComponent for SqlEditor {
             }))
             .build();
         let format_shortcut = gtk::Shortcut::builder()
-            .trigger(&gtk::ShortcutTrigger::parse_string("<Primary><Shift>f").expect("valid trigger"))
+            .trigger(&crate::ui::shortcut::parse("<Primary><Shift>f"))
             .action(&gtk::CallbackAction::new({
                 let sender = sender.clone();
                 move |_, _| {
@@ -287,7 +287,7 @@ impl SimpleComponent for SqlEditor {
             }))
             .build();
         let run_at_cursor_shortcut = gtk::Shortcut::builder()
-            .trigger(&gtk::ShortcutTrigger::parse_string("<Primary><Shift>Return").expect("valid trigger"))
+            .trigger(&crate::ui::shortcut::parse("<Primary><Shift>Return"))
             .action(&gtk::CallbackAction::new({
                 let sender = sender.clone();
                 move |_, _| {
@@ -297,7 +297,7 @@ impl SimpleComponent for SqlEditor {
             }))
             .build();
         let toggle_comment_shortcut = gtk::Shortcut::builder()
-            .trigger(&gtk::ShortcutTrigger::parse_string("<Primary>slash").expect("valid trigger"))
+            .trigger(&crate::ui::shortcut::parse("<Primary>slash"))
             .action(&gtk::CallbackAction::new({
                 let sender = sender.clone();
                 move |_, _| {

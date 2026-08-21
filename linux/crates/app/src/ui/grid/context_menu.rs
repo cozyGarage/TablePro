@@ -258,7 +258,7 @@ pub(super) fn attach_cell_gesture(
     let popover_for_key = popover;
     let column_name_for_key = column_name;
     let menu_shortcut = gtk::Shortcut::builder()
-        .trigger(&gtk::ShortcutTrigger::parse_string("Menu").expect("valid trigger"))
+        .trigger(&crate::ui::shortcut::parse("Menu"))
         .action(&gtk::CallbackAction::new(move |_, _| {
             *context_for_key.borrow_mut() = Some(CellContext {
                 widget: widget_for_key.clone(),
