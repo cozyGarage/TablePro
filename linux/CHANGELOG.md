@@ -35,7 +35,7 @@
 - Installed GTK safety checks for approval dismissal, approve-once scope, and unavailable audit storage
 - Deterministic PostgreSQL release checks for TLS hostname and authority verification, tunnelled access, read-only denial, rollback, blocking locks, and reconnect
 - Verify Full for PostgreSQL over SSH, using the original database hostname for certificate checks
-- Named `:parameter` placeholders in the SQL editor, with a per-value type choice, sent to the database as bound parameters
+- Named `:parameter` placeholders in the SQL editor, with a per-value type choice, sent to the database as bound parameters. Statement splitting and placeholder scanning follow the connected engine's own quoting, so a PostgreSQL function body is run whole and a MySQL `#` comment hides nothing but itself
 - Schema-aware editor completion that offers tables after FROM and JOIN, and the columns of the tables in the statement, including through table aliases
 - Saved query favorites in `favorites.json`, saved with Ctrl+D
 - Open Quickly (Ctrl+P) over favorites, open tabs, and saved connections

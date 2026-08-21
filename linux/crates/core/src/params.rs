@@ -1,5 +1,6 @@
 use crate::query::Value;
 use crate::sql_dialect::placeholder_for;
+use crate::sql_lex::skip_span;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamedParameters {
@@ -155,71 +156,6 @@ fn parameter_name(rest: &str) -> Option<String> {
     (end > 0).then(|| rest[..end].to_string())
 }
 
-fn skip_span(rest: &str, driver_id: &str) -> Option<usize> {
-    if rest.starts_with("--") {
-        return Some(rest.find('\n').map_or(rest.len(), |offset| offset + 1));
-    }
-    if let Some(body) = rest.strip_prefix("/*") {
-        return Some(body.find("*/").map_or(rest.len(), |offset| offset + 4));
-    }
-    if rest.starts_with('\'') {
-        return Some(quoted_length(rest, '\'', true));
-    }
-    if let Some(tag_length) = dollar_quote_length(rest, driver_id) {
-        return Some(tag_length);
-    }
-    match (driver_id, rest.as_bytes().first()) {
-        ("mysql" | "clickhouse", Some(b'`')) => Some(quoted_length(rest, '`', false)),
-        ("mssql", Some(b'[')) => Some(bracket_length(rest)),
-        (_, Some(b'"')) => Some(quoted_length(rest, '"', true)),
-        _ => None,
-    }
-}
-
-fn quoted_length(rest: &str, quote: char, doubling_escapes: bool) -> usize {
-    let mut characters = rest.char_indices().skip(1);
-    while let Some((offset, character)) = characters.next() {
-        if character != quote {
-            continue;
-        }
-        if doubling_escapes && rest[offset + character.len_utf8()..].starts_with(quote) {
-            characters.next();
-            continue;
-        }
-        return offset + character.len_utf8();
-    }
-    rest.len()
-}
-
-fn bracket_length(rest: &str) -> usize {
-    match rest.find(']') {
-        Some(offset) => offset + 1,
-        None => rest.len(),
-    }
-}
-
-fn dollar_quote_length(rest: &str, driver_id: &str) -> Option<usize> {
-    if driver_id != "postgres" || !rest.starts_with('$') {
-        return None;
-    }
-    let close = rest[1..].find('$')? + 1;
-    let tag = &rest[..close + 1];
-    let mut tag_characters = tag[1..close].chars();
-    if let Some(first) = tag_characters.next()
-        && !(first.is_ascii_alphabetic() || first == '_')
-    {
-        return None;
-    }
-    if tag_characters.any(|c| !c.is_ascii_alphanumeric() && c != '_') {
-        return None;
-    }
-    let body = &rest[close + 1..];
-    match body.find(tag) {
-        Some(offset) => Some(close + 1 + offset + tag.len()),
-        None => Some(rest.len()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +247,13 @@ mod tests {
         let parsed = extract_named_parameters("SELECT 'open :nope", "postgres");
         assert!(parsed.is_empty());
         assert_eq!(parsed.sql, "SELECT 'open :nope");
+    }
+
+    #[test]
+    fn a_mysql_hash_comment_hides_a_parameter() {
+        let parsed = extract_named_parameters("SELECT 1 # :nope\n, :yes FROM t", "mysql");
+        assert_eq!(parsed.names, vec!["yes"]);
+        assert!(parsed.sql.contains("# :nope"));
     }
 
     #[test]

@@ -11,6 +11,7 @@ mod query;
 mod registry;
 pub mod sql_ddl;
 pub mod sql_dialect;
+pub mod sql_lex;
 mod tls;
 mod transaction;
 

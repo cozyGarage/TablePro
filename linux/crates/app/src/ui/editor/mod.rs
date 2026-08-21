@@ -23,7 +23,8 @@ pub use schema::{SQL_KEYWORDS, build_schema_buffer, derive_tab_label, update_sch
 
 use outcomes::{ScriptRunResult, clear_box, render_outcomes, run_statements, summary_label};
 use schema::{apply_editor_font_size, apply_editor_scheme};
-use sql_text::{split_sql_statements, statement_at_cursor, toggle_line_comment};
+use sql_text::toggle_line_comment;
+use tablepro_core::sql_lex::{split_statements, statement_at_cursor};
 
 pub struct SqlEditor {
     source_view: sourceview5::View,
@@ -392,7 +393,8 @@ impl SimpleComponent for SqlEditor {
                 let sql = buffer.text(&start, &end, false).to_string();
                 let cursor_chars = buffer.iter_at_mark(&buffer.get_insert()).offset() as usize;
                 let cursor_byte: usize = sql.chars().take(cursor_chars).map(char::len_utf8).sum();
-                let Some(statement) = statement_at_cursor(&sql, cursor_byte) else {
+                let driver_id = self.metadata().map(|metadata| metadata.driver_id).unwrap_or_default();
+                let Some(statement) = statement_at_cursor(&sql, &driver_id, cursor_byte) else {
                     self.status.set_label(&crate::tr!("No statement at cursor"));
                     return;
                 };
@@ -593,7 +595,7 @@ impl SqlEditor {
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    let statements = split_sql_statements(&trimmed);
+                    let statements = split_statements(&trimmed, &driver_id);
                     let deadline = (timeout_secs > 0)
                         .then(|| tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64));
                     let control = OperationControl::new(token, deadline);

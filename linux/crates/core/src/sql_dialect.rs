@@ -2,6 +2,36 @@ use thiserror::Error;
 
 use crate::{ColumnInfo, Value};
 
+pub const MAX_IDENT_BYTES: usize = 256;
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum IdentError {
+    #[error("identifier is empty")]
+    Empty,
+
+    #[error("identifier is longer than {MAX_IDENT_BYTES} bytes")]
+    TooLong,
+
+    #[error("identifier contains a control character")]
+    ControlCharacter,
+}
+
+pub fn validate_ident(name: &str) -> Result<(), IdentError> {
+    if name.trim().is_empty() {
+        return Err(IdentError::Empty);
+    }
+    if name.len() > MAX_IDENT_BYTES {
+        return Err(IdentError::TooLong);
+    }
+    if name
+        .chars()
+        .any(|character| character.is_control() || character == '\u{2028}' || character == '\u{2029}')
+    {
+        return Err(IdentError::ControlCharacter);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Error)]
 pub enum BuildSqlError {
     #[error("table has no primary key")]
@@ -281,6 +311,26 @@ mod tests {
             is_auto_increment: false,
             default_value: None,
             is_generated: false,
+        }
+    }
+
+    #[test]
+    fn validate_ident_accepts_ordinary_and_quoted_names() {
+        for name in ["users", "Order Details", "naïve", "a\"b", "a`b", "a]b"] {
+            assert_eq!(validate_ident(name), Ok(()), "{name}");
+        }
+    }
+
+    #[test]
+    fn validate_ident_rejects_empty_overlong_and_control_characters() {
+        assert_eq!(validate_ident(""), Err(IdentError::Empty));
+        assert_eq!(validate_ident("   "), Err(IdentError::Empty));
+        assert_eq!(
+            validate_ident(&"a".repeat(MAX_IDENT_BYTES + 1)),
+            Err(IdentError::TooLong)
+        );
+        for name in ["a\0b", "a\nb", "a\rb", "a\u{2028}b", "a\u{7f}b"] {
+            assert_eq!(validate_ident(name), Err(IdentError::ControlCharacter), "{name:?}");
         }
     }
 

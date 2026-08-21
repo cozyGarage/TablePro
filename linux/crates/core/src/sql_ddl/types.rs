@@ -43,6 +43,9 @@ pub enum BuildDdlError {
 
     #[error("invalid foreign key action: {0}")]
     InvalidFkAction(String),
+
+    #[error("unsafe identifier: {0}")]
+    UnsafeIdentifier(String),
 }
 
 const MAX_TYPE_LEN: usize = 200;
@@ -298,17 +301,19 @@ EXEC('ALTER TABLE {table_literal} DROP CONSTRAINT [' + @default_constraint + ']'
 }
 
 pub(crate) fn validate_table(table: &str) -> Result<(), BuildDdlError> {
-    if table.trim().is_empty() {
-        return Err(BuildDdlError::EmptyTableName);
+    match crate::sql_dialect::validate_ident(table) {
+        Ok(()) => Ok(()),
+        Err(crate::sql_dialect::IdentError::Empty) => Err(BuildDdlError::EmptyTableName),
+        Err(_) => Err(BuildDdlError::UnsafeIdentifier(table.into())),
     }
-    Ok(())
 }
 
 pub(crate) fn validate_column_name(name: &str) -> Result<(), BuildDdlError> {
-    if name.trim().is_empty() {
-        return Err(BuildDdlError::EmptyColumnName);
+    match crate::sql_dialect::validate_ident(name) {
+        Ok(()) => Ok(()),
+        Err(crate::sql_dialect::IdentError::Empty) => Err(BuildDdlError::EmptyColumnName),
+        Err(_) => Err(BuildDdlError::UnsafeIdentifier(name.into())),
     }
-    Ok(())
 }
 
 pub(crate) fn validate_column_type(data_type: &str) -> Result<(), BuildDdlError> {
