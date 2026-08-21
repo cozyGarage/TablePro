@@ -2,6 +2,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use sqlx::{Column, Pool, Row, Sqlite, TypeInfo};
 
@@ -9,8 +10,13 @@ use futures::stream::StreamExt;
 
 use tablepro_core::{
     ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, ForeignKeyInfo, IndexInfo,
-    MAX_QUERY_ROWS, QueryResult, TableInfo, Value,
+    MAX_QUERY_ROWS, OperationControl, QueryResult, TableInfo, Value, check_pre_dispatch, run_controlled_setup,
+    run_server_cancellable,
 };
+
+mod interrupt;
+
+use interrupt::InterruptHandle;
 
 pub struct SqliteDriver;
 
@@ -166,47 +172,30 @@ impl Connection for SqliteConnection {
     }
 
     async fn query_params(&self, sql: &str, params: &[Value]) -> Result<QueryResult, DriverError> {
-        let q = bind_sqlite_params(sqlx::query(sql), params);
-        let mut stream = q.fetch(&self.pool);
-        let mut collected: Vec<SqliteRow> = Vec::new();
-        let mut truncated = false;
-        while let Some(row_result) = stream.next().await {
-            let row = row_result.map_err(map_sqlx_error)?;
-            if collected.len() >= MAX_QUERY_ROWS {
-                truncated = true;
-                break;
-            }
-            collected.push(row);
-        }
-        if collected.is_empty() {
-            return Ok(QueryResult {
-                columns: Vec::new(),
-                rows: Vec::new(),
-                truncated,
-            });
-        }
-        let columns: Vec<ColumnInfo> = collected[0]
-            .columns()
-            .iter()
-            .map(|c| ColumnInfo {
-                name: c.name().to_string(),
-                data_type: c.type_info().name().to_string(),
-                nullable: true,
-                primary_key: false,
-                is_auto_increment: false,
-                default_value: None,
-                is_generated: false,
-            })
-            .collect();
-        let data: Vec<Vec<Value>> = collected
-            .iter()
-            .map(|r| (0..columns.len()).map(|i| extract_value(r, i)).collect())
-            .collect();
-        Ok(QueryResult {
-            columns,
-            rows: data,
-            truncated,
-        })
+        params_into_result(&self.pool, sql, params, MAX_QUERY_ROWS).await
+    }
+
+    async fn query_controlled(&self, sql: &str, control: &OperationControl) -> Result<QueryResult, DriverError> {
+        self.query_params_controlled(sql, &[], control).await
+    }
+
+    async fn query_params_controlled(
+        &self,
+        sql: &str,
+        params: &[Value],
+        control: &OperationControl,
+    ) -> Result<QueryResult, DriverError> {
+        let mut connection = acquire_controlled(&self.pool, control).await?;
+        let handle = InterruptHandle::of(&mut connection).await?;
+        let result = run_server_cancellable(
+            params_into_result(&mut *connection, sql, params, MAX_QUERY_ROWS),
+            request_interrupt(&handle),
+            confirms_cancellation,
+            control,
+        )
+        .await;
+        release_connection(connection, &result).await;
+        result
     }
 
     async fn execute(&self, sql: &str) -> Result<ExecResult, DriverError> {
@@ -222,6 +211,33 @@ impl Connection for SqliteConnection {
         Ok(ExecResult {
             rows_affected: res.rows_affected(),
         })
+    }
+
+    async fn execute_controlled(&self, sql: &str, control: &OperationControl) -> Result<ExecResult, DriverError> {
+        self.execute_params_controlled(sql, &[], control).await
+    }
+
+    async fn execute_params_controlled(
+        &self,
+        sql: &str,
+        params: &[Value],
+        control: &OperationControl,
+    ) -> Result<ExecResult, DriverError> {
+        let mut connection = acquire_controlled(&self.pool, control).await?;
+        let handle = InterruptHandle::of(&mut connection).await?;
+        let result = run_server_cancellable(
+            execute_on(&mut *connection, sql, params),
+            request_interrupt(&handle),
+            confirms_cancellation,
+            control,
+        )
+        .await;
+        release_connection(connection, &result).await;
+        result
+    }
+
+    fn supports_server_cancellation(&self) -> bool {
+        true
     }
 
     async fn execute_in_transaction(&self, statements: &[(String, Vec<Value>)]) -> Result<Vec<u64>, DriverError> {
@@ -437,8 +453,11 @@ impl tablepro_core::Transaction for SqliteTransaction {
     }
 }
 
-async fn stream_into_result(pool: &Pool<Sqlite>, sql: &str, limit: usize) -> Result<QueryResult, DriverError> {
-    let mut stream = sqlx::query(sql).fetch(pool);
+async fn stream_into_result<'e, E>(executor: E, sql: &str, limit: usize) -> Result<QueryResult, DriverError>
+where
+    E: sqlx::Executor<'e, Database = Sqlite>,
+{
+    let mut stream = sqlx::query(sql).fetch(executor);
     let mut collected: Vec<SqliteRow> = Vec::new();
     let mut truncated = false;
     while let Some(row_result) = stream.next().await {
@@ -449,14 +468,18 @@ async fn stream_into_result(pool: &Pool<Sqlite>, sql: &str, limit: usize) -> Res
         }
         collected.push(row);
     }
-    if collected.is_empty() {
-        return Ok(QueryResult {
+    Ok(rows_into_result(&collected, truncated))
+}
+
+fn rows_into_result(collected: &[SqliteRow], truncated: bool) -> QueryResult {
+    let Some(first) = collected.first() else {
+        return QueryResult {
             columns: Vec::new(),
             rows: Vec::new(),
             truncated,
-        });
-    }
-    let columns: Vec<ColumnInfo> = collected[0]
+        };
+    };
+    let columns: Vec<ColumnInfo> = first
         .columns()
         .iter()
         .map(|c| ColumnInfo {
@@ -469,15 +492,15 @@ async fn stream_into_result(pool: &Pool<Sqlite>, sql: &str, limit: usize) -> Res
             is_generated: false,
         })
         .collect();
-    let data: Vec<Vec<Value>> = collected
+    let rows: Vec<Vec<Value>> = collected
         .iter()
         .map(|r| (0..columns.len()).map(|i| extract_value(r, i)).collect())
         .collect();
-    Ok(QueryResult {
+    QueryResult {
         columns,
-        rows: data,
+        rows,
         truncated,
-    })
+    }
 }
 
 fn extract_value(row: &SqliteRow, idx: usize) -> Value {
@@ -569,6 +592,78 @@ fn normalize_default_value(raw: String) -> String {
         return inner.replace("''", "'");
     }
     raw
+}
+
+async fn params_into_result<'e, E>(
+    executor: E,
+    sql: &str,
+    params: &[Value],
+    limit: usize,
+) -> Result<QueryResult, DriverError>
+where
+    E: sqlx::Executor<'e, Database = Sqlite>,
+{
+    if params.is_empty() {
+        return stream_into_result(executor, sql, limit).await;
+    }
+    let query = bind_sqlite_params(sqlx::query(sql), params);
+    let mut stream = query.fetch(executor);
+    let mut collected: Vec<SqliteRow> = Vec::new();
+    let mut truncated = false;
+    while let Some(row_result) = stream.next().await {
+        let row = row_result.map_err(map_sqlx_error)?;
+        if collected.len() >= limit {
+            truncated = true;
+            break;
+        }
+        collected.push(row);
+    }
+    Ok(rows_into_result(&collected, truncated))
+}
+
+async fn execute_on<'e, E>(executor: E, sql: &str, params: &[Value]) -> Result<ExecResult, DriverError>
+where
+    E: sqlx::Executor<'e, Database = Sqlite>,
+{
+    let query = bind_sqlite_params(sqlx::query(sql), params);
+    let result = query.execute(executor).await.map_err(map_sqlx_error)?;
+    Ok(ExecResult {
+        rows_affected: result.rows_affected(),
+    })
+}
+
+async fn acquire_controlled(
+    pool: &Pool<Sqlite>,
+    control: &OperationControl,
+) -> Result<PoolConnection<Sqlite>, DriverError> {
+    check_pre_dispatch(control)?;
+    run_controlled_setup(pool.acquire(), control)
+        .await?
+        .map_err(map_sqlx_error)
+}
+
+async fn request_interrupt(handle: &InterruptHandle) -> Result<(), DriverError> {
+    handle.interrupt();
+    Ok(())
+}
+
+/// SQLite raises `SQLITE_INTERRUPT` for a statement it aborted. sqlx
+/// reports the extended result code, so both the plain code and an
+/// extended code in the same family have to be accepted.
+fn confirms_cancellation(error: &DriverError) -> bool {
+    let DriverError::Query { message, sqlstate } = error else {
+        return false;
+    };
+    if sqlstate.as_deref() == Some("9") {
+        return true;
+    }
+    message.to_lowercase().contains("interrupted")
+}
+
+async fn release_connection<T>(connection: PoolConnection<Sqlite>, result: &Result<T, DriverError>) {
+    if matches!(result, Err(DriverError::OperationOutcomeUnknown { .. })) {
+        drop(connection.detach());
+    }
 }
 
 fn map_sqlx_error(err: sqlx::Error) -> DriverError {

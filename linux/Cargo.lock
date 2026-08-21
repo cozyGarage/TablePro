@@ -6493,12 +6493,14 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "libsqlite3-sys",
  "rust_decimal",
  "serde_json",
  "sqlx",
  "tablepro-core",
  "tempfile",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 

@@ -25,6 +25,7 @@ CRATES=(
   tablepro-ssh
   tablepro-mcp
   tablepro-agentd
+  tablepro-driver-sqlite
 )
 
 PKG_ARGS=()
