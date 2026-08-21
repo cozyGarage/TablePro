@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::http::{HeaderMap, Uri, header::ORIGIN};
 use serde_json::{Value as JsonValue, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 use crate::bridge::McpBridge;
 use crate::tools::{self, TOOL_NAMES};
@@ -22,6 +22,27 @@ impl Default for McpServerConfig {
     }
 }
 
+const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+const DISCARD_CHUNK_BYTES: u64 = 8 * 1024;
+
+async fn discard_rest_of_line<R>(reader: &mut R) -> Result<(), String>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    let mut chunk = Vec::new();
+    loop {
+        chunk.clear();
+        let read = reader
+            .take(DISCARD_CHUNK_BYTES)
+            .read_until(b'\n', &mut chunk)
+            .await
+            .map_err(|e| e.to_string())?;
+        if read == 0 || chunk.last() == Some(&b'\n') {
+            return Ok(());
+        }
+    }
+}
+
 /// Minimal MCP-compatible JSON-RPC loop over stdio. Speaks enough of the
 /// protocol for Cursor / Claude Code: `initialize`, `tools/list`,
 /// `tools/call`. Auth via `Authorization` in `_meta` or `params.token`.
@@ -33,9 +54,26 @@ pub async fn serve_stdio(bridge: Arc<McpBridge>) -> Result<(), String> {
 
     loop {
         line.clear();
-        let n = reader.read_line(&mut line).await.map_err(|e| e.to_string())?;
+        let n = (&mut reader)
+            .take(MAX_REQUEST_BYTES as u64 + 1)
+            .read_line(&mut line)
+            .await
+            .map_err(|e| e.to_string())?;
         if n == 0 {
             break;
+        }
+        if n > MAX_REQUEST_BYTES && !line.ends_with('\n') {
+            discard_rest_of_line(&mut reader).await?;
+            write_response(
+                &mut stdout,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": null,
+                    "error": {"code": -32600, "message": format!("request exceeds {MAX_REQUEST_BYTES} bytes")}
+                }),
+            )
+            .await?;
+            continue;
         }
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -268,6 +306,27 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(ORIGIN, HeaderValue::from_str(origin).unwrap());
         headers
+    }
+
+    #[tokio::test]
+    async fn discarding_an_oversized_line_resyncs_on_the_next_request() {
+        let oversized = "x".repeat(DISCARD_CHUNK_BYTES as usize * 3);
+        let payload = format!("{oversized}\n{{\"id\":1}}\n");
+        let mut reader = BufReader::new(std::io::Cursor::new(payload.into_bytes()));
+
+        discard_rest_of_line(&mut reader).await.unwrap();
+
+        let mut next = String::new();
+        reader.read_line(&mut next).await.unwrap();
+        assert_eq!(next.trim(), "{\"id\":1}");
+    }
+
+    #[tokio::test]
+    async fn discarding_stops_at_end_of_input() {
+        let mut reader = BufReader::new(std::io::Cursor::new(b"no newline here".to_vec()));
+        discard_rest_of_line(&mut reader).await.unwrap();
+        let mut next = String::new();
+        assert_eq!(reader.read_line(&mut next).await.unwrap(), 0);
     }
 
     #[test]
