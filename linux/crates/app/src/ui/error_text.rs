@@ -1,8 +1,6 @@
 use tablepro_core::DriverError;
-#[cfg(test)]
 use tablepro_core::sql_dialect::BuildSqlError;
 
-#[cfg(test)]
 pub fn build_sql_message(error: &BuildSqlError) -> String {
     match error {
         BuildSqlError::NoPrimaryKey => crate::tr!("This table has no primary key. Use the modal Edit dialog instead."),

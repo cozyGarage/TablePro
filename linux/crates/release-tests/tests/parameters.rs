@@ -95,3 +95,60 @@ async fn a_dollar_quoted_function_body_executes_as_one_statement() {
         .await
         .expect("drop the probe function");
 }
+
+/// PostgreSQL treats a backslash as an ordinary character inside a
+/// standard string literal, so escaping one would corrupt the value.
+/// This is the other half of the MySQL case: the same payload has to
+/// round-trip unchanged through a rendered INSERT on both engines.
+#[tokio::test]
+#[ignore = "requires the postgres release fixture"]
+async fn a_copied_insert_round_trips_a_value_holding_a_backslash_and_a_quote() {
+    let fixture = Fixture::from_env();
+    let connection = fixture.connect_verified().await;
+    connection
+        .execute("CREATE TABLE copy_probe (id int PRIMARY KEY, note text)")
+        .await
+        .expect("create the probe table");
+
+    let payload = "x\\' OR 1=1 -- ";
+    connection
+        .execute_params(
+            "INSERT INTO copy_probe (id, note) VALUES ($1, $2)",
+            &[Value::Int(1), Value::Text(payload.into())],
+        )
+        .await
+        .expect("store the payload as data");
+
+    let columns = connection.fetch_columns(None, "copy_probe").await.expect("columns");
+    let loaded = connection
+        .query("SELECT id, note FROM copy_probe WHERE id = 1")
+        .await
+        .expect("read the row back");
+    let row: Vec<Value> = loaded.rows[0]
+        .iter()
+        .cloned()
+        .map(|value| match value {
+            Value::Int(id) => Value::Int(id + 1),
+            other => other,
+        })
+        .collect();
+
+    let sql = tablepro_core::sql_literal::build_insert_literal("postgres", None, "copy_probe", &columns, &row)
+        .expect("render the insert");
+    connection.execute(&sql).await.expect("the copied insert must execute");
+
+    let after = connection
+        .query("SELECT note FROM copy_probe WHERE id = 2")
+        .await
+        .expect("read the copied row");
+    assert_eq!(
+        after.rows,
+        vec![vec![Value::Text(payload.into())]],
+        "postgres must keep the backslash exactly as stored"
+    );
+
+    connection
+        .execute("DROP TABLE copy_probe")
+        .await
+        .expect("drop the probe table");
+}

@@ -48,6 +48,7 @@
 
 ### Changed
 
+- Copy row as INSERT leaves out generated columns, which the database always rejects, and escapes a value the way the connected engine reads it, so a row holding a backslash copies as data rather than as SQL
 - Stop and the query timeout now abort the running statement on MySQL, ClickHouse and SQLite, so the statement stops in the database and the session can keep writing afterwards
 - A cancelled or timed-out SQL Server statement now reports that its outcome is unknown and closes the connection, instead of leaving every later query on that connection waiting forever
 - SQLite results show the value of a computed column instead of a blank cell, so counts, aggregates and literal expressions read correctly, and a browse tab shows its total row count

@@ -348,3 +348,64 @@ async fn a_timed_out_write_is_killed_on_the_server_and_reports_a_timeout() {
         "the aborted insert must not commit"
     );
 }
+
+/// A value ending in a backslash used to break out of the literal that
+/// "Copy row as INSERT" produced, because MySQL treats a backslash as an
+/// escape inside a string. MySQL 8.1 evaluated the unescaped form as the
+/// expression `'x\'' OR 1=1` and returned 1 instead of storing the text.
+#[tokio::test]
+#[ignore = "requires docker"]
+async fn a_copied_insert_survives_a_value_that_could_escape_its_literal() {
+    let (_c, opts) = start_mysql().await;
+    let connection = connect(opts).await;
+    connection
+        .execute("CREATE TABLE copy_probe (id int PRIMARY KEY, note varchar(200))")
+        .await
+        .expect("create the probe table");
+
+    let payload = "x\\' OR 1=1 -- ";
+    connection
+        .execute_params(
+            "INSERT INTO copy_probe (id, note) VALUES (?, ?)",
+            &[Value::Int(1), Value::Text(payload.into())],
+        )
+        .await
+        .expect("store the payload as data");
+
+    let columns = connection.fetch_columns(None, "copy_probe").await.expect("columns");
+    let loaded = connection
+        .query("SELECT id, note FROM copy_probe WHERE id = 1")
+        .await
+        .expect("read the row back");
+    let row: Vec<Value> = loaded.rows[0]
+        .iter()
+        .cloned()
+        .map(|value| match value {
+            Value::Int(id) => Value::Int(id + 1),
+            other => other,
+        })
+        .collect();
+
+    let sql = tablepro_core::sql_literal::build_insert_literal("mysql", None, "copy_probe", &columns, &row)
+        .expect("render the insert");
+    connection.execute(&sql).await.expect("the copied insert must execute");
+
+    let after = connection
+        .query("SELECT note FROM copy_probe WHERE id = 2")
+        .await
+        .expect("read the copied row");
+    assert_eq!(
+        after.rows,
+        vec![vec![Value::Text(payload.into())]],
+        "the copied row must hold the same text, not the result of evaluating it"
+    );
+    let count = connection
+        .query("SELECT count(*) FROM copy_probe")
+        .await
+        .expect("count the rows");
+    assert_eq!(
+        count.rows,
+        vec![vec![Value::Int(2)]],
+        "the insert must add exactly one row"
+    );
+}
