@@ -134,12 +134,12 @@ impl DatabaseService {
     }
 
     pub fn set_approval_sink(&self, sink: Arc<dyn tablepro_policy::ApprovalSink>) {
-        *self.approval.lock().expect("database_service lock") = sink;
+        *self.approval.lock().unwrap_or_else(|e| e.into_inner()) = sink;
     }
 
     pub fn reload_policy(&self) {
         let next = Arc::new(load_policy());
-        *self.policy.lock().expect("database_service lock") = next;
+        *self.policy.lock().unwrap_or_else(|e| e.into_inner()) = next;
         tracing::info!("policy reloaded");
     }
 
@@ -175,17 +175,17 @@ impl DatabaseService {
             cancel,
             _monitor: monitor,
         };
-        let mut connections = self.connections.lock().expect("database_service lock");
+        let mut connections = self.connections.lock().unwrap_or_else(|e| e.into_inner());
         connections.insert(id, entry);
     }
 
     pub fn metadata(&self, id: Uuid) -> Option<ConnectionMetadata> {
-        let entries = self.connections.lock().expect("database_service lock");
+        let entries = self.connections.lock().unwrap_or_else(|e| e.into_inner());
         entries.get(&id).map(|e| e.metadata.clone())
     }
 
     pub fn all_connections(&self) -> Vec<ConnectionMetadata> {
-        let entries = self.connections.lock().expect("database_service lock");
+        let entries = self.connections.lock().unwrap_or_else(|e| e.into_inner());
         let mut out: Vec<_> = entries.values().map(|e| e.metadata.clone()).collect();
         out.sort_by_key(|connection| connection.name.to_lowercase());
         out
@@ -194,11 +194,11 @@ impl DatabaseService {
     /// Policy-gated handle. Raw connections are not exposed; the returned
     /// `Arc<dyn Connection>` is always a [`PolicyGuard`].
     pub fn handle(&self, id: Uuid, principal: Principal) -> Option<Arc<dyn Connection>> {
-        let entries = self.connections.lock().expect("database_service lock");
+        let entries = self.connections.lock().unwrap_or_else(|e| e.into_inner());
         let entry = entries.get(&id)?;
-        let inner = entry.inner.lock().expect("entry inner lock");
-        let policy = self.policy.lock().expect("database_service lock").clone();
-        let approval = self.approval.lock().expect("database_service lock").clone();
+        let inner = entry.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let policy = self.policy.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let approval = self.approval.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let ctx = GuardContext {
             connection_id: entry.metadata.id,
             connection_name: entry.metadata.name.clone(),
@@ -220,14 +220,14 @@ impl DatabaseService {
     }
 
     pub fn health(&self, id: Uuid) -> Option<ConnectionHealth> {
-        let entries = self.connections.lock().expect("database_service lock");
+        let entries = self.connections.lock().unwrap_or_else(|e| e.into_inner());
         let entry = entries.get(&id)?;
-        let inner = entry.inner.lock().expect("entry inner lock");
+        let inner = entry.inner.lock().unwrap_or_else(|e| e.into_inner());
         Some(inner.health.clone())
     }
 
     pub fn close(&self, id: Uuid) {
-        let mut entries = self.connections.lock().expect("database_service lock");
+        let mut entries = self.connections.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = entries.remove(&id) {
             entry.cancel.cancel();
         }
