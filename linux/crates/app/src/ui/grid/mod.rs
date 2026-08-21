@@ -22,6 +22,10 @@ pub enum GridMsg {
         row_position: u32,
         col_index: usize,
         new_value: String,
+        /// Primary-key values read when the editor opened. The receiver
+        /// rejects the edit if the row now at `row_position` is a
+        /// different one.
+        row_key: Vec<tablepro_core::Value>,
     },
     CopyToClipboard(String),
     CopyRowAsInsert {

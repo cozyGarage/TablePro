@@ -486,10 +486,13 @@ def write_fixture(base, audit_available=True, environment="prod"):
 
     database = base / "safety.sqlite"
     database_b = base / "safety-b.sqlite"
+    # `note` is the only editable column: `id` is the primary key, which
+    # inline editing refuses. Scenarios that only count or list ids are
+    # unaffected because it is nullable.
     with sqlite3.connect(database) as connection:
-        connection.execute("CREATE TABLE safety_items (id INTEGER PRIMARY KEY)")
+        connection.execute("CREATE TABLE safety_items (id INTEGER PRIMARY KEY, note TEXT)")
     with sqlite3.connect(database_b) as connection:
-        connection.execute("CREATE TABLE safety_items (id INTEGER PRIMARY KEY)")
+        connection.execute("CREATE TABLE safety_items (id INTEGER PRIMARY KEY, note TEXT)")
 
     tablepro_config = config / "tablepro"
     tablepro_config.mkdir(parents=True)
@@ -824,10 +827,19 @@ running_query_is_cancelled_before_switch.environment = "local"
 
 
 def current_page_csv_export_is_pk_ordered(database, base):
+    # The notes carry every character CSV has to quote: a separator, a
+    # quote, and a line break. A page export that got the escaping wrong
+    # would come back as a different number of rows or columns.
+    awkward = {
+        1: "a,b",
+        2: 'say "hi"',
+        3: "line1\nline2",
+        4: "trailing backslash \\",
+    }
     with sqlite3.connect(database) as connection:
         connection.executemany(
-            "INSERT INTO safety_items(id) VALUES (?)",
-            ((identifier,) for identifier in range(150, 0, -1)),
+            "INSERT INTO safety_items(id, note) VALUES (?, ?)",
+            ((identifier, awkward.get(identifier)) for identifier in range(150, 0, -1)),
         )
 
     invoke_named_action_within("safety_items", "Open safety_items")
@@ -852,12 +864,18 @@ def current_page_csv_export_is_pk_ordered(database, base):
         raise AssertionError(f"current-page export was not written:\n{accessible_snapshot()}")
     with export.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.reader(handle))
-    assert rows[0] == ["id"], f"unexpected CSV header: {rows[0]!r}"
+    assert rows[0] == ["id", "note"], f"unexpected CSV header: {rows[0]!r}"
     exported_ids = [int(row[0]) for row in rows[1:]]
     assert exported_ids == list(range(1, 101)), (
         f"expected the first PK-ordered page only, found {len(exported_ids)} rows: "
         f"{exported_ids[:5]}…{exported_ids[-5:]}"
     )
+    exported_notes = {int(row[0]): row[1] for row in rows[1:]}
+    for identifier, note in awkward.items():
+        assert exported_notes[identifier] == note, (
+            f"row {identifier} lost its text through the CSV export: "
+            f"{exported_notes[identifier]!r} != {note!r}"
+        )
 
 
 current_page_csv_export_is_pk_ordered.environment = "local"

@@ -6,7 +6,7 @@ use sourceview5::prelude::*;
 use super::GridMsg;
 use super::context_menu::{GridMenus, attach_cell_gesture};
 use super::display::{
-    COLUMN_SLOT, EditSnapshot, POPOVER_SLOT, POSITION_SLOT, PREEDIT_SLOT, SNAPSHOT_SLOT, SUPPRESS_SLOT,
+    COLUMN_SLOT, EditSnapshot, POPOVER_SLOT, POSITION_SLOT, PREEDIT_SLOT, ROW_KEY_SLOT, SNAPSHOT_SLOT, SUPPRESS_SLOT,
     editable_null_sentinel,
 };
 use super::types::CellEditorKind;
@@ -68,12 +68,14 @@ pub(super) fn setup_bool_cell(
             return;
         }
         let position = POSITION_SLOT.get(cb).unwrap_or(0);
+        let row_key = ROW_KEY_SLOT.cloned(cb).unwrap_or_default();
         let new_value = if cb.is_active() { "true" } else { "false" };
         sender
             .send(GridMsg::CellEdited {
                 row_position: position,
                 col_index: idx,
                 new_value: new_value.to_string(),
+                row_key,
             })
             .ok();
     });
@@ -218,12 +220,14 @@ fn show_calendar_popover(label: &CellEditor, col_index: usize, sender: &relm4::S
         let dt = c.date();
         let formatted = format!("{:04}-{:02}-{:02}", dt.year(), dt.month(), dt.day_of_month());
         let position = POSITION_SLOT.get(&label_for_cal).unwrap_or(0);
+        let row_key = ROW_KEY_SLOT.cloned(&label_for_cal).unwrap_or_default();
         label_for_cal.set_text(&formatted);
         sender_for_cal
             .send(GridMsg::CellEdited {
                 row_position: position,
                 col_index,
                 new_value: formatted,
+                row_key,
             })
             .ok();
         popover_for_cal.popdown();
@@ -277,12 +281,14 @@ fn show_exact_text_popover(label: &CellEditor, col_index: usize, sender: &relm4:
     entry.connect_activate(move |e| {
         let formatted = e.text().to_string();
         let position = POSITION_SLOT.get(&label_for_commit).unwrap_or(0);
+        let row_key = ROW_KEY_SLOT.cloned(&label_for_commit).unwrap_or_default();
         label_for_commit.set_text(&formatted);
         sender_for_commit
             .send(GridMsg::CellEdited {
                 row_position: position,
                 col_index,
                 new_value: formatted,
+                row_key,
             })
             .ok();
         popover_for_commit.popdown();
@@ -325,12 +331,14 @@ fn show_spin_button_popover(
             format!("{}", s.value() as i64)
         };
         let position = POSITION_SLOT.get(&label_for_commit).unwrap_or(0);
+        let row_key = ROW_KEY_SLOT.cloned(&label_for_commit).unwrap_or_default();
         label_for_commit.set_text(&formatted);
         sender_for_commit
             .send(GridMsg::CellEdited {
                 row_position: position,
                 col_index,
                 new_value: formatted,
+                row_key,
             })
             .ok();
         popover_for_commit.popdown();
@@ -402,12 +410,14 @@ fn show_json_popover(label: &CellEditor, col_index: usize, sender: &relm4::Sende
         let end = buffer_for_commit.end_iter();
         let text = buffer_for_commit.text(&start, &end, true).to_string();
         let position = POSITION_SLOT.get(&label_for_commit).unwrap_or(0);
+        let row_key = ROW_KEY_SLOT.cloned(&label_for_commit).unwrap_or_default();
         label_for_commit.set_text(&text);
         sender_for_commit
             .send(GridMsg::CellEdited {
                 row_position: position,
                 col_index,
                 new_value: text,
+                row_key,
             })
             .ok();
         popover_for_commit.popdown();
@@ -444,7 +454,15 @@ fn install_edit_commit_handler(label: &CellEditor, col_index: usize, sender: rel
         if label.is_editing() {
             let position = POSITION_SLOT.get(label).unwrap_or(0);
             let original = label.text().to_string();
-            SNAPSHOT_SLOT.set(label, EditSnapshot { position, original });
+            let row_key = ROW_KEY_SLOT.cloned(label).unwrap_or_default();
+            SNAPSHOT_SLOT.set(
+                label,
+                EditSnapshot {
+                    position,
+                    original,
+                    row_key,
+                },
+            );
             return;
         }
         if PREEDIT_SLOT.get(label).unwrap_or(false) {
@@ -467,6 +485,7 @@ fn commit_cell_edit(label: &CellEditor, col_index: usize, sender: &relm4::Sender
             row_position: snap.position,
             col_index,
             new_value,
+            row_key: snap.row_key,
         })
         .ok();
 }

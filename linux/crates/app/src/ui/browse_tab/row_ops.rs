@@ -213,8 +213,21 @@ impl BrowseTab {
         row_position: u32,
         col_index: usize,
         new_value: String,
+        row_key: Vec<Value>,
         sender: ComponentSender<Self>,
     ) {
+        // A refresh, a sort or a page change replaces the store's rows,
+        // so the position the editor opened on can now hold a different
+        // row. Committing then writes the new value to a row the user
+        // never opened. Compare the primary key captured when editing
+        // started with the one at that position now.
+        if !self.row_position_still_holds(row_position, &row_key) {
+            let _ = sender.output(BrowseTabOutput::ShowToast(crate::tr!(
+                "That row moved while you were editing. The change was not applied."
+            )));
+            self.refresh_row(row_position);
+            return;
+        }
         // Cell edits route through the per-tab change tracker
         // so the user can review / Save / Discard a batch.
         //
@@ -275,6 +288,23 @@ impl BrowseTab {
         crate::services::change_tracker::with_tab(self.tab_id, |t| {
             t.track_cell_edit(key, col_index, original, new);
         });
+    }
+
+    /// True when the row at `row_position` still carries `expected_key`.
+    /// An empty expectation means the grid could not identify the row -
+    /// a table with no primary key, where inline editing is already
+    /// blocked - so there is nothing to compare and the edit proceeds.
+    pub(super) fn row_position_still_holds(&self, row_position: u32, expected_key: &[Value]) -> bool {
+        if expected_key.is_empty() {
+            return true;
+        }
+        let Some(row_obj) = self.row_object_at(row_position) else {
+            return false;
+        };
+        if row_obj.draft_id().is_some() {
+            return true;
+        }
+        row_key_matches(&self.current_columns, &row_obj.cells_clone(), expected_key)
     }
 
     pub(super) fn handle_grid_set_cell_null(&mut self, row_position: u32, col_index: usize) {
@@ -576,5 +606,123 @@ impl BrowseTab {
             }
             UndoOp::Delete { .. } => {}
         }
+    }
+}
+
+/// Compare the primary-key values a row carries now with the ones read
+/// when its editor opened.
+fn row_key_matches(columns: &[ColumnInfo], cells: &[Value], expected: &[Value]) -> bool {
+    if expected.is_empty() {
+        return true;
+    }
+    let mut current = columns
+        .iter()
+        .enumerate()
+        .filter(|(_, column)| column.primary_key)
+        .map(|(index, _)| cells.get(index));
+    let mut wanted = expected.iter();
+    loop {
+        match (current.next(), wanted.next()) {
+            (None, None) => return true,
+            (Some(Some(value)), Some(want)) if value == want => continue,
+            _ => return false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod row_identity_tests {
+    use super::row_key_matches;
+    use tablepro_core::{ColumnInfo, Value};
+
+    fn column(name: &str, primary_key: bool) -> ColumnInfo {
+        ColumnInfo {
+            name: name.into(),
+            data_type: "integer".into(),
+            nullable: false,
+            primary_key,
+            is_auto_increment: false,
+            default_value: None,
+            is_generated: false,
+        }
+    }
+
+    #[test]
+    fn the_same_row_still_matches_its_key() {
+        let columns = [column("id", true), column("note", false)];
+        let cells = [Value::Int(7), Value::Text("a".into())];
+        assert!(row_key_matches(&columns, &cells, &[Value::Int(7)]));
+    }
+
+    #[test]
+    fn a_different_row_at_the_same_position_is_refused() {
+        let columns = [column("id", true), column("note", false)];
+        let cells = [Value::Int(8), Value::Text("a".into())];
+        assert!(!row_key_matches(&columns, &cells, &[Value::Int(7)]));
+    }
+
+    #[test]
+    fn editing_another_column_of_the_same_row_still_matches() {
+        let columns = [column("id", true), column("note", false)];
+        let cells = [Value::Int(7), Value::Text("edited".into())];
+        assert!(row_key_matches(&columns, &cells, &[Value::Int(7)]));
+    }
+
+    #[test]
+    fn every_component_of_a_composite_key_has_to_match() {
+        let columns = [column("a", true), column("b", true), column("c", false)];
+        assert!(row_key_matches(
+            &columns,
+            &[Value::Int(1), Value::Int(2), Value::Int(9)],
+            &[Value::Int(1), Value::Int(2)]
+        ));
+        assert!(!row_key_matches(
+            &columns,
+            &[Value::Int(1), Value::Int(3), Value::Int(9)],
+            &[Value::Int(1), Value::Int(2)]
+        ));
+    }
+
+    #[test]
+    fn a_key_that_lost_or_gained_a_component_is_refused() {
+        let columns = [column("a", true), column("b", true)];
+        assert!(!row_key_matches(
+            &columns,
+            &[Value::Int(1), Value::Int(2)],
+            &[Value::Int(1)]
+        ));
+        let one_key = [column("a", true), column("b", false)];
+        assert!(!row_key_matches(
+            &one_key,
+            &[Value::Int(1), Value::Int(2)],
+            &[Value::Int(1), Value::Int(2)]
+        ));
+    }
+
+    #[test]
+    fn a_null_key_component_compares_by_value_like_any_other() {
+        let columns = [column("a", true), column("b", false)];
+        assert!(row_key_matches(&columns, &[Value::Null, Value::Int(1)], &[Value::Null]));
+        assert!(!row_key_matches(
+            &columns,
+            &[Value::Int(0), Value::Int(1)],
+            &[Value::Null]
+        ));
+    }
+
+    #[test]
+    fn a_table_without_a_primary_key_has_nothing_to_compare() {
+        let columns = [column("a", false)];
+        assert!(row_key_matches(&columns, &[Value::Int(1)], &[]));
+    }
+
+    #[test]
+    fn a_row_shorter_than_its_columns_is_refused_rather_than_assumed_equal() {
+        let columns = [column("a", true), column("b", true)];
+        assert!(!row_key_matches(
+            &columns,
+            &[Value::Int(1)],
+            &[Value::Int(1), Value::Int(2)]
+        ));
     }
 }

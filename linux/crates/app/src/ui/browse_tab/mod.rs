@@ -195,6 +195,7 @@ pub enum BrowseTabInput {
         row_position: u32,
         col_index: usize,
         new_value: String,
+        row_key: Vec<Value>,
     },
     GridSetCellNull {
         row_position: u32,
@@ -692,10 +693,12 @@ impl SimpleComponent for BrowseTab {
                 row_position,
                 col_index,
                 new_value,
+                row_key,
             } => BrowseTabInput::GridCellEdited {
                 row_position,
                 col_index,
                 new_value,
+                row_key,
             },
             GridMsg::CopyToClipboard(text) => BrowseTabInput::GridCopyToClipboard(text),
             GridMsg::CopyRowAsInsert { row_position } => BrowseTabInput::GridCopyRowAsInsert { row_position },
@@ -998,7 +1001,8 @@ impl SimpleComponent for BrowseTab {
                 row_position,
                 col_index,
                 new_value,
-            } => self.handle_grid_cell_edited(row_position, col_index, new_value, sender),
+                row_key,
+            } => self.handle_grid_cell_edited(row_position, col_index, new_value, row_key, sender),
             BrowseTabInput::GridSetCellNull {
                 row_position,
                 col_index,

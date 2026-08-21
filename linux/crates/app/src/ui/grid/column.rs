@@ -4,8 +4,8 @@ use tablepro_core::{ColumnInfo, Value};
 
 use super::context_menu::GridMenus;
 use super::display::{
-    POPOVER_SLOT, POSITION_SLOT, SNAPSHOT_SLOT, SUPPRESS_SLOT, auto_filled_sentinel, editable_null_sentinel,
-    value_to_display_text, value_to_edit_text,
+    POPOVER_SLOT, POSITION_SLOT, ROW_KEY_SLOT, SNAPSHOT_SLOT, SUPPRESS_SLOT, auto_filled_sentinel,
+    editable_null_sentinel, value_to_display_text, value_to_edit_text,
 };
 use super::editing::{setup_bool_cell, setup_editable_cell, setup_readonly_cell};
 use super::types::{classify_editor_kind, is_bool_type, is_bytes_type};
@@ -96,14 +96,14 @@ pub(super) fn build_column(
             return;
         };
         let raw_value = row.cell_value(idx);
+        let pk_values: Vec<Value> = tab_ctx_for_bind
+            .pk_col_indices
+            .iter()
+            .map(|&i| row.cell_value(i))
+            .collect();
         let value = if let Some(tab_id) = tab_ctx_for_bind.tab_id
             && row.draft_id().is_none()
         {
-            let pk_values: Vec<Value> = tab_ctx_for_bind
-                .pk_col_indices
-                .iter()
-                .map(|&i| row.cell_value(i))
-                .collect();
             crate::services::change_tracker::with_tab_ref(tab_id, |t| {
                 crate::services::change_tracker::RowKey::from_pk_values(&pk_values)
                     .map(|key| t.current_cell_value(&key, idx, &raw_value).clone())
@@ -181,6 +181,7 @@ pub(super) fn build_column(
             }
             label.set_strikethrough(is_pending_delete);
             POSITION_SLOT.set(&label, item.position());
+            ROW_KEY_SLOT.set(&label, pk_values.clone());
         } else if let Ok(checkbox) = child.clone().downcast::<gtk4::CheckButton>() {
             SUPPRESS_SLOT.set(&checkbox, true);
             match value {
@@ -238,6 +239,7 @@ pub(super) fn build_column(
                 popover.popdown();
             }
             POSITION_SLOT.take(&label);
+            ROW_KEY_SLOT.take(&label);
             SNAPSHOT_SLOT.take(&label);
         } else if let Ok(checkbox) = child.clone().downcast::<gtk4::CheckButton>() {
             POSITION_SLOT.take(&checkbox);

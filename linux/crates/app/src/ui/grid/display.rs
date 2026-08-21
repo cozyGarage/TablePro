@@ -65,6 +65,11 @@ pub(super) fn truncate_for_display(s: &str) -> String {
 pub(super) struct EditSnapshot {
     pub position: u32,
     pub original: String,
+    /// Primary-key values of the row the editor opened on. A refresh or
+    /// a sort replaces the store's contents, so the position alone stops
+    /// identifying that row and a commit would land on whichever row now
+    /// sits there.
+    pub row_key: Vec<Value>,
 }
 
 pub(super) struct WidgetSlot<T: 'static> {
@@ -89,6 +94,12 @@ impl<T: 'static> WidgetSlot<T> {
     }
 }
 
+impl<T: 'static + Clone> WidgetSlot<T> {
+    pub(super) fn cloned(&self, widget: &impl IsA<gtk4::Widget>) -> Option<T> {
+        unsafe { widget.data::<T>(self.key).map(|p| p.as_ref().clone()) }
+    }
+}
+
 impl<T: 'static + Copy> WidgetSlot<T> {
     pub(super) fn get(&self, widget: &impl IsA<gtk4::Widget>) -> Option<T> {
         unsafe { widget.data::<T>(self.key).map(|p| *p.as_ref()) }
@@ -97,6 +108,7 @@ impl<T: 'static + Copy> WidgetSlot<T> {
 
 pub(super) const POSITION_SLOT: WidgetSlot<u32> = WidgetSlot::new("tp-position");
 pub(super) const SNAPSHOT_SLOT: WidgetSlot<EditSnapshot> = WidgetSlot::new("tp-snapshot");
+pub(super) const ROW_KEY_SLOT: WidgetSlot<Vec<Value>> = WidgetSlot::new("tp-row-key");
 pub(super) const COLUMN_SLOT: WidgetSlot<usize> = WidgetSlot::new("tp-column");
 pub(super) const SUPPRESS_SLOT: WidgetSlot<bool> = WidgetSlot::new("tp-suppress-toggle");
 pub(super) const POPOVER_SLOT: WidgetSlot<gtk4::Popover> = WidgetSlot::new("tp-popover");
