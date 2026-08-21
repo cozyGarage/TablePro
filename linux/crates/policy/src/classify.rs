@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{
-    Cte, Delete, Expr, FromTable, FunctionArg, FunctionArgExpr, FunctionArguments, Insert, ObjectName, Query,
-    SelectItem, SetExpr, Statement, TableFactor, TableObject, UtilityOption, Value,
+    CopyTarget, Cte, Delete, Expr, FromTable, FunctionArg, FunctionArgExpr, FunctionArguments, Insert, ObjectName,
+    Query, SelectItem, SetExpr, Statement, TableFactor, TableObject, UtilityOption, Value,
 };
 use sqlparser::dialect::{Dialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
@@ -354,6 +354,25 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
             is_multi_statement: false,
             parse_error: None,
         },
+        Statement::Copy { target, .. } => {
+            let reaches_the_host = matches!(target, CopyTarget::File { .. } | CopyTarget::Program { .. });
+            StatementFacts {
+                class: if reaches_the_host {
+                    StatementClass::Administrative
+                } else {
+                    StatementClass::Other
+                },
+                writes: true,
+                tables: Vec::new(),
+                has_where: true,
+                contains_ddl: false,
+                contains_mutating_dml: false,
+                contains_unscoped_dml: false,
+                contains_unknown_write: !reaches_the_host,
+                is_multi_statement: false,
+                parse_error: None,
+            }
+        }
         _ => StatementFacts {
             class: StatementClass::Other,
             writes: true,
@@ -661,6 +680,19 @@ fn is_administrative_function_name(name: &str) -> bool {
             | "lo_truncate64"
             | "set_config"
             | "setval"
+            | "pg_read_file"
+            | "pg_read_binary_file"
+            | "pg_stat_file"
+            | "pg_ls_dir"
+            | "pg_ls_logdir"
+            | "pg_ls_waldir"
+            | "pg_ls_archive_statusdir"
+            | "pg_ls_tmpdir"
+            | "dblink"
+            | "dblink_exec"
+            | "dblink_connect"
+            | "dblink_send_query"
+            | "query_to_xml"
     )
 }
 

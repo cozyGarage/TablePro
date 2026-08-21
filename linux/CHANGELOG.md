@@ -5,7 +5,7 @@
 ### Added
 
 - Saved connections can name a certificate authority, so a server whose certificate is issued privately can be verified with Verify Ca or Verify Full
-- Policy crate with AST SQL classification, PolicyGuard, blast-radius rewrite, column masking, and policy.toml
+- Policy crate with AST SQL classification, PolicyGuard, blast-radius rewrite, column masking, and policy.toml. Statements that read host files, run a program, or send SQL to another server are treated as administrative, so an agent is refused and a read-only connection denies them
 - Environment field on saved connections (Local / Dev / Staging / Prod)
 - Hash-chained audit journal at `$XDG_DATA_HOME/tablepro/audit.jsonl`
 - Interactive `Connection::begin` transactions (PostgreSQL, MySQL, SQLite)
