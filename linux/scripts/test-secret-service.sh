@@ -24,8 +24,7 @@ if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
   exit
 fi
 
-eval "$(gnome-keyring-daemon --daemonize --components=secrets)"
-printf 'tablepro-test' | gnome-keyring-daemon --unlock
+eval "$(printf 'tablepro-test' | gnome-keyring-daemon --daemonize --unlock --components=secrets)"
 printf 'probe' | secret-tool store --label='TablePro CI probe' application tablepro-ci
 secret-tool clear application tablepro-ci
 cargo test -p tablepro-storage secrets::tests::round_trip_via_secret_service -- --ignored --exact
