@@ -119,6 +119,7 @@ impl App {
         let table_for_msg = table.clone();
         let sender_for_cmd = sender.clone();
         let connection_id = self.connection_id;
+        let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
@@ -129,7 +130,8 @@ impl App {
                         });
                         return;
                     };
-                    match conn.execute(&sql).await {
+                    let control = crate::services::operation_control::bounded(timeout_secs);
+                    match conn.execute_controlled(&sql, &control).await {
                         Ok(_) => {
                             sender_for_cmd.input(AppMsg::DropTableSucceeded {
                                 schema: schema_for_msg.clone(),
@@ -293,6 +295,7 @@ impl App {
         self.in_flight_saves.set(self.in_flight_saves.get() + 1);
         let sender_for_cmd = sender.clone();
         let connection_id = self.connection_id;
+        let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
@@ -300,16 +303,17 @@ impl App {
                         sender_for_cmd.input(AppMsg::StructureSaveFailed(tab_id, crate::tr!("No active connection.")));
                         return;
                     };
+                    let control = crate::services::operation_control::bounded(timeout_secs);
                     if ddl_is_transactional {
                         let batch: Vec<(String, Vec<Value>)> =
                             statements.iter().map(|sql| (sql.clone(), Vec::new())).collect();
-                        if let Err(e) = conn.execute_in_transaction(&batch).await {
+                        if let Err(e) = conn.execute_in_transaction_controlled(&batch, &control).await {
                             sender_for_cmd.input(AppMsg::StructureSaveFailed(tab_id, error_text::driver_message(&e)));
                             return;
                         }
                     } else {
                         for sql in &statements {
-                            if let Err(e) = conn.execute(sql).await {
+                            if let Err(e) = conn.execute_controlled(sql, &control).await {
                                 sender_for_cmd
                                     .input(AppMsg::StructureSaveFailed(tab_id, error_text::driver_message(&e)));
                                 return;
@@ -466,6 +470,7 @@ impl App {
         let table_for_cmd = table.clone();
         let schema_for_cmd = schema.clone();
         let connection_id = self.connection_id;
+        let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
@@ -473,7 +478,11 @@ impl App {
                         sender_for_cmd.input(AppMsg::ShowToast(crate::tr!("No active connection.")));
                         return;
                     };
-                    let columns = match conn.fetch_columns(schema_for_cmd.as_deref(), &table_for_cmd).await {
+                    let control = crate::services::operation_control::bounded(timeout_secs);
+                    let columns = match conn
+                        .fetch_columns_controlled(schema_for_cmd.as_deref(), &table_for_cmd, &control)
+                        .await
+                    {
                         Ok(c) => c,
                         Err(e) => {
                             sender_for_cmd.input(AppMsg::ShowToast(
@@ -552,6 +561,7 @@ impl App {
         };
         let sender_for_cmd = sender.clone();
         let connection_id = self.connection_id;
+        let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
@@ -562,7 +572,8 @@ impl App {
                         });
                         return;
                     };
-                    let columns = match conn.fetch_columns(schema.as_deref(), &table).await {
+                    let control = crate::services::operation_control::bounded(timeout_secs);
+                    let columns = match conn.fetch_columns_controlled(schema.as_deref(), &table, &control).await {
                         Ok(c) => c,
                         Err(e) => {
                             sender_for_cmd.input(AppMsg::StructureLoadFailed {
@@ -651,13 +662,15 @@ impl App {
         // Sidebar refresh: re-list tables and rebuild the factory.
         let sender_for_cmd = sender.clone();
         let connection_id = self.connection_id;
+        let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
                     let Some(conn) = connection_id.and_then(|id| database_service::instance().get(id)) else {
                         return;
                     };
-                    if let Ok(tables) = conn.list_tables().await {
+                    let control = crate::services::operation_control::bounded(timeout_secs);
+                    if let Ok(tables) = conn.list_tables_controlled(&control).await {
                         sender_for_cmd.input(AppMsg::TablesReloaded(tables));
                     }
                 })

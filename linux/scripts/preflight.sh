@@ -46,6 +46,9 @@ done
 echo "==> file size guardrail"
 "$ROOT/scripts/check-file-size.sh"
 
+echo "==> bounded database operations in the GUI"
+"$ROOT/scripts/check-bounded-operations.sh"
+
 echo "==> cargo fmt --check (workspace)"
 cargo fmt --all -- --check
 

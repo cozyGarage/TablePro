@@ -256,11 +256,12 @@ impl App {
             &crate::tr!("Opening {name}").replace("{name}", &saved.name),
         );
         let registry = self.registry.clone();
+        let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         let sender_clone = sender.clone();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    match connection_service::open_saved(registry, saved).await {
+                    match connection_service::open_saved(registry, saved, timeout_secs).await {
                         Ok(prepared) => sender_clone.input(AppMsg::ConnectionPrepared(Box::new(prepared))),
                         Err(e) => sender_clone.input(AppMsg::ConnectionPrepareFailed(e)),
                     }

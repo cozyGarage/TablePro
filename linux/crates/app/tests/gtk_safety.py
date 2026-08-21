@@ -831,7 +831,10 @@ def current_page_csv_export_is_pk_ordered(database, base):
         )
 
     invoke_named_action_within("safety_items", "Open safety_items")
-    wait_for_node(name="Rows 1 – 100")
+    # The total comes from COUNT(*). SQLite used to decode that column as
+    # NULL, so the label silently dropped the "of 150" half; asserting the
+    # full label keeps that from regressing.
+    wait_for_node(name="Rows 1 – 100 of 150")
     invoke_accessible_action("win.export-csv")
     wait_for_node(name="Export current page as CSV", role=FILE_CHOOSER_ROLES)
     set_visible_editable_within(

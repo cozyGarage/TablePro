@@ -106,7 +106,18 @@ impl Default for ConnectOptions {
 #[async_trait]
 pub trait Connection: Send + Sync {
     async fn list_tables(&self) -> Result<Vec<TableInfo>, DriverError>;
+    async fn list_tables_controlled(&self, control: &OperationControl) -> Result<Vec<TableInfo>, DriverError> {
+        run_controlled(self.list_tables(), control).await
+    }
     async fn fetch_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<ColumnInfo>, DriverError>;
+    async fn fetch_columns_controlled(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        control: &OperationControl,
+    ) -> Result<Vec<ColumnInfo>, DriverError> {
+        run_controlled(self.fetch_columns(schema, table), control).await
+    }
     async fn fetch_rows(
         &self,
         schema: Option<&str>,
@@ -114,6 +125,16 @@ pub trait Connection: Send + Sync {
         offset: u64,
         limit: u64,
     ) -> Result<QueryResult, DriverError>;
+    async fn fetch_rows_controlled(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        offset: u64,
+        limit: u64,
+        control: &OperationControl,
+    ) -> Result<QueryResult, DriverError> {
+        run_controlled(self.fetch_rows(schema, table, offset, limit), control).await
+    }
     async fn query(&self, sql: &str) -> Result<QueryResult, DriverError>;
     async fn query_controlled(&self, sql: &str, control: &OperationControl) -> Result<QueryResult, DriverError> {
         run_controlled(self.query(sql), control).await
@@ -161,6 +182,18 @@ pub trait Connection: Send + Sync {
     /// changeset Save flow so all pending row inserts / updates /
     /// deletes commit atomically.
     async fn execute_in_transaction(&self, statements: &[(String, Vec<Value>)]) -> Result<Vec<u64>, DriverError>;
+    /// Bounded form of [`Connection::execute_in_transaction`]. The
+    /// default drops the transaction future on an interruption, which
+    /// rolls the transaction back but cannot prove it did, so the
+    /// outcome is reported unknown. A driver that can confirm the
+    /// rollback should override this.
+    async fn execute_in_transaction_controlled(
+        &self,
+        statements: &[(String, Vec<Value>)],
+        control: &OperationControl,
+    ) -> Result<Vec<u64>, DriverError> {
+        run_controlled(self.execute_in_transaction(statements), control).await
+    }
     /// Indexes defined on `table`. Implementations may include the
     /// implicit primary-key index with `primary = true` so the UI can
     /// render it as read-only. Default returns empty so existing
@@ -198,6 +231,169 @@ pub trait Connection: Send + Sync {
     }
     async fn ping(&self) -> Result<(), DriverError>;
     async fn close(self: Box<Self>) -> Result<(), DriverError>;
+}
+
+#[cfg(test)]
+mod controlled_default_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+
+    #[derive(Default)]
+    struct SlowConnection {
+        dispatched: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Connection for SlowConnection {
+        async fn list_tables(&self) -> Result<Vec<TableInfo>, DriverError> {
+            self.stall().await
+        }
+
+        async fn fetch_columns(&self, _schema: Option<&str>, _table: &str) -> Result<Vec<ColumnInfo>, DriverError> {
+            self.stall().await
+        }
+
+        async fn fetch_rows(
+            &self,
+            _schema: Option<&str>,
+            _table: &str,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<QueryResult, DriverError> {
+            self.stall().await
+        }
+
+        async fn query(&self, _sql: &str) -> Result<QueryResult, DriverError> {
+            self.stall().await
+        }
+
+        async fn execute(&self, _sql: &str) -> Result<ExecResult, DriverError> {
+            self.stall().await
+        }
+
+        async fn execute_params(&self, _sql: &str, _params: &[Value]) -> Result<ExecResult, DriverError> {
+            self.stall().await
+        }
+
+        async fn execute_in_transaction(&self, _statements: &[(String, Vec<Value>)]) -> Result<Vec<u64>, DriverError> {
+            self.stall().await
+        }
+
+        async fn ping(&self) -> Result<(), DriverError> {
+            Ok(())
+        }
+
+        async fn close(self: Box<Self>) -> Result<(), DriverError> {
+            Ok(())
+        }
+    }
+
+    impl SlowConnection {
+        async fn stall<T>(&self) -> Result<T, DriverError> {
+            self.dispatched.fetch_add(1, Ordering::SeqCst);
+            std::future::pending().await
+        }
+    }
+
+    fn cancelled_control() -> OperationControl {
+        let token = CancellationToken::new();
+        token.cancel();
+        OperationControl::new(token, None)
+    }
+
+    fn expired_control() -> OperationControl {
+        OperationControl::new(
+            CancellationToken::new(),
+            Some(tokio::time::Instant::now() - Duration::from_millis(1)),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_control_stops_every_metadata_read_before_dispatch() {
+        let dispatched = Arc::new(AtomicUsize::new(0));
+        let connection = SlowConnection {
+            dispatched: dispatched.clone(),
+        };
+        let control = cancelled_control();
+
+        assert!(matches!(
+            connection.list_tables_controlled(&control).await,
+            Err(DriverError::Cancelled)
+        ));
+        assert!(matches!(
+            connection.fetch_columns_controlled(None, "t", &control).await,
+            Err(DriverError::Cancelled)
+        ));
+        assert!(matches!(
+            connection.fetch_rows_controlled(None, "t", 0, 10, &control).await,
+            Err(DriverError::Cancelled)
+        ));
+        assert!(matches!(
+            connection.execute_in_transaction_controlled(&[], &control).await,
+            Err(DriverError::Cancelled)
+        ));
+        assert_eq!(
+            dispatched.load(Ordering::SeqCst),
+            0,
+            "a cancelled control must never reach the database"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_expired_deadline_stops_every_metadata_read_before_dispatch() {
+        let dispatched = Arc::new(AtomicUsize::new(0));
+        let connection = SlowConnection {
+            dispatched: dispatched.clone(),
+        };
+        let control = expired_control();
+
+        assert!(matches!(
+            connection.list_tables_controlled(&control).await,
+            Err(DriverError::TimedOut)
+        ));
+        assert!(matches!(
+            connection.fetch_columns_controlled(None, "t", &control).await,
+            Err(DriverError::TimedOut)
+        ));
+        assert!(matches!(
+            connection.fetch_rows_controlled(None, "t", 0, 10, &control).await,
+            Err(DriverError::TimedOut)
+        ));
+        assert!(matches!(
+            connection.execute_in_transaction_controlled(&[], &control).await,
+            Err(DriverError::TimedOut)
+        ));
+        assert_eq!(dispatched.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_deadline_reached_mid_flight_reports_an_unknown_outcome() {
+        let connection = SlowConnection::default();
+        let control = OperationControl::new(
+            CancellationToken::new(),
+            Some(tokio::time::Instant::now() + Duration::from_secs(5)),
+        );
+
+        let error = connection
+            .execute_in_transaction_controlled(&[("UPDATE t SET a = 1".into(), Vec::new())], &control)
+            .await
+            .expect_err("a stalled transaction must not report success");
+        assert!(
+            matches!(error, DriverError::OperationOutcomeUnknown { .. }),
+            "an abandoned transaction cannot prove it rolled back: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_driver_declares_no_server_cancellation_by_default() {
+        let connection = SlowConnection::default();
+        assert!(!connection.supports_server_cancellation());
+    }
 }
 
 #[cfg(test)]

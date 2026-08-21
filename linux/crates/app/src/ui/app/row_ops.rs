@@ -45,10 +45,12 @@ impl App {
         // outcome.
         self.in_flight_saves.set(self.in_flight_saves.get() + 1);
         let sender_for_cmd = sender.clone();
+        let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    match conn.execute_in_transaction(&statements).await {
+                    let control = crate::services::operation_control::bounded(timeout_secs);
+                    match conn.execute_in_transaction_controlled(&statements, &control).await {
                         Ok(affected) => {
                             // Optimistic-concurrency guard: every UPDATE
                             // and DELETE in our materialised set targets

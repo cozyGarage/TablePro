@@ -82,8 +82,10 @@ pub fn present(parent: &impl IsA<gtk::Window>, connection_id: Option<uuid::Uuid>
     window.present();
 
     let buffer = view.buffer();
+    let timeout_secs = crate::services::operation_control::configured_timeout_secs();
     glib::spawn_future_local(async move {
-        let text = match conn.query(&explain_sql).await {
+        let control = crate::services::operation_control::bounded(timeout_secs);
+        let text = match conn.query_controlled(&explain_sql, &control).await {
             Ok(result) => format_explain_result(&result),
             Err(e) => format!("{e}"),
         };

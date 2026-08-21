@@ -8,6 +8,7 @@ pub mod database_service;
 pub mod filter_settings;
 pub mod gtk_approval;
 pub mod mcp_service;
+pub mod operation_control;
 pub mod preferences;
 pub mod query_parameters;
 pub mod quick_switcher;

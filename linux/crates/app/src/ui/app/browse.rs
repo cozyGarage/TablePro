@@ -74,10 +74,12 @@ impl App {
             && !pk_names.is_empty()
             && keyset_cursor.as_ref().is_some_and(|c| c.len() == pk_names.len());
 
+        let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         let sender_clone = sender.clone();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
+                    let control = crate::services::operation_control::bounded(timeout_secs);
                     let result = if let Some(cursor) = keyset_cursor.filter(|_| use_keyset) {
                         let qualified = match &schema {
                             Some(s) => format!(
@@ -119,9 +121,10 @@ impl App {
                             limit,
                             0,
                         ));
-                        conn.query_params(&sql, &params).await
+                        conn.query_params_controlled(&sql, &params, &control).await
                     } else if where_sql.is_none() && order_by.is_none() {
-                        conn.fetch_rows(schema.as_deref(), &table, offset, limit).await
+                        conn.fetch_rows_controlled(schema.as_deref(), &table, offset, limit, &control)
+                            .await
                     } else {
                         let qualified = match &schema {
                             Some(s) => format!(
@@ -142,7 +145,7 @@ impl App {
                             limit,
                             offset,
                         ));
-                        conn.query_params(&sql, &params).await
+                        conn.query_params_controlled(&sql, &params, &control).await
                     };
                     match result {
                         Ok(query_result) => sender_clone.input(AppMsg::RowsLoaded(tab_id, offset, query_result)),
@@ -169,11 +172,13 @@ impl App {
         let Some(conn) = self.window_connection() else {
             return;
         };
+        let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         let sender_clone = sender.clone();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    match conn.fetch_columns(schema.as_deref(), &table).await {
+                    let control = crate::services::operation_control::bounded(timeout_secs);
+                    match conn.fetch_columns_controlled(schema.as_deref(), &table, &control).await {
                         Ok(columns) => sender_clone.input(AppMsg::ColumnsLoaded(tab_id, columns)),
                         Err(error) => sender_clone.input(AppMsg::LoadFailed(
                             Some(tab_id),
@@ -210,10 +215,12 @@ impl App {
             _ => (None, Vec::new()),
         };
 
+        let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         let sender_clone = sender.clone();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
+                    let control = crate::services::operation_control::bounded(timeout_secs);
                     let qualified = match schema {
                         Some(s) => format!(
                             "{}.{}",
@@ -228,9 +235,9 @@ impl App {
                         sql.push_str(w);
                     }
                     let qr_result = if where_sql.is_some() {
-                        conn.query_params(&sql, &params).await
+                        conn.query_params_controlled(&sql, &params, &control).await
                     } else {
-                        conn.query(&sql).await
+                        conn.query_controlled(&sql, &control).await
                     };
                     if let Ok(qr) = qr_result
                         && let Some(row) = qr.rows.first()

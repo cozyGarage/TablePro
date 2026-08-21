@@ -19,13 +19,15 @@ impl App {
         let Some(conn) = self.window_connection() else {
             return;
         };
+        let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         let sender_clone = sender.clone();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
                     for reference in pending {
                         let (schema, table) = split_table_reference(&reference);
-                        if let Ok(columns) = conn.fetch_columns(schema.as_deref(), &table).await {
+                        let control = crate::services::operation_control::bounded(timeout_secs);
+                        if let Ok(columns) = conn.fetch_columns_controlled(schema.as_deref(), &table, &control).await {
                             let names = columns.into_iter().map(|column| column.name).collect();
                             sender_clone.input(AppMsg::SchemaColumnsFetched(reference, names));
                         }

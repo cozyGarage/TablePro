@@ -13,7 +13,7 @@ use sourceview5::prelude::*;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use tablepro_core::{OperationControl, QueryResult};
+use tablepro_core::QueryResult;
 use tablepro_storage::query_history::{self, NewEntry, Outcome};
 
 use crate::services::database_service::{self, ConnectionMetadata};
@@ -585,7 +585,7 @@ impl SqlEditor {
         self.executing_metadata = self.metadata();
         self.executing_started_at = Some(SystemTime::now());
 
-        let timeout_secs = crate::services::preferences::load().query_timeout_secs;
+        let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         let driver_id = self
             .executing_metadata
             .as_ref()
@@ -596,9 +596,7 @@ impl SqlEditor {
             shutdown
                 .register(async move {
                     let statements = split_statements(&trimmed, &driver_id);
-                    let deadline = (timeout_secs > 0)
-                        .then(|| tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64));
-                    let control = OperationControl::new(token, deadline);
+                    let control = crate::services::operation_control::bounded_with(timeout_secs, token);
                     let msg = match run_statements(conn, statements, &driver_id, &parameter_values, &control).await {
                         ScriptRunResult::Cancelled => SqlEditorInput::ShowCancelled,
                         ScriptRunResult::TimedOut => SqlEditorInput::ShowTimedOut(timeout_secs),

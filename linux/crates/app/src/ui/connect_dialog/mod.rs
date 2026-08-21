@@ -432,19 +432,21 @@ impl Component for ConnectDialog {
                 };
                 let read_only = self.read_only.is_active();
                 let environment = self.selected_environment();
+                let timeout_secs = crate::services::operation_control::configured_timeout_secs();
 
                 sender.command(move |out, shutdown| {
                     shutdown
                         .register(async move {
-                            let result = run_connect(
-                                driver.clone(),
+                            let result = run_connect(ConnectRequest {
+                                driver: driver.clone(),
                                 driver_id,
                                 label,
                                 opts,
-                                ssh_inputs,
+                                ssh: ssh_inputs,
                                 read_only,
                                 environment,
-                            )
+                                timeout_secs,
+                            })
                             .await;
                             out.send(ConnectDialogCmd::Result(result)).ok();
                         })
@@ -480,11 +482,13 @@ impl Component for ConnectDialog {
                     None
                 };
 
+                let timeout_secs = crate::services::operation_control::configured_timeout_secs();
                 sender.command(move |out, shutdown| {
                     shutdown
                         .register(async move {
+                            let control = crate::services::operation_control::bounded(timeout_secs);
                             let result = match connection_service::establish(driver.as_ref(), opts, ssh_inputs).await {
-                                Ok((conn, _tunnel)) => match conn.list_tables().await {
+                                Ok((conn, _tunnel)) => match conn.list_tables_controlled(&control).await {
                                     Ok(tables) => Ok(tables.len()),
                                     Err(e) => Err(format!("list_tables: {e}")),
                                 },
@@ -747,7 +751,7 @@ fn toggle_error(row: &adw::EntryRow, invalid: bool) {
     }
 }
 
-async fn run_connect(
+struct ConnectRequest {
     driver: Arc<dyn tablepro_core::DatabaseDriver>,
     driver_id: String,
     label: String,
@@ -755,7 +759,20 @@ async fn run_connect(
     ssh: Option<SshInputs>,
     read_only: bool,
     environment: Environment,
-) -> Result<connection_service::PreparedConnection, String> {
+    timeout_secs: u32,
+}
+
+async fn run_connect(request: ConnectRequest) -> Result<connection_service::PreparedConnection, String> {
+    let ConnectRequest {
+        driver,
+        driver_id,
+        label,
+        opts,
+        ssh,
+        read_only,
+        environment,
+        timeout_secs,
+    } = request;
     let stored_password: SecretString = opts.password.clone();
     let ssh_for_establish = ssh.as_ref().map(|s| vec![s.cfg.clone()]);
     let opts_clone = opts.clone();
@@ -763,7 +780,11 @@ async fn run_connect(
     let (conn, tunnel) =
         connection_service::establish(driver.as_ref(), opts.clone(), ssh_for_establish.clone()).await?;
     let server_version = conn.server_version().await.ok().flatten();
-    let tables = conn.list_tables().await.map_err(|e| format!("list_tables: {e}"))?;
+    let control = crate::services::operation_control::bounded(timeout_secs);
+    let tables = conn
+        .list_tables_controlled(&control)
+        .await
+        .map_err(|e| format!("list_tables: {e}"))?;
 
     let existing = find_existing(&driver_id, &opts_clone, driver.is_file_based(), ssh.as_ref()).await;
     let id = existing

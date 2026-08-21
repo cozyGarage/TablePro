@@ -78,7 +78,11 @@ impl PreparedConnection {
     }
 }
 
-pub async fn open_saved(registry: Arc<DriverRegistry>, saved: SavedConnection) -> Result<PreparedConnection, String> {
+pub async fn open_saved(
+    registry: Arc<DriverRegistry>,
+    saved: SavedConnection,
+    timeout_secs: u32,
+) -> Result<PreparedConnection, String> {
     let driver = registry
         .get(&saved.driver_id)
         .ok_or_else(|| format!("driver {} not registered", saved.driver_id))?;
@@ -91,7 +95,11 @@ pub async fn open_saved(registry: Arc<DriverRegistry>, saved: SavedConnection) -
 
     let (conn, tunnel) = establish(&*driver, opts.clone(), ssh_hops.clone()).await?;
     let server_version = conn.server_version().await.ok().flatten();
-    let tables = conn.list_tables().await.map_err(|e| format!("list_tables: {e}"))?;
+    let control = crate::services::operation_control::bounded(timeout_secs);
+    let tables = conn
+        .list_tables_controlled(&control)
+        .await
+        .map_err(|e| format!("list_tables: {e}"))?;
     let metadata = ConnectionMetadata {
         id,
         name: saved.name.clone(),

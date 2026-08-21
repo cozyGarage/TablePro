@@ -89,8 +89,10 @@ pub fn present(parent: &gtk::Window, connection_id: Option<uuid::Uuid>) {
             status_l.set_text(&tr!("Running…"));
             let text_buf = text_buf.clone();
             let status_l = status_l.clone();
+            let timeout_secs = crate::services::operation_control::configured_timeout_secs();
             glib::spawn_future_local(async move {
-                match conn.query(&sql).await {
+                let control = crate::services::operation_control::bounded(timeout_secs);
+                match conn.query_controlled(&sql, &control).await {
                     Ok(result) => {
                         let cols: Vec<String> = result.columns.iter().map(|c| c.name.clone()).collect();
                         let rendered = render_result(&cols, &result.rows);
@@ -135,8 +137,10 @@ pub fn present(parent: &gtk::Window, connection_id: Option<uuid::Uuid>) {
         };
         let text_buf = text_buf.clone();
         let status_l = status_l.clone();
+        let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         glib::spawn_future_local(async move {
-            match conn.execute(&sql).await {
+            let control = crate::services::operation_control::bounded(timeout_secs);
+            match conn.execute_controlled(&sql, &control).await {
                 Ok(r) => {
                     text_buf.set_text(&format!("Kill issued; rows_affected={}", r.rows_affected));
                     status_l.set_text(&tr!("Done"));
