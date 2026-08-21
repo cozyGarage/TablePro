@@ -28,14 +28,35 @@ pub struct McpBridge {
     pub query_timeout_secs: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct McpLimits {
+    pub requests_per_minute: u32,
+    pub max_rows: u64,
+    pub query_timeout_secs: u64,
+}
+
+impl Default for McpLimits {
+    fn default() -> Self {
+        Self {
+            requests_per_minute: 120,
+            max_rows: 500,
+            query_timeout_secs: 30,
+        }
+    }
+}
+
 impl McpBridge {
     pub fn new(provider: Arc<dyn ConnectionProvider>, tokens: Arc<TokenStore>) -> Self {
+        Self::with_limits(provider, tokens, McpLimits::default())
+    }
+
+    pub fn with_limits(provider: Arc<dyn ConnectionProvider>, tokens: Arc<TokenStore>, limits: McpLimits) -> Self {
         Self {
             provider,
             tokens,
-            rate_limiter: RateLimiter::new(120),
-            max_rows: 500,
-            query_timeout_secs: 30,
+            rate_limiter: RateLimiter::new(limits.requests_per_minute),
+            max_rows: limits.max_rows,
+            query_timeout_secs: limits.query_timeout_secs,
         }
     }
 
@@ -201,4 +222,34 @@ fn operation_control(timeout_secs: u64) -> OperationControl {
 fn sql_looks_like_write(sql: &str, driver_id: &str) -> bool {
     let facts = tablepro_policy::classify(sql, driver_id);
     facts.writes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{McpLimits, sql_looks_like_write};
+
+    #[test]
+    fn the_default_limits_are_the_values_the_bridge_has_always_used() {
+        let limits = McpLimits::default();
+        assert_eq!(limits.requests_per_minute, 120);
+        assert_eq!(limits.max_rows, 500);
+        assert_eq!(limits.query_timeout_secs, 30);
+    }
+
+    #[test]
+    fn only_a_provable_read_skips_the_write_scope_check() {
+        for sql in ["SELECT 1", "SELECT id FROM t WHERE id = 1"] {
+            assert!(!sql_looks_like_write(sql, "postgres"), "{sql}");
+        }
+        for sql in [
+            "DELETE FROM t WHERE id = 1",
+            "CREATE TABLE t (id int)",
+            "SELECT pg_read_file('/etc/passwd')",
+            "COPY t TO PROGRAM 'sh'",
+            "this is not sql at all",
+            "",
+        ] {
+            assert!(sql_looks_like_write(sql, "postgres"), "{sql}");
+        }
+    }
 }
