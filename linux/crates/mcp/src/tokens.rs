@@ -1,4 +1,7 @@
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -39,7 +42,8 @@ impl TokenStore {
     pub fn open(path: PathBuf) -> Result<Self, String> {
         let tokens = if path.exists() {
             let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            let list: Vec<McpToken> = serde_json::from_str(&text).unwrap_or_default();
+            let list: Vec<McpToken> = serde_json::from_str(&text)
+                .map_err(|e| format!("{} is not a readable token store: {e}", path.display()))?;
             list.into_iter().map(|t| (t.id, t)).collect()
         } else {
             HashMap::new()
@@ -85,7 +89,7 @@ impl TokenStore {
         let map = self.tokens.lock().map_err(|e| e.to_string())?;
         let token = map
             .values()
-            .find(|t| t.token_hash == hash && !t.revoked)
+            .find(|t| !t.revoked && hashes_match(&t.token_hash, &hash))
             .cloned()
             .ok_or_else(|| "invalid token".to_string())?;
         if let Some(exp) = token.expires_at
@@ -120,9 +124,31 @@ impl TokenStore {
         let list = self.list();
         let json = serde_json::to_vec_pretty(&list).map_err(|e| e.to_string())?;
         let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+        let mut handle = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|e| e.to_string())?;
+        handle.write_all(&json).map_err(|e| e.to_string())?;
+        handle.sync_all().map_err(|e| e.to_string())?;
+        drop(handle);
         std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())
     }
+}
+
+fn hashes_match(stored: &str, candidate: &str) -> bool {
+    let stored = stored.as_bytes();
+    let candidate = candidate.as_bytes();
+    if stored.len() != candidate.len() {
+        return false;
+    }
+    let mut difference = 0u8;
+    for (left, right) in stored.iter().zip(candidate) {
+        difference |= left ^ right;
+    }
+    difference == 0
 }
 
 pub fn generate_token() -> String {
@@ -152,6 +178,30 @@ fn tokens_path() -> Result<PathBuf, String> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn the_token_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("tokens.json");
+        let store = TokenStore::open(path.clone()).unwrap();
+        store
+            .issue("t".into(), TokenPermissions::ReadOnly, vec![Uuid::new_v4()], None)
+            .unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "token file mode was {mode:o}");
+    }
+
+    #[test]
+    fn a_corrupt_token_file_is_an_error_rather_than_an_empty_store() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("tokens.json");
+        std::fs::write(&path, b"{ this is not a token list").unwrap();
+        let Err(error) = TokenStore::open(path) else {
+            panic!("a corrupt store must not open");
+        };
+        assert!(error.contains("not a readable token store"), "{error}");
+    }
 
     #[test]
     fn issue_and_authenticate() {
