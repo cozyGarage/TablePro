@@ -4,11 +4,21 @@ use relm4::{adw, gtk};
 use uuid::Uuid;
 
 use tablepro_core::AuthMode;
-use tablepro_storage::SavedConnection;
+use tablepro_storage::{ConnectionOrganization, SavedConnection};
+
+/// What a row needs to render: the saved record plus its organisation
+/// entry. The two live in different files on disk, so the parent hands
+/// them down together rather than the row reaching for either.
+#[derive(Debug, Clone)]
+pub struct ConnectionRowInit {
+    pub saved: SavedConnection,
+    pub organization: ConnectionOrganization,
+}
 
 #[derive(Debug)]
 pub struct ConnectionRow {
     saved: SavedConnection,
+    organization: ConnectionOrganization,
     /// AdwActionRow root widget. Cached so the trash button's
     /// confirmation dialog can `present()` against it (the dialog
     /// walks up to find the GtkWindow, but it needs *some* widget
@@ -19,6 +29,8 @@ pub struct ConnectionRow {
 #[derive(Debug)]
 pub enum ConnectionRowMsg {
     Open,
+    ToggleFavorite,
+    Organize,
     /// Trash button pressed. Triggers a confirmation dialog before
     /// any actual delete is dispatched — saved connections include
     /// credentials and SSH config and a misclick is unrecoverable.
@@ -29,12 +41,14 @@ pub enum ConnectionRowMsg {
 #[allow(clippy::large_enum_variant)]
 pub enum ConnectionRowOutput {
     Open(SavedConnection),
+    ToggleFavorite(Uuid),
+    Organize(SavedConnection),
     Delete(Uuid),
 }
 
 #[relm4::factory(pub)]
 impl FactoryComponent for ConnectionRow {
-    type Init = SavedConnection;
+    type Init = ConnectionRowInit;
     type Input = ConnectionRowMsg;
     type Output = ConnectionRowOutput;
     type CommandOutput = ();
@@ -43,9 +57,33 @@ impl FactoryComponent for ConnectionRow {
     view! {
         adw::ActionRow {
             set_title: &self.saved.name,
-            set_subtitle: &subtitle_for(&self.saved),
+            set_subtitle: &subtitle_for(&self.saved, &self.organization),
             set_activatable: true,
             connect_activated => ConnectionRowMsg::Open,
+
+            add_prefix = &gtk::Button {
+                set_icon_name: if self.organization.favorite {
+                    "starred-symbolic"
+                } else {
+                    "non-starred-symbolic"
+                },
+                set_valign: gtk::Align::Center,
+                set_tooltip_text: Some(if self.organization.favorite {
+                    crate::tr!("Remove from favourites")
+                } else {
+                    crate::tr!("Add to favourites")
+                }.as_str()),
+                add_css_class: "flat",
+                connect_clicked => ConnectionRowMsg::ToggleFavorite,
+            },
+
+            add_suffix = &gtk::Button {
+                set_icon_name: "view-list-bullet-symbolic",
+                set_valign: gtk::Align::Center,
+                set_tooltip_text: Some(crate::tr!("Group and tags").as_str()),
+                add_css_class: "flat",
+                connect_clicked => ConnectionRowMsg::Organize,
+            },
 
             add_suffix = &gtk::Button {
                 set_icon_name: "go-next-symbolic",
@@ -66,8 +104,12 @@ impl FactoryComponent for ConnectionRow {
         }
     }
 
-    fn init_model(saved: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
-        Self { saved, root: None }
+    fn init_model(init: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
+        Self {
+            saved: init.saved,
+            organization: init.organization,
+            root: None,
+        }
     }
 
     fn init_widgets(
@@ -87,6 +129,12 @@ impl FactoryComponent for ConnectionRow {
         match msg {
             ConnectionRowMsg::Open => {
                 let _ = sender.output(ConnectionRowOutput::Open(self.saved.clone()));
+            }
+            ConnectionRowMsg::ToggleFavorite => {
+                let _ = sender.output(ConnectionRowOutput::ToggleFavorite(self.saved.id));
+            }
+            ConnectionRowMsg::Organize => {
+                let _ = sender.output(ConnectionRowOutput::Organize(self.saved.clone()));
             }
             ConnectionRowMsg::RequestDelete => {
                 // GNOME HIG: destructive actions need explicit
@@ -121,7 +169,20 @@ impl FactoryComponent for ConnectionRow {
     }
 }
 
-fn subtitle_for(saved: &SavedConnection) -> String {
+fn subtitle_for(saved: &SavedConnection, organization: &ConnectionOrganization) -> String {
+    let mut subtitle = endpoint_for(saved);
+    if let Some(group) = organization.group.as_deref() {
+        subtitle.push_str(" · ");
+        subtitle.push_str(group);
+    }
+    if !organization.tags.is_empty() {
+        subtitle.push_str(" · ");
+        subtitle.push_str(&organization.tags.join(", "));
+    }
+    subtitle
+}
+
+fn endpoint_for(saved: &SavedConnection) -> String {
     if saved.driver_id == "sqlite" {
         return format!("sqlite · {}", saved.database);
     }
@@ -166,15 +227,37 @@ mod tests {
         }
     }
 
+    fn plain() -> ConnectionOrganization {
+        ConnectionOrganization::default()
+    }
+
     #[test]
     fn kerberos_rows_hide_the_username_separator() {
         assert_eq!(
-            subtitle_for(&saved("", AuthMode::Kerberos)),
+            subtitle_for(&saved("", AuthMode::Kerberos), &plain()),
             "mssql · sql.corp.example:1433"
         );
         assert_eq!(
-            subtitle_for(&saved("sa", AuthMode::Password)),
+            subtitle_for(&saved("sa", AuthMode::Password), &plain()),
             "mssql · sa@sql.corp.example:1433"
+        );
+    }
+
+    #[test]
+    fn a_group_and_tags_extend_the_subtitle() {
+        let organization = ConnectionOrganization::new(Some("Production"), &["billing".into(), "audit".into()], false)
+            .expect("valid organization");
+        assert_eq!(
+            subtitle_for(&saved("sa", AuthMode::Password), &organization),
+            "mssql · sa@sql.corp.example:1433 · Production · audit, billing"
+        );
+    }
+
+    #[test]
+    fn an_unorganized_connection_keeps_the_bare_endpoint_subtitle() {
+        assert_eq!(
+            subtitle_for(&saved("sa", AuthMode::Password), &plain()),
+            endpoint_for(&saved("sa", AuthMode::Password))
         );
     }
 }

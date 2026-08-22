@@ -6,6 +6,7 @@ mod init_sidebar;
 mod init_window;
 mod init_workspace;
 mod msg;
+mod organization;
 mod render;
 mod row_ops;
 mod schema_index;
@@ -27,7 +28,7 @@ use relm4::prelude::*;
 use relm4::{Controller, adw, gtk};
 
 use tablepro_core::DriverRegistry;
-use tablepro_storage::SavedConnection;
+use tablepro_storage::{ConnectionOrganizationIndex, SavedConnection};
 use uuid::Uuid;
 
 use super::browse_tab::BrowseTabInput;
@@ -122,6 +123,11 @@ pub struct App {
     /// Per-tab page size lives on each BrowseTab.
     default_page_size: u64,
     saved_connections: Vec<SavedConnection>,
+    /// Groups, tags and favourite flags for the saved connections,
+    /// loaded from the sidecar file beside `connections.json`. Held in
+    /// the model so the welcome view can be re-arranged without another
+    /// disk read on every keystroke in the filter box.
+    connection_organization: ConnectionOrganizationIndex,
     connected: bool,
     /// The connection this window owns. Activation is process-wide and
     /// additive, so a window must resolve its own connection rather than
@@ -381,7 +387,10 @@ impl SimpleComponent for App {
                 .launch(WelcomeViewInit)
                 .forward(sender.input_sender(), |out| match out {
                     WelcomeViewOutput::OpenConnect => AppMsg::OpenConnect,
+                    WelcomeViewOutput::ImportUrl => AppMsg::ImportConnectionUrl,
                     WelcomeViewOutput::OpenSaved(saved) => AppMsg::OpenSaved(saved),
+                    WelcomeViewOutput::ToggleFavorite(id) => AppMsg::ToggleConnectionFavorite(id),
+                    WelcomeViewOutput::Organize(saved) => AppMsg::OrganizeConnection(saved),
                     WelcomeViewOutput::Delete(id) => AppMsg::DeleteConnection(id),
                 });
 
@@ -421,6 +430,7 @@ impl SimpleComponent for App {
             read_only: false,
             default_page_size: crate::services::preferences::load().default_page_size,
             saved_connections: Vec::new(),
+            connection_organization: ConnectionOrganizationIndex::default(),
             connected: false,
             connection_id: None,
             connection_transition: ConnectionTransition::Idle,
@@ -472,6 +482,7 @@ impl SimpleComponent for App {
         });
 
         model.load_favorites(sender.clone());
+        model.load_connection_organization(sender.clone());
 
         ComponentParts { model, widgets }
     }
@@ -672,6 +683,17 @@ impl SimpleComponent for App {
             AppMsg::CopyToClipboard(text) => self.on_copy_to_clipboard(text),
             AppMsg::CopyRowAsInsert { tab_id, row_position } => self.on_copy_row_as_insert(tab_id, row_position),
             AppMsg::DeleteConnection(id) => self.on_delete_connection(id, sender),
+            AppMsg::ConnectionOrganizationLoaded(index) => self.on_connection_organization_loaded(index),
+            AppMsg::ToggleConnectionFavorite(id) => self.on_toggle_connection_favorite(id, sender),
+            AppMsg::OrganizeConnection(saved) => self.on_organize_connection(saved, sender),
+            AppMsg::SetConnectionOrganization(id, organization) => {
+                self.on_set_connection_organization(id, organization, sender)
+            }
+            AppMsg::ConnectionOrganizationRejected => self.on_connection_organization_rejected(),
+            AppMsg::ImportConnectionUrl => self.on_import_connection_url(sender),
+            AppMsg::ImportConnectionUrlText(url) => self.on_import_connection_url_text(url, sender),
+            AppMsg::ImportConnectionUrlSucceeded(name) => self.on_import_connection_url_succeeded(name),
+            AppMsg::ImportConnectionUrlFailed => self.on_import_connection_url_failed(),
             AppMsg::OpenSaved(saved) => self.on_open_saved(saved, sender),
             AppMsg::ReopenClosedTab => self.on_reopen_closed_tab(sender),
             AppMsg::ShowFilterDialog => self.on_show_filter_dialog(),

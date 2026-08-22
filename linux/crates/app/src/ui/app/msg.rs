@@ -1,5 +1,5 @@
 use tablepro_core::{ColumnInfo, QueryResult, TableInfo, Value};
-use tablepro_storage::SavedConnection;
+use tablepro_storage::{ConnectionOrganization, ConnectionOrganizationIndex, SavedConnection};
 use uuid::Uuid;
 
 use super::OpenMode;
@@ -24,6 +24,15 @@ pub enum AppMsg {
     ConnectionsLoaded(Vec<SavedConnection>),
     OpenSaved(SavedConnection),
     DeleteConnection(Uuid),
+    ConnectionOrganizationLoaded(ConnectionOrganizationIndex),
+    ToggleConnectionFavorite(Uuid),
+    OrganizeConnection(SavedConnection),
+    SetConnectionOrganization(Uuid, ConnectionOrganization),
+    ConnectionOrganizationRejected,
+    ImportConnectionUrl,
+    ImportConnectionUrlText(String),
+    ImportConnectionUrlSucceeded(String),
+    ImportConnectionUrlFailed,
     NewEditorTab,
     CloseActiveWorkspaceTab,
     EditorTabRunStateChanged(Uuid, bool),

@@ -184,7 +184,10 @@ impl App {
         let mut guard = self.connections_factory.guard();
         guard.clear();
         for saved in connections {
-            guard.push_back(saved.clone());
+            guard.push_back(crate::ui::connection_row::ConnectionRowInit {
+                saved: saved.clone(),
+                organization: self.connection_organization.get(saved.id),
+            });
         }
         drop(guard);
         let _ = self
@@ -193,6 +196,7 @@ impl App {
             .send(crate::ui::welcome_view::WelcomeViewInput::SetConnections(
                 self.saved_connections.clone(),
             ));
+        self.prune_connection_organization(sender.clone());
         if !self.connected {
             self.show_welcome_page(sender);
         }

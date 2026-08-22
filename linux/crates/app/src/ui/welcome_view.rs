@@ -3,23 +3,32 @@ use relm4::factory::FactoryVecDeque;
 use relm4::prelude::*;
 use relm4::{adw, gtk};
 
-use tablepro_storage::SavedConnection;
+use tablepro_storage::{ConnectionOrganizationIndex, SavedConnection, arrange_connections};
 use uuid::Uuid;
 
-use super::connection_row::{ConnectionRow, ConnectionRowOutput};
+use super::connection_row::{ConnectionRow, ConnectionRowInit, ConnectionRowOutput};
 
 pub struct WelcomeView {
     connections: Vec<SavedConnection>,
+    organization: ConnectionOrganizationIndex,
+    filter: String,
     factory: FactoryVecDeque<ConnectionRow>,
     stack: gtk::Stack,
+    search: gtk::SearchEntry,
+    empty_filter_page: adw::StatusPage,
 }
 
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum WelcomeViewInput {
     SetConnections(Vec<SavedConnection>),
+    SetOrganization(ConnectionOrganizationIndex),
+    FilterChanged(String),
     OpenConnect,
+    ImportUrl,
     OpenSaved(SavedConnection),
+    ToggleFavorite(Uuid),
+    Organize(SavedConnection),
     Delete(Uuid),
 }
 
@@ -27,7 +36,10 @@ pub enum WelcomeViewInput {
 #[allow(clippy::large_enum_variant)]
 pub enum WelcomeViewOutput {
     OpenConnect,
+    ImportUrl,
     OpenSaved(SavedConnection),
+    ToggleFavorite(Uuid),
+    Organize(SavedConnection),
     Delete(Uuid),
 }
 
@@ -55,6 +67,8 @@ impl SimpleComponent for WelcomeView {
             )
             .forward(sender.input_sender(), |out| match out {
                 ConnectionRowOutput::Open(saved) => WelcomeViewInput::OpenSaved(saved),
+                ConnectionRowOutput::ToggleFavorite(id) => WelcomeViewInput::ToggleFavorite(id),
+                ConnectionRowOutput::Organize(saved) => WelcomeViewInput::Organize(saved),
                 ConnectionRowOutput::Delete(id) => WelcomeViewInput::Delete(id),
             });
 
@@ -116,9 +130,54 @@ impl SimpleComponent for WelcomeView {
         header_btn.add_css_class("flat");
         let s_header = sender.clone();
         header_btn.connect_clicked(move |_| s_header.input(WelcomeViewInput::OpenConnect));
-        group.set_header_suffix(Some(&header_btn));
+        // Import sits beside Add rather than inside a menu: pasting a
+        // connection URL is the fastest path in from another tool, and
+        // GNOME puts sibling create-actions side by side in the group
+        // header (Software's "Add" / "Install File…" pattern).
+        let import_btn = gtk::Button::builder()
+            .icon_name("insert-link-symbolic")
+            .tooltip_text(crate::tr!("Import from URL"))
+            .valign(gtk::Align::Center)
+            .build();
+        import_btn.add_css_class("flat");
+        let s_import = sender.clone();
+        import_btn.connect_clicked(move |_| s_import.input(WelcomeViewInput::ImportUrl));
+        let header_actions = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .build();
+        header_actions.append(&import_btn);
+        header_actions.append(&header_btn);
+        group.set_header_suffix(Some(&header_actions));
+
+        // Filter box above the list. Hidden until there are enough
+        // connections to be worth filtering — a search field over three
+        // rows is noise, and GNOME only reveals search once a list can
+        // outgrow the viewport.
+        let search = gtk::SearchEntry::builder()
+            .placeholder_text(crate::tr!("Filter by name, group, tag or driver"))
+            .hexpand(true)
+            .visible(false)
+            .build();
+        let s_search = sender.clone();
+        search.connect_search_changed(move |entry| {
+            s_search.input(WelcomeViewInput::FilterChanged(entry.text().to_string()));
+        });
+        outer.append(&search);
         group.add(factory.widget());
         outer.append(&group);
+
+        // Shown in place of the list when every connection is filtered
+        // out. Distinct from the "no connections yet" page: the fix is
+        // to clear the filter, not to add a connection.
+        let empty_filter_page = adw::StatusPage::builder()
+            .icon_name("system-search-symbolic")
+            .title(crate::tr!("No matches"))
+            .description(crate::tr!("No saved connection matches this filter."))
+            .visible(false)
+            .build();
+        empty_filter_page.add_css_class("compact");
+        outer.append(&empty_filter_page);
         clamp.set_child(Some(&outer));
 
         scroller.set_child(Some(&clamp));
@@ -127,8 +186,12 @@ impl SimpleComponent for WelcomeView {
 
         let model = WelcomeView {
             connections: Vec::new(),
+            organization: ConnectionOrganizationIndex::default(),
+            filter: String::new(),
             factory,
             stack: root.clone(),
+            search,
+            empty_filter_page,
         };
         ComponentParts { model, widgets: () }
     }
@@ -136,47 +199,71 @@ impl SimpleComponent for WelcomeView {
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
             WelcomeViewInput::SetConnections(connections) => {
-                // Recency-first with alphabetical tiebreaker. Connections
-                // that have been opened sort newest-first; never-opened
-                // entries (no timestamp) fall to the bottom and sort
-                // alphabetically among themselves. Mirrors GNOME Files'
-                // recent-files panel and DataGrip / TablePlus welcome
-                // screens — the connection the user opened last is
-                // almost always the one they want next.
                 self.connections = connections;
-                self.connections.sort_by(|a, b| {
-                    use std::cmp::Ordering;
-                    match (a.last_opened_at, b.last_opened_at) {
-                        (Some(ta), Some(tb)) => tb
-                            .cmp(&ta)
-                            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
-                        (Some(_), None) => Ordering::Less,
-                        (None, Some(_)) => Ordering::Greater,
-                        (None, None) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                    }
-                });
-                let mut guard = self.factory.guard();
-                guard.clear();
-                for saved in &self.connections {
-                    guard.push_back(saved.clone());
-                }
-                drop(guard);
-                let name = if self.connections.is_empty() {
-                    "empty"
-                } else {
-                    "populated"
-                };
-                self.stack.set_visible_child_name(name);
+                self.rebuild_rows();
+            }
+            WelcomeViewInput::SetOrganization(organization) => {
+                self.organization = organization;
+                self.rebuild_rows();
+            }
+            WelcomeViewInput::FilterChanged(filter) => {
+                self.filter = filter;
+                self.rebuild_rows();
             }
             WelcomeViewInput::OpenConnect => {
                 let _ = sender.output(WelcomeViewOutput::OpenConnect);
             }
+            WelcomeViewInput::ImportUrl => {
+                let _ = sender.output(WelcomeViewOutput::ImportUrl);
+            }
             WelcomeViewInput::OpenSaved(saved) => {
                 let _ = sender.output(WelcomeViewOutput::OpenSaved(saved));
+            }
+            WelcomeViewInput::ToggleFavorite(id) => {
+                let _ = sender.output(WelcomeViewOutput::ToggleFavorite(id));
+            }
+            WelcomeViewInput::Organize(saved) => {
+                let _ = sender.output(WelcomeViewOutput::Organize(saved));
             }
             WelcomeViewInput::Delete(id) => {
                 let _ = sender.output(WelcomeViewOutput::Delete(id));
             }
         }
+    }
+}
+
+/// Connections a filter cannot outgrow. Below this the filter box stays
+/// hidden, so the field only appears once scanning the list by eye stops
+/// being the faster option.
+const FILTER_REVEAL_THRESHOLD: usize = 6;
+
+impl WelcomeView {
+    fn rebuild_rows(&mut self) {
+        // Favourites first, then group, then name — the ordering lives
+        // in tablepro-storage so the same arrangement is testable
+        // without a GTK main context. Recency is a deliberate casualty:
+        // an explicit favourite outranks "whatever I opened last".
+        let arranged = arrange_connections(&self.connections, &self.organization, &self.filter);
+        let mut guard = self.factory.guard();
+        guard.clear();
+        for saved in &arranged {
+            let organization = self.organization.get(saved.id);
+            guard.push_back(ConnectionRowInit {
+                saved: saved.clone(),
+                organization,
+            });
+        }
+        drop(guard);
+
+        self.search
+            .set_visible(self.connections.len() >= FILTER_REVEAL_THRESHOLD);
+        self.empty_filter_page
+            .set_visible(arranged.is_empty() && !self.connections.is_empty());
+        let name = if self.connections.is_empty() {
+            "empty"
+        } else {
+            "populated"
+        };
+        self.stack.set_visible_child_name(name);
     }
 }
