@@ -160,6 +160,74 @@ For ordinary UI changes, test the affected flow manually and include before and 
 
 The Ubuntu 25.10 container provides the GLib version required by the selected libadwaita and Relm4 features.
 
+## Measuring how good the tests are
+
+Counting tests says nothing about whether they would catch a defect. Two
+tools measure that directly. Neither gates a build: they take tens of
+minutes, and a number moving the wrong way is a conversation, not a
+failure. Both run weekly and on demand from
+`.github/workflows/linux-quality.yml`.
+
+### Mutation testing
+
+`cargo mutants` changes the code in small ways - flips a comparison,
+replaces a return value, swaps an operator - and reruns the tests. A
+mutant the tests still pass is behaviour nothing pins.
+
+```bash
+cargo install cargo-mutants --locked
+cd linux
+cargo mutants --package tablepro-core --test-tool cargo -- --lib
+cargo mutants --package tablepro-core --file crates/core/src/sql_lex.rs --test-tool cargo -- --lib
+```
+
+`core` and `policy` are the right targets: pure logic, no GTK, no driver,
+and the two crates whose defects reach SQL text and authorization
+decisions. Mutating the app crate mostly reports widget construction no
+unit test can reach.
+
+Read the output carefully. Many surviving mutants are *equivalent* - a
+different program with identical behaviour - and can never be caught. In
+`sql_lex::skip_span`, replacing `offset + 1` with `offset - 1` shortens a
+comment span by one character, but the scanner then reads that character
+as ordinary text and reaches the same result, so no test can tell the
+difference. Chasing those wastes effort.
+
+The first run on 2026-08-22 tested 87 mutants across `sql_lex.rs` and
+`sql_literal.rs`: 65 caught, 12 missed, 9 timed out. Two of the twelve
+were real gaps rather than equivalents:
+
+- Nothing tested an underscore in a PostgreSQL dollar-quote tag, though
+  the tag validator explicitly allows one. `$my_tag$` had no coverage.
+- `extract_named_parameters` advances by whatever `skip_span` returns
+  without checking it is non-zero, while `statement_spans` filters for
+  exactly that. A zero-length span would hang the parameter scanner. No
+  input produces one today, so this is a missing guard rather than a live
+  defect - but the asymmetry between two callers of the same function is
+  the kind of thing that becomes a defect later.
+
+A timeout is a finding too: it usually means the mutant produced an
+infinite loop, which tells you a loop depends on a value nothing bounds.
+
+### Coverage
+
+`cargo llvm-cov` reports which lines the unit and sandbox tiers execute.
+
+```bash
+cargo install cargo-llvm-cov --locked
+rustup component add llvm-tools-preview
+cd linux
+cargo llvm-cov --workspace --exclude tablepro-driver-duckdb --exclude tablepro-app \
+  --lib --bins --tests --summary-only
+```
+
+The app crate and the driver, TLS, release and installed-GTK tiers are
+excluded: they need Docker, a network fixture or a display, so including
+them would make the number depend on the runner rather than on the tests.
+Treat coverage as a map of untested regions, not a score. A well-covered
+line proves a test executed it, never that a test checked its result -
+which is exactly the gap mutation testing measures.
+
 ## File-size guard
 
 `scripts/check-file-size.sh` enforces the Rust source limits recorded in `file-size-baselines.txt`:
