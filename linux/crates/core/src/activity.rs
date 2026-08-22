@@ -10,11 +10,72 @@ pub enum ActivityQuery {
     KillSession,
 }
 
+impl ActivityQuery {
+    pub const ALL: [Self; 5] = [
+        Self::Sessions,
+        Self::BlockingLocks,
+        Self::LongRunning,
+        Self::ReplicationLag,
+        Self::KillSession,
+    ];
+}
+
+/// Why no SQL came back. A single `None` used to cover all three, so the
+/// dialog could only say "not supported for this driver" whether the
+/// engine has no activity views at all, has them but not this one, or
+/// the caller simply had no session id to kill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityUnsupported {
+    Engine,
+    Query,
+    MissingSessionId,
+}
+
+/// What this engine can be asked about. Empty means the driver has no
+/// activity views at all, which is a different answer from a view that
+/// returns no rows.
+pub fn activity_kinds(driver_id: &str) -> &'static [ActivityQuery] {
+    match driver_id {
+        "postgres" => &[
+            ActivityQuery::Sessions,
+            ActivityQuery::BlockingLocks,
+            ActivityQuery::LongRunning,
+            ActivityQuery::ReplicationLag,
+            ActivityQuery::KillSession,
+        ],
+        "mysql" => &[
+            ActivityQuery::Sessions,
+            ActivityQuery::LongRunning,
+            ActivityQuery::KillSession,
+        ],
+        "mssql" => &[ActivityQuery::Sessions, ActivityQuery::KillSession],
+        _ => &[],
+    }
+}
+
 pub fn parse_session_id(input: &str) -> Option<u64> {
     input.trim().parse::<u64>().ok().filter(|id| *id > 0)
 }
 
-pub fn activity_sql(driver_id: &str, kind: ActivityQuery, session_id: Option<u64>) -> Option<String> {
+pub fn activity_sql(
+    driver_id: &str,
+    kind: ActivityQuery,
+    session_id: Option<u64>,
+) -> Result<String, ActivityUnsupported> {
+    let kinds = activity_kinds(driver_id);
+    if kinds.is_empty() {
+        return Err(ActivityUnsupported::Engine);
+    }
+    if !kinds.contains(&kind) {
+        return Err(ActivityUnsupported::Query);
+    }
+    if kind == ActivityQuery::KillSession && !session_id.is_some_and(|id| id > 0) {
+        return Err(ActivityUnsupported::MissingSessionId);
+    }
+    activity_template(driver_id, kind, session_id).ok_or(ActivityUnsupported::Query)
+}
+
+fn activity_template(driver_id: &str, kind: ActivityQuery, session_id: Option<u64>) -> Option<String> {
     match (driver_id, kind) {
         ("postgres", ActivityQuery::Sessions) => Some(
             "SELECT pid, usename, datname, state, wait_event_type, wait_event, \
@@ -103,14 +164,57 @@ mod tests {
     #[test]
     fn kill_requires_positive_id() {
         for driver in ["postgres", "mysql", "mssql"] {
-            assert!(activity_sql(driver, ActivityQuery::KillSession, None).is_none());
-            assert!(activity_sql(driver, ActivityQuery::KillSession, Some(0)).is_none());
+            assert_eq!(
+                activity_sql(driver, ActivityQuery::KillSession, None),
+                Err(ActivityUnsupported::MissingSessionId)
+            );
+            assert_eq!(
+                activity_sql(driver, ActivityQuery::KillSession, Some(0)),
+                Err(ActivityUnsupported::MissingSessionId)
+            );
         }
         assert!(
             activity_sql("postgres", ActivityQuery::KillSession, Some(42))
                 .unwrap()
                 .contains("42")
         );
+    }
+
+    #[test]
+    fn every_declared_kind_has_a_template_and_no_undeclared_kind_does() {
+        for driver in [
+            "postgres",
+            "mysql",
+            "mssql",
+            "sqlite",
+            "clickhouse",
+            "duckdb",
+            "mongodb",
+            "redis",
+            "oracle",
+        ] {
+            for kind in ActivityQuery::ALL {
+                assert_eq!(
+                    activity_template(driver, kind, Some(42)).is_some(),
+                    activity_kinds(driver).contains(&kind),
+                    "{driver} declaration disagrees with its templates for {kind:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_engine_without_activity_views_is_distinct_from_a_missing_query() {
+        assert_eq!(
+            activity_sql("sqlite", ActivityQuery::Sessions, None),
+            Err(ActivityUnsupported::Engine)
+        );
+        assert_eq!(
+            activity_sql("mysql", ActivityQuery::ReplicationLag, None),
+            Err(ActivityUnsupported::Query)
+        );
+        assert!(activity_kinds("sqlite").is_empty());
+        assert!(!activity_kinds("mysql").contains(&ActivityQuery::ReplicationLag));
     }
 
     #[test]

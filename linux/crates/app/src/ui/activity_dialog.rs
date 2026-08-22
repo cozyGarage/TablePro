@@ -5,7 +5,7 @@
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk};
 
-use tablepro_core::{ActivityQuery, Value, activity_sql, parse_session_id};
+use tablepro_core::{ActivityQuery, ActivityUnsupported, Value, activity_kinds, activity_sql, parse_session_id};
 
 use crate::services::database_service;
 use crate::tr;
@@ -72,15 +72,23 @@ pub fn present(parent: &gtk::Window, connection_id: Option<uuid::Uuid>) {
         ("Long-running", ActivityQuery::LongRunning),
         ("Replication lag", ActivityQuery::ReplicationLag),
     ];
+    let supported = activity_kinds(&driver_id);
     for (label, kind) in actions {
         let btn = gtk::Button::with_label(label);
         let text_buf = text.buffer();
         let status_l = status.clone();
         let driver = driver_id.clone();
+        if !supported.contains(&kind) {
+            btn.set_sensitive(false);
+            btn.set_tooltip_text(Some(&unsupported_text(&driver_id)));
+        }
         btn.connect_clicked(move |_| {
-            let Some(sql) = activity_sql(&driver, kind, None) else {
-                status_l.set_text(&tr!("Not supported for this driver."));
-                return;
+            let sql = match activity_sql(&driver, kind, None) {
+                Ok(sql) => sql,
+                Err(reason) => {
+                    status_l.set_text(&reason_text(reason));
+                    return;
+                }
             };
             let Some(conn) = database_service::instance().get(connection) else {
                 status_l.set_text(&tr!("Connection closed."));
@@ -116,6 +124,11 @@ pub fn present(parent: &gtk::Window, connection_id: Option<uuid::Uuid>) {
         .build();
     let kill_btn = gtk::Button::with_label(&tr!("Kill"));
     kill_btn.add_css_class("destructive-action");
+    if !supported.contains(&ActivityQuery::KillSession) {
+        kill_entry.set_sensitive(false);
+        kill_btn.set_sensitive(false);
+        kill_btn.set_tooltip_text(Some(&unsupported_text(&driver_id)));
+    }
     let text_buf = text.buffer();
     let status_l = status.clone();
     let driver = driver_id.clone();
@@ -128,9 +141,12 @@ pub fn present(parent: &gtk::Window, connection_id: Option<uuid::Uuid>) {
                 return;
             }
         };
-        let Some(sql) = activity_sql(&driver, ActivityQuery::KillSession, Some(id)) else {
-            status_l.set_text(&tr!("Kill not supported for this driver."));
-            return;
+        let sql = match activity_sql(&driver, ActivityQuery::KillSession, Some(id)) {
+            Ok(sql) => sql,
+            Err(reason) => {
+                status_l.set_text(&reason_text(reason));
+                return;
+            }
         };
         let Some(conn) = database_service::instance().get(connection) else {
             return;
@@ -161,6 +177,25 @@ pub fn present(parent: &gtk::Window, connection_id: Option<uuid::Uuid>) {
     toolbar.set_content(Some(&box_));
     dialog.set_child(Some(&toolbar));
     dialog.present(Some(parent));
+}
+
+/// The dialog offers every activity view, so a button the engine cannot
+/// answer has to say which of the two reasons applies rather than a bare
+/// "not supported".
+fn reason_text(reason: ActivityUnsupported) -> String {
+    match reason {
+        ActivityUnsupported::Engine => tr!("This engine has no server activity views."),
+        ActivityUnsupported::Query => tr!("This engine does not report this kind of activity."),
+        ActivityUnsupported::MissingSessionId => tr!("Session id must be a positive integer."),
+    }
+}
+
+fn unsupported_text(driver_id: &str) -> String {
+    if activity_kinds(driver_id).is_empty() {
+        reason_text(ActivityUnsupported::Engine)
+    } else {
+        reason_text(ActivityUnsupported::Query)
+    }
 }
 
 fn render_result(columns: &[String], rows: &[Vec<Value>]) -> String {

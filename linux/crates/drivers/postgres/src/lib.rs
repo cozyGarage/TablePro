@@ -34,6 +34,14 @@ impl DatabaseDriver for PgDriver {
         true
     }
 
+    fn supports_index_metadata(&self) -> bool {
+        true
+    }
+
+    fn supports_foreign_key_metadata(&self) -> bool {
+        true
+    }
+
     fn forwarded_socket_name(&self, service_port: u16) -> Option<String> {
         Some(format!(".s.PGSQL.{service_port}"))
     }
@@ -895,6 +903,16 @@ fn map_sqlx_error(err: sqlx::Error) -> DriverError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structure_metadata_declarations_match_the_connection_impl() {
+        let d = PgDriver;
+        let source = include_str!("lib.rs");
+        assert!(d.supports_index_metadata());
+        assert!(d.supports_foreign_key_metadata());
+        assert!(source.contains(&["async fn ", "fetch_indexes("].concat()));
+        assert!(source.contains(&["async fn ", "fetch_foreign_keys("].concat()));
+    }
 
     #[test]
     fn map_certificate_failure_returns_tls_error() {

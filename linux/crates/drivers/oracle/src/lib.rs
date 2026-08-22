@@ -55,6 +55,18 @@ mod tests {
         assert!(!d.is_file_based());
     }
 
+    #[test]
+    fn structure_metadata_is_not_declared_without_a_fetch() {
+        let d = OracleDriver;
+        let sources = [include_str!("lib.rs"), include_str!("odpi.rs")];
+        assert!(!d.supports_index_metadata());
+        assert!(!d.supports_foreign_key_metadata());
+        for source in sources {
+            assert!(!source.contains(&["async fn ", "fetch_indexes("].concat()));
+            assert!(!source.contains(&["async fn ", "fetch_foreign_keys("].concat()));
+        }
+    }
+
     #[tokio::test]
     async fn connect_without_odpi_feature_returns_unsupported() {
         let d = OracleDriver;

@@ -50,6 +50,10 @@ impl DatabaseDriver for ClickhouseDriver {
         false
     }
 
+    fn supports_index_metadata(&self) -> bool {
+        true
+    }
+
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
         let scheme = if opts.tls.mode.encrypts() { "https" } else { "http" };
         let url = format!("{scheme}://{}:{}", opts.host, opts.port);
@@ -907,6 +911,15 @@ fn map_clickhouse_error(err: clickhouse::error::Error) -> DriverError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sorting_key_is_declared_but_foreign_keys_are_not() {
+        let d = ClickhouseDriver;
+        let source = include_str!("lib.rs");
+        assert!(d.supports_index_metadata());
+        assert!(source.contains(&["async fn ", "fetch_indexes("].concat()));
+        assert!(!d.supports_foreign_key_metadata());
+    }
 
     #[test]
     fn driver_metadata() {

@@ -60,6 +60,23 @@ pub trait DatabaseDriver: Send + Sync {
         true
     }
 
+    /// Whether this driver can enumerate the indexes on a table.
+    /// `Connection::fetch_indexes` answers with an empty list when it
+    /// cannot, and the structure tab has no way to tell that apart from
+    /// a table that genuinely has no index. A driver must declare true
+    /// only when it implements the fetch against real catalog data.
+    fn supports_index_metadata(&self) -> bool {
+        false
+    }
+
+    /// Whether this driver can enumerate the foreign keys on a table,
+    /// for the same reason as `supports_index_metadata`. Engines with no
+    /// foreign-key concept declare false even when the driver overrides
+    /// the fetch to return an empty list.
+    fn supports_foreign_key_metadata(&self) -> bool {
+        false
+    }
+
     fn supports_integrated_auth(&self) -> bool {
         false
     }
@@ -77,4 +94,37 @@ pub trait DatabaseDriver: Send + Sync {
     }
 
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct BareDriver;
+
+    #[async_trait]
+    impl DatabaseDriver for BareDriver {
+        fn id(&self) -> &'static str {
+            "bare"
+        }
+
+        fn display_name(&self) -> &'static str {
+            "Bare"
+        }
+
+        fn default_port(&self) -> u16 {
+            0
+        }
+
+        async fn connect(&self, _opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
+            Err(DriverError::Unsupported("bare".into()))
+        }
+    }
+
+    #[test]
+    fn a_driver_that_declares_nothing_claims_no_structure_metadata() {
+        let driver = BareDriver;
+        assert!(!driver.supports_index_metadata());
+        assert!(!driver.supports_foreign_key_metadata());
+    }
 }
