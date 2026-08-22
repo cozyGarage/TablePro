@@ -48,6 +48,7 @@
 
 ### Changed
 
+- Saving several row edits at once writes them in primary-key order, so two windows saving overlapping rows cannot deadlock against each other and a failed save reports the same row every time
 - Stop is offered for the engines that can actually abort a statement, because the policy layer no longer hides a driver's cancellation support
 - A cell edit is discarded with an explanation if the row moved out from under the editor, instead of being written to whichever row took its place
 - Copy row as INSERT leaves out generated columns, which the database always rejects, and escapes a value the way the connected engine reads it, so a row holding a backslash copies as data rather than as SQL

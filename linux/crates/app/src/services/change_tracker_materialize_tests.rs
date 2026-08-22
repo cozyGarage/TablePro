@@ -1,0 +1,232 @@
+//! `materialize` turns pending edits into the statements a save runs
+//! inside one transaction. These tests pin the properties that make the
+//! batch safe to execute and reproducible to diagnose.
+
+use super::*;
+use tablepro_core::ColumnInfo;
+
+fn pk(name: &str) -> ColumnInfo {
+    ColumnInfo {
+        name: name.into(),
+        data_type: "integer".into(),
+        nullable: false,
+        primary_key: true,
+        is_auto_increment: false,
+        default_value: None,
+        is_generated: false,
+    }
+}
+
+fn data(name: &str) -> ColumnInfo {
+    ColumnInfo {
+        name: name.into(),
+        data_type: "text".into(),
+        nullable: true,
+        primary_key: false,
+        is_auto_increment: false,
+        default_value: None,
+        is_generated: false,
+    }
+}
+
+fn schema() -> Vec<ColumnInfo> {
+    vec![pk("id"), data("note"), data("label")]
+}
+
+fn key(id: i64) -> RowKey {
+    RowKey::from_pk_values(&[Value::Int(id)]).expect("a single-column key")
+}
+
+fn materialize(tracker: &TabChangeTracker) -> (Vec<(String, Vec<Value>)>, Vec<StatementSource>) {
+    tracker
+        .materialize("postgres", None, "t", &schema())
+        .expect("the batch must build")
+}
+
+/// The primary-key value each statement targets, read from the last
+/// bound parameter of its WHERE clause.
+fn targeted_ids(statements: &[(String, Vec<Value>)]) -> Vec<i64> {
+    statements
+        .iter()
+        .filter_map(|(sql, params)| {
+            if !sql.contains("WHERE") {
+                return None;
+            }
+            match params.last() {
+                Some(Value::Int(id)) => Some(*id),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn updates_are_emitted_in_primary_key_order_so_a_batch_is_reproducible() {
+    let mut tracker = TabChangeTracker::new();
+    // Insertion order deliberately unsorted: a HashMap walk would emit
+    // these in an order that depends on the process's hash seed.
+    for id in [7, 2, 5, 1, 8, 3, 6, 4] {
+        tracker.track_cell_edit(key(id), 1, Value::Null, Value::Text(format!("v{id}")));
+    }
+
+    let (statements, _) = materialize(&tracker);
+    assert_eq!(
+        targeted_ids(&statements),
+        vec![1, 2, 3, 4, 5, 6, 7, 8],
+        "an unordered batch cannot be reproduced or locked consistently"
+    );
+}
+
+#[test]
+fn deletes_are_emitted_in_primary_key_order_too() {
+    let mut tracker = TabChangeTracker::new();
+    for id in [4, 1, 3, 2] {
+        tracker.track_delete(key(id), vec![Value::Int(id), Value::Null, Value::Null]);
+    }
+
+    let (statements, _) = materialize(&tracker);
+    assert!(statements.iter().all(|(sql, _)| sql.starts_with("DELETE")));
+    assert_eq!(targeted_ids(&statements), vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn the_batch_runs_inserts_then_updates_then_deletes() {
+    let mut tracker = TabChangeTracker::new();
+    tracker.track_cell_edit(key(1), 1, Value::Null, Value::Text("edited".into()));
+    tracker.track_delete(key(2), vec![Value::Int(2), Value::Null, Value::Null]);
+    tracker.track_insert(vec![Value::Int(9), Value::Text("new".into()), Value::Null]);
+
+    let (statements, _) = materialize(&tracker);
+    let kinds: Vec<&str> = statements
+        .iter()
+        .map(|(sql, _)| match sql {
+            sql if sql.starts_with("INSERT") => "insert",
+            sql if sql.starts_with("UPDATE") => "update",
+            sql if sql.starts_with("DELETE") => "delete",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        vec!["insert", "update", "delete"],
+        "deletes must run last so a foreign key referencing a deleted row is freed first"
+    );
+}
+
+#[test]
+fn every_statement_has_a_source_describing_the_row_it_came_from() {
+    let mut tracker = TabChangeTracker::new();
+    tracker.track_cell_edit(key(1), 1, Value::Null, Value::Text("a".into()));
+    tracker.track_cell_edit(key(2), 2, Value::Null, Value::Text("b".into()));
+    tracker.track_delete(key(3), vec![Value::Int(3), Value::Null, Value::Null]);
+    let draft = tracker.track_insert(vec![Value::Int(4), Value::Null, Value::Null]);
+
+    let (statements, sources) = materialize(&tracker);
+    assert_eq!(
+        statements.len(),
+        sources.len(),
+        "a failing statement index has to resolve to a row, so the two lists must stay aligned"
+    );
+    assert!(matches!(sources[0], StatementSource::Insert { draft_id } if RowKey::Draft(draft_id) == draft));
+    assert!(matches!(&sources[1], StatementSource::Update { row_key } if *row_key == key(1)));
+    assert!(matches!(&sources[2], StatementSource::Update { row_key } if *row_key == key(2)));
+    assert!(matches!(&sources[3], StatementSource::Delete { row_key } if *row_key == key(3)));
+}
+
+#[test]
+fn several_edits_to_one_row_become_a_single_update() {
+    let mut tracker = TabChangeTracker::new();
+    tracker.track_cell_edit(key(1), 1, Value::Null, Value::Text("note".into()));
+    tracker.track_cell_edit(key(1), 2, Value::Null, Value::Text("label".into()));
+
+    let (statements, sources) = materialize(&tracker);
+    assert_eq!(statements.len(), 1, "one row must not be updated twice in one batch");
+    assert_eq!(sources.len(), 1);
+    let (sql, params) = &statements[0];
+    assert_eq!(sql, "UPDATE \"t\" SET \"note\" = $1, \"label\" = $2 WHERE \"id\" = $3");
+    assert_eq!(
+        params,
+        &vec![Value::Text("note".into()), Value::Text("label".into()), Value::Int(1)]
+    );
+}
+
+#[test]
+fn an_update_writes_only_the_columns_the_user_touched() {
+    let mut tracker = TabChangeTracker::new();
+    tracker.track_cell_edit(key(1), 2, Value::Null, Value::Text("only label".into()));
+
+    let (statements, _) = materialize(&tracker);
+    let (sql, _) = &statements[0];
+    assert!(sql.contains("\"label\""), "{sql}");
+    assert!(
+        !sql.contains("\"note\""),
+        "writing an untouched column would clobber another session's edit: {sql}"
+    );
+}
+
+#[test]
+fn a_discarded_draft_contributes_no_statement() {
+    let mut tracker = TabChangeTracker::new();
+    let draft = tracker.track_insert(vec![Value::Int(1), Value::Null, Value::Null]);
+    let RowKey::Draft(draft_id) = draft else {
+        panic!("track_insert must return a draft key");
+    };
+    assert!(tracker.discard_draft(draft_id));
+
+    let (statements, sources) = materialize(&tracker);
+    assert!(statements.is_empty(), "a discarded draft must not be inserted");
+    assert!(sources.is_empty());
+}
+
+#[test]
+fn a_null_key_component_is_matched_with_is_null_rather_than_equality() {
+    let columns = vec![pk("a"), pk("b"), data("note")];
+    let mut tracker = TabChangeTracker::new();
+    let row_key = RowKey::from_pk_values(&[Value::Int(1), Value::Null]).expect("a composite key");
+    tracker.track_cell_edit(row_key, 2, Value::Null, Value::Text("x".into()));
+
+    let (statements, _) = tracker
+        .materialize("postgres", None, "t", &columns)
+        .expect("the batch must build");
+    let (sql, params) = &statements[0];
+    assert_eq!(sql, "UPDATE \"t\" SET \"note\" = $1 WHERE \"a\" = $2 AND \"b\" IS NULL");
+    assert_eq!(
+        params,
+        &vec![Value::Text("x".into()), Value::Int(1)],
+        "a NULL key component must not consume a placeholder"
+    );
+}
+
+#[test]
+fn a_table_without_a_primary_key_refuses_to_build_an_update() {
+    let columns = vec![data("a"), data("b")];
+    let mut tracker = TabChangeTracker::new();
+    tracker.track_cell_edit(key(1), 1, Value::Null, Value::Text("x".into()));
+
+    let error = tracker
+        .materialize("postgres", None, "t", &columns)
+        .expect_err("without a key there is no safe WHERE clause");
+    assert!(matches!(error, BuildSqlError::NoPrimaryKey));
+}
+
+#[test]
+fn an_empty_tracker_produces_no_statements() {
+    let tracker = TabChangeTracker::new();
+    let (statements, sources) = materialize(&tracker);
+    assert!(statements.is_empty());
+    assert!(sources.is_empty());
+}
+
+#[test]
+fn the_batch_is_identical_however_the_edits_arrived() {
+    let mut forwards = TabChangeTracker::new();
+    for id in [1, 2, 3, 4, 5] {
+        forwards.track_cell_edit(key(id), 1, Value::Null, Value::Text(format!("v{id}")));
+    }
+    let mut backwards = TabChangeTracker::new();
+    for id in [5, 4, 3, 2, 1] {
+        backwards.track_cell_edit(key(id), 1, Value::Null, Value::Text(format!("v{id}")));
+    }
+
+    assert_eq!(materialize(&forwards).0, materialize(&backwards).0);
+}

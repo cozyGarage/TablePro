@@ -41,7 +41,7 @@ const UNDO_LIMIT: usize = 50;
 /// Persisted rows are keyed by their primary key tuple; draft rows
 /// (not yet committed) are keyed by a monotonic local id assigned by
 /// the tracker.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum RowKey {
     Persisted(Vec<KeyValue>),
     Draft(u64),
@@ -63,7 +63,13 @@ impl RowKey {
 /// IEEE-754 bits (so NaN equals NaN for identity purposes — pathological
 /// PK case but defined behaviour). `Decimal` and `Json` are stored as
 /// their canonical string forms because neither type derives `Hash`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// `Ord` exists to give a batch of statements one canonical order, not
+/// to express a meaningful ranking: `FloatBits` compares raw bits, so
+/// negative floats do not sort numerically. Consistency is all the
+/// ordering needs, because it only decides the sequence rows are locked
+/// and written in.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum KeyValue {
     Null,
     Bool(bool),
@@ -580,6 +586,14 @@ impl TabChangeTracker {
                 .or_default()
                 .push((*col, edit.prev_value.clone(), edit.new_value.clone()));
         }
+        // `per_row` is a HashMap, so iterating it emits statements in an
+        // order that changes between processes. Two windows saving
+        // overlapping rows could then take row locks in opposite orders
+        // and deadlock against each other, and a partial failure could
+        // report a different row each run. Sort by primary key so the
+        // batch is reproducible and every client locks in one order.
+        let mut per_row: Vec<(RowKey, Vec<(usize, Value, Value)>)> = per_row.into_iter().collect();
+        per_row.sort_by(|left, right| left.0.cmp(&right.0));
         for (row_key, mut edits) in per_row {
             edits.sort_by_key(|e| e.0);
             // `build_full_row_update` writes every non-PK column, which
@@ -651,8 +665,11 @@ impl TabChangeTracker {
                 row_key: row_key.clone(),
             });
         }
-        // Deletes last so FK references unblocked first.
-        for row_key in self.deletes.keys() {
+        // Deletes last so FK references unblocked first, and sorted for
+        // the same reason as the updates above.
+        let mut delete_keys: Vec<&RowKey> = self.deletes.keys().collect();
+        delete_keys.sort();
+        for row_key in delete_keys {
             let RowKey::Persisted(pk_keyvalues) = row_key else {
                 continue;
             };
@@ -808,6 +825,10 @@ pub fn any_pending_globally() -> bool {
 pub fn pending_tabs() -> Vec<Uuid> {
     REGISTRY.with(|reg| reg.borrow().pending_tabs())
 }
+
+#[cfg(test)]
+#[path = "change_tracker_materialize_tests.rs"]
+mod materialize_tests;
 
 #[cfg(test)]
 mod tests {
