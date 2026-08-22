@@ -149,14 +149,14 @@ The repository extraction completed on 2026-08-17. Product planning now follows 
 ### 10: DBA operations at scale
 
 - [x] Several connections open at once, with fail-closed per-tab ownership across all of them
-- [ ] Connection groups, tags, favorites, search, and URL import
+- [x] Connection groups, tags, favorites, search, and URL import
 - [ ] A typed sessions and locks console with capability-declared driver support and governed session termination
 - [ ] A PostgreSQL server health panel that degrades cleanly when a statistics extension is absent
 - [ ] Configurable pool size and timeouts per saved connection, honoured by the driver
 - [ ] Read-only review of views, routines, triggers, sequences, extensions, roles, and grants
 - [ ] A decision record, design, and measured prototype for an out-of-process Python runner
 
-Phase 10 is in progress. Its first slice retired the one-active-connection limit: activation is additive and every window owns and releases its own connection, proven by two windows writing to two databases in the installed suite. Every connection it exposes stays policy-guarded, and no slice ships DDL or server configuration writes.
+Phase 10 is in progress. Slice 10.2 added connection organisation: groups, tags, favourites, search across name/group/tag/driver, and URL import whose password reaches the keyring and never the saved file. Its first slice retired the one-active-connection limit: activation is additive and every window owns and releases its own connection, proven by two windows writing to two databases in the installed suite. Every connection it exposes stays policy-guarded, and no slice ships DDL or server configuration writes.
 
 ## Next implementation target
 

@@ -10,7 +10,8 @@
 - Hash-chained audit journal at `$XDG_DATA_HOME/tablepro/audit.jsonl`
 - Interactive `Connection::begin` transactions (PostgreSQL, MySQL, SQLite)
 - TLS modes including VerifyFull default for new TLS connections, with certificate hostname and authority failures reported as TLS errors
-- MCP bridge (interactive-app loopback HTTP plus on-demand agentd stdio) with scoped tokens and rate limiting
+- MCP bridge (interactive-app loopback HTTP plus on-demand agentd stdio) with scoped tokens and rate limiting, speaking the 2026-07-28 protocol revision while still accepting the two before it, and refusing to listen anywhere but the loopback interface
+- Agents can read a table's columns, keys and indexes, count its rows exactly, and page through it, each through the same policy, allowlist and audit checks as any other tool and none of them needing write access
 - Headless on-demand `tablepro-agentd` with required `--policy`, issuing read-only tokens by default, with an optional expiry and a way to write the token to an owner-only file instead of the terminal
 - GTK approval dialog for policy `RequireApproval` decisions
 - Server activity SQL templates (sessions, locks, long-running, replication)
@@ -23,6 +24,7 @@
 - ClickHouse, Redis, DuckDB, and MongoDB drivers; Oracle remains excluded until its optional implementation and fixture work
 - Preferences → MCP token pairing (libsecret + loopback endpoint)
 - Multi-window via New Window, with each window connecting on its own
+- Saved connections can be put in a group, tagged, and starred as favourites, searched by any of those or by driver, and created by pasting a connection URL, whose password goes to the keyring rather than to disk
 - Flathub submission notes and screenshot capture guide
 - Rust file-size guardrail in preflight: soft 1200 / hard 1800 lines, with ratchet ceilings in `file-size-baselines.txt`
 - Driver maturity labels in the Connect dialog (Experimental subtitle for Redis, MongoDB, DuckDB, and Oracle)
