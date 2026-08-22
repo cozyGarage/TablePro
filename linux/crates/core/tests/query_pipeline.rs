@@ -125,7 +125,10 @@ fn a_keyset_page_continues_the_placeholder_run_the_filter_started() {
         assert_eq!(seen.len(), params.len(), "{driver_id} produced {sql}");
         if driver_id == "postgres" || driver_id == "mssql" {
             let expected: Vec<String> = (0..params.len()).map(|i| placeholder_for(driver_id, i)).collect();
-            assert_eq!(seen, expected, "{driver_id} numbered its placeholders out of order: {sql}");
+            assert_eq!(
+                seen, expected,
+                "{driver_id} numbered its placeholders out of order: {sql}"
+            );
         }
     }
 }
@@ -159,7 +162,10 @@ fn a_statement_the_splitter_returns_is_the_one_the_cursor_reports() {
         for statement in &statements {
             let position = script[offset..].find(statement.as_str()).expect("statement in script") + offset;
             let picked = statement_at_cursor(script, driver_id, position).expect("a statement at that byte");
-            assert_eq!(&picked, statement, "{driver_id} disagreed with itself at byte {position}");
+            assert_eq!(
+                &picked, statement,
+                "{driver_id} disagreed with itself at byte {position}"
+            );
             offset = position + statement.len();
         }
     }
@@ -167,13 +173,17 @@ fn a_statement_the_splitter_returns_is_the_one_the_cursor_reports() {
 
 #[test]
 fn a_dollar_quoted_body_survives_the_whole_editor_pipeline() {
-    let script = "CREATE FUNCTION f() RETURNS int AS $body$ BEGIN RETURN :nope; END; $body$ LANGUAGE plpgsql; SELECT :yes";
+    let script =
+        "CREATE FUNCTION f() RETURNS int AS $body$ BEGIN RETURN :nope; END; $body$ LANGUAGE plpgsql; SELECT :yes";
     let statements = split_statements(script, "postgres");
     assert_eq!(statements.len(), 2);
     assert!(statements[0].contains("RETURN :nope"), "{:?}", statements[0]);
 
     let body = extract_named_parameters(&statements[0], "postgres");
-    assert!(body.is_empty(), "a parameter inside a dollar-quoted body must stay text");
+    assert!(
+        body.is_empty(),
+        "a parameter inside a dollar-quoted body must stay text"
+    );
     let tail = extract_named_parameters(&statements[1], "postgres");
     assert_eq!(tail.names, vec!["yes"]);
     assert_eq!(tail.sql, "SELECT $1");
