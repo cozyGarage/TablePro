@@ -14,7 +14,7 @@
 - Agents can read a table's columns, keys and indexes, count its rows exactly, and page through it, each through the same policy, allowlist and audit checks as any other tool and none of them needing write access
 - Headless on-demand `tablepro-agentd` with required `--policy`, issuing read-only tokens by default, with an optional expiry and a way to write the token to an owner-only file instead of the terminal
 - GTK approval dialog for policy `RequireApproval` decisions
-- Server activity SQL templates (sessions, locks, long-running, replication)
+- Server activity SQL templates (sessions, locks, long-running, replication), with the views an engine cannot answer shown as disabled and explained rather than failing when clicked
 - Example policy file and MSSQL in AppStream metainfo
 - SSH jump-host chains via nested `ssh.jump` in saved connections and `SshTunnel::open_chain`
 - Keyset pagination helper for browse Next past the OFFSET threshold when primary keys are known
@@ -29,6 +29,7 @@
 - Rust file-size guardrail in preflight: soft 1200 / hard 1800 lines, with ratchet ceilings in `file-size-baselines.txt`
 - Driver maturity labels in the Connect dialog (Experimental subtitle for Redis, MongoDB, DuckDB, and Oracle)
 - Driver maturity matrix in `docs/driver-maturity.md`
+- Drivers declare whether they can report indexes and foreign keys, so an engine that has none is no longer indistinguishable from a table that has none
 - Windows integrated authentication for SQL Server through the current Kerberos ticket cache
 - Principal-aware GUI approval routing with fail-closed behavior when no active window exists
 - Explicit administrative SQL classification for PostgreSQL backend-control functions and MySQL KILL

@@ -30,10 +30,12 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   MAX_SITES["$path"]="$max"
 done <"$BASELINES"
 
-# Files a `#[cfg(test)] mod name;` declaration pulls in wholesale.
-test_only_files() {
-  local file dir target
-  while IFS= read -r -d '' file; do
+# Module files a declaration inside `file` pulls in. When `gated_only` is
+# 1 only `#[cfg(test)] mod name;` counts; when it is 0 every `mod name;`
+# counts, which is what a file that is already test-only needs, because
+# its children inherit the gate and do not repeat the attribute.
+declared_module_files() {
+  local file="$1" gated_only="$2" dir target
     dir="$(dirname "$file")"
     while IFS= read -r target; do
       if [[ -f "$dir/$target" ]]; then
@@ -41,7 +43,8 @@ test_only_files() {
       elif [[ -f "$dir/${target%.rs}/mod.rs" ]]; then
         printf '%s\n' "$dir/${target%.rs}/mod.rs"
       fi
-    done < <(awk '
+    done < <(awk -v gated_only="$gated_only" '
+      BEGIN { if (!gated_only) pending = 1 }
       /^[ \t]*#\[cfg\(test\)\]/ { pending = 1; path = ""; next }
       pending && /^[ \t]*#\[path[ \t]*=/ {
         if (match($0, /"[^"]+"/)) path = substr($0, RSTART + 1, RLENGTH - 2)
@@ -55,18 +58,37 @@ test_only_files() {
           sub(/^mod[ \t]+/, "", name)
           print name ".rs"
         }
-        pending = 0
+        pending = gated_only ? 0 : 1
+        path = ""
         next
       }
-      { pending = 0 }
+      { if (gated_only) pending = 0; else path = "" }
     ' "$file")
-  done < <(find "$CRATES" -type f -name '*.rs' -print0)
 }
 
 declare -A TEST_ONLY=()
-while IFS= read -r path; do
-  [[ -n "$path" ]] && TEST_ONLY["$path"]=1
-done < <(test_only_files)
+while IFS= read -r -d '' file; do
+  while IFS= read -r path; do
+    [[ -n "$path" ]] && TEST_ONLY["$path"]=1
+  done < <(declared_module_files "$file" 1)
+done < <(find "$CRATES" -type f -name '*.rs' -print0)
+
+# A test-only file's own `mod` declarations are test-only too, however
+# deep the chain goes. `guard_tests.rs` declares its two halves without
+# repeating `#[cfg(test)]`, because the parent module already carries it.
+while :; do
+  added=0
+  for known in "${!TEST_ONLY[@]}"; do
+    [[ -f "$known" ]] || continue
+    while IFS= read -r path; do
+      if [[ -n "$path" && -z "${TEST_ONLY[$path]:-}" ]]; then
+        TEST_ONLY["$path"]=1
+        added=1
+      fi
+    done < <(declared_module_files "$known" 0)
+  done
+  [[ "$added" -eq 0 ]] && break
+done
 
 # Drops every `#[cfg(test)]` item, then counts panic sites on what is
 # left. Sources are rustfmt-formatted, so the closing brace of a test
