@@ -197,6 +197,36 @@ use and reconnects lazily, with no monitor and no backoff. A tool call that
 arrives during an outage retries as fast as the caller retries, bounded only by
 the MCP rate limiter.
 
+### 9. An unknown SSH host key is trusted without asking
+
+Not fixed. Recorded as a deliberate, documented posture rather than an
+oversight, because closing it needs a user-facing decision.
+
+A **changed** host key is refused: the connection fails with the recorded
+line number and both fingerprints, and nothing is written. That is the
+case that matters most, and it is covered by tests.
+
+An **unknown** host key is written to `known_hosts` and the connection
+proceeds. There is no confirmation step, so the first connection to a
+host trusts whatever answers. That is the same exposure `ssh
+-o StrictHostKeyChecking=accept-new` accepts, and it is weaker than
+OpenSSH's interactive default, which asks.
+
+Consequences worth stating plainly:
+
+- A machine-in-the-middle on the very first connection to a host is
+  accepted and then pinned, so every later connection trusts the wrong
+  key and the mismatch is never reported.
+- The user is never told a trust decision was made on their behalf.
+
+What would close it: surface the fingerprint before the first connection
+completes and require an explicit accept, with Cancel as the default.
+That needs a path from `tablepro-ssh`, which has no GTK dependency, up
+to the window that can ask - the same shape as the existing approval
+sink - so it is a product decision rather than a local fix. Until then,
+verify a new host's fingerprint out of band if the network between you
+and it is not trusted.
+
 ## Potential problems
 
 Not confirmed. Listed so they are not rediscovered as surprises.
@@ -230,15 +260,16 @@ Ordered by how much risk the gap carries.
 |---|---|
 | TLS on SQL Server | none — the container tests connect in plaintext |
 | TLS on Oracle | none |
-| Redis, MongoDB, DuckDB, Oracle, SQLite | no integration test file at all |
+| Redis, MongoDB, DuckDB, Oracle | no integration test file at all |
 | SSH jump chains of more than one hop | none — the fixture has a single bastion |
 | SSH password and passphrase authentication | none — every test uses an unencrypted private key |
+| Accepting an unknown SSH host key | the learning and refusal paths are unit-tested; there is no confirmation step to test |
 | Unreachable-but-silent hosts | none — tests use refused ports, which return immediately |
 | Custom certificate authority from a saved connection | assembly and driver fixture coverage; installed GTK selection remains untested |
 | Client certificates and pinned fingerprints | not implemented |
 | Reconnect on any driver but PostgreSQL | none |
 | The Oracle driver under its `odpi` feature | does not compile |
-| Cancellation on any driver but PostgreSQL | none |
+| Cancellation on Redis, MongoDB, DuckDB, Oracle | none; PostgreSQL, MySQL, ClickHouse and SQLite are verified against a real engine, and SQL Server is verified to retire its connection instead |
 | Concurrent connections to the same host over one tunnel | none |
 | IPv6 literals on any driver | none |
 
