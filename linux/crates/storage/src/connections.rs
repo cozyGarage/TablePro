@@ -12,6 +12,33 @@ use tablepro_core::{AuthMode, Environment, TlsMode};
 
 const CURRENT_VERSION: u32 = 1;
 
+/// Every JSON key `SavedConnection` owns. A key outside this list came
+/// from a newer TablePro (or a hand edit) and is carried through a
+/// rewrite untouched, so downgrading does not silently strip a field
+/// the newer version depends on. Keys inside the list are always taken
+/// from the freshly serialized record — a cleared `Option` must not be
+/// resurrected from the copy on disk.
+const KNOWN_CONNECTION_FIELDS: &[&str] = &[
+    "id",
+    "name",
+    "driver_id",
+    "host",
+    "port",
+    "socket_dir",
+    "database",
+    "username",
+    "use_tls",
+    "tls_mode",
+    "tls_root_cert",
+    "read_only",
+    "auth_mode",
+    "environment",
+    "ssh",
+    "last_opened_at",
+];
+
+const KNOWN_FILE_FIELDS: &[&str] = &["version", "connections"];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedConnection {
     pub id: Uuid,
@@ -159,15 +186,71 @@ pub(crate) async fn save_to(path: &Path, connections: &[SavedConnection]) -> Res
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
+    let stored = read_raw_file(path).await;
     let file = ConnectionsFile {
         version: CURRENT_VERSION,
         connections: connections.to_vec(),
     };
-    let json = serde_json::to_vec_pretty(&file)?;
+    let mut document = serde_json::to_value(&file)?;
+    if let Some(stored) = stored.as_ref() {
+        carry_unknown_fields(&mut document, stored);
+    }
+    let json = serde_json::to_vec_pretty(&document)?;
     let path = path.to_path_buf();
     tokio::task::spawn_blocking(move || write_atomically(&path, &json))
         .await
         .map_err(|error| StorageError::Schema(format!("saved connection task failed: {error}")))?
+}
+
+/// The file exactly as it sits on disk, or `None` when it is absent or
+/// not a JSON object. A malformed file is not an error here: the caller
+/// is about to overwrite it and simply has nothing to preserve.
+async fn read_raw_file(path: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let bytes = tokio::fs::read(path).await.ok()?;
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(serde_json::Value::Object(object)) => Some(object),
+        _ => None,
+    }
+}
+
+fn carry_unknown_fields(document: &mut serde_json::Value, stored: &serde_json::Map<String, serde_json::Value>) {
+    let Some(fresh) = document.as_object_mut() else {
+        return;
+    };
+    for (key, value) in stored {
+        if KNOWN_FILE_FIELDS.contains(&key.as_str()) {
+            continue;
+        }
+        fresh.entry(key.clone()).or_insert_with(|| value.clone());
+    }
+    let stored_records = stored.get("connections").and_then(|value| value.as_array());
+    let Some(stored_records) = stored_records else {
+        return;
+    };
+    let Some(fresh_records) = fresh.get_mut("connections").and_then(|value| value.as_array_mut()) else {
+        return;
+    };
+    for record in fresh_records {
+        let Some(id) = record.get("id").and_then(|value| value.as_str()).map(str::to_owned) else {
+            continue;
+        };
+        let Some(previous) = stored_records
+            .iter()
+            .filter_map(|candidate| candidate.as_object())
+            .find(|candidate| candidate.get("id").and_then(|value| value.as_str()) == Some(id.as_str()))
+        else {
+            continue;
+        };
+        let Some(target) = record.as_object_mut() else {
+            continue;
+        };
+        for (key, value) in previous {
+            if KNOWN_CONNECTION_FIELDS.contains(&key.as_str()) {
+                continue;
+            }
+            target.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
 }
 
 fn write_atomically(path: &Path, json: &[u8]) -> Result<(), StorageError> {
@@ -500,5 +583,92 @@ mod tests {
         tokio::fs::write(&path, legacy).await.unwrap();
         let loaded = load_from(&path).await.unwrap();
         assert!(loaded[0].ssh.as_ref().unwrap().jump.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_known_field_list_covers_every_serialized_key() {
+        let mut connection = sample_connection();
+        connection.socket_dir = Some(PathBuf::from("/run/postgresql"));
+        connection.tls_root_cert = Some(PathBuf::from("/etc/ca.crt"));
+        connection.last_opened_at = Some(Utc::now());
+        connection.ssh = Some(SavedSshConfig {
+            host: "bastion".into(),
+            port: 22,
+            username: "u".into(),
+            auth: SavedSshAuth::Password,
+            jump: None,
+        });
+        let value = serde_json::to_value(&connection).unwrap();
+        let keys: Vec<&String> = value.as_object().unwrap().keys().collect();
+        for key in &keys {
+            assert!(
+                KNOWN_CONNECTION_FIELDS.contains(&key.as_str()),
+                "{key} is serialized but missing from KNOWN_CONNECTION_FIELDS"
+            );
+        }
+        for known in KNOWN_CONNECTION_FIELDS {
+            assert!(
+                keys.iter().any(|key| key.as_str() == *known),
+                "{known} is listed but no longer serialized"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_field_written_by_a_newer_version_survives_a_rewrite() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let mut connection = sample_connection();
+        save_to(&path, std::slice::from_ref(&connection)).await.unwrap();
+
+        let mut document: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        document["connections"][0]["colour_tag"] = serde_json::json!("teal");
+        document["future_section"] = serde_json::json!({ "keep": true });
+        std::fs::write(&path, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+
+        connection.name = "Renamed".into();
+        save_to(&path, std::slice::from_ref(&connection)).await.unwrap();
+
+        let rewritten: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(rewritten["connections"][0]["colour_tag"], "teal");
+        assert_eq!(rewritten["future_section"]["keep"], true);
+        assert_eq!(rewritten["connections"][0]["name"], "Renamed");
+        assert_eq!(load_from(&path).await.unwrap()[0].name, "Renamed");
+    }
+
+    #[tokio::test]
+    async fn clearing_an_optional_field_is_not_undone_by_field_preservation() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let mut connection = sample_connection();
+        connection.tls_root_cert = Some(PathBuf::from("/etc/tablepro/corp-ca.crt"));
+        save_to(&path, std::slice::from_ref(&connection)).await.unwrap();
+
+        connection.tls_root_cert = None;
+        save_to(&path, std::slice::from_ref(&connection)).await.unwrap();
+
+        let rewritten: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(rewritten["connections"][0].get("tls_root_cert").is_none());
+        assert!(load_from(&path).await.unwrap()[0].tls_root_cert.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_file_written_by_this_version_still_loads_unchanged() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let original = vec![sample_connection()];
+        save_to(&path, &original).await.unwrap();
+        save_to(&path, &original).await.unwrap();
+        assert_eq!(load_from(&path).await.unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_previous_file_does_not_block_a_save() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        std::fs::write(&path, b"{ not json").unwrap();
+        let original = vec![sample_connection()];
+        save_to(&path, &original).await.unwrap();
+        assert_eq!(load_from(&path).await.unwrap(), original);
     }
 }
