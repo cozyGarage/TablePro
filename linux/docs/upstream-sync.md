@@ -49,3 +49,23 @@ The entry should describe behavior, not file-by-file source movement. There shou
 - Manual port: integer cells wider than the exact `f64` range, and values that do not parse, now open an exact text editor instead of a spin button. CSV export resolves the browse tab's own connection and reports a closed connection instead of exporting from another one.
 - Not ported: macOS view models, the Liquid Glass and Open Quickly work, license gating, and the display-format state machine. Linux has no SQL formatter, so the Format Query crash has no equivalent; the statement splitter was reviewed and covered with unterminated-literal tests instead.
 - Verification: `cargo test -p tablepro-app --bins` covers the numeric editor choice, export connection resolution, and unterminated literals in both splitter paths.
+
+## 2026-08-22: data-grid and result-correctness review, v0.62.0 through v0.67.1
+
+- Reference reviewed: `TableProApp/TablePro` `origin/main` at `159be66f5` (v0.67.1), covering the `Fixed` and `Security` entries of v0.62.0 through v0.67.1. The heaviest churn was the data grid and the SQL editor.
+- Linux relevance: eleven upstream fix clusters were checked against Rust code paths. Five described a defect that also existed here; six do not apply, because the Linux architecture differs in a way that rules the defect out. Two defects found while checking were not on the upstream list at all.
+- Manual port:
+  - A statement boundary now follows the connected engine's quoting, so a PostgreSQL dollar-quoted body runs whole and a semicolon inside a MySQL `#` comment is not a boundary. One dialect-aware lexer in `tablepro_core::sql_lex` replaced the editor's own splitter.
+  - Statements that read a host file, run a program, or send SQL to another server classify as administrative, so a read-only agent token is refused.
+  - Stop and the query timeout abort the running statement on the server for MySQL, ClickHouse and SQLite, matching the PostgreSQL behaviour that was already verified. SQL Server retires the connection instead, because tiberius cannot send the TDS attention packet.
+  - Copy row as INSERT omits generated columns, which every engine rejects, and escapes each value the way the connected engine reads it.
+  - A cell edit is discarded if the row it opened on is no longer at that position, instead of being written to whichever row took its place.
+- Not applicable, with the reason:
+  - Results wrongly editable for `UNION`, joins, subqueries and CTEs: the Linux editor renders results read-only, so no table identity is ever inferred from a result set.
+  - Rows-per-page overflow crashing, a page number typed for one tab applying to another, and rows past a row-count estimate being unreachable: page size comes from a fixed dropdown, pagination state is per browse tab, row counts are exact rather than estimated, and Next is enabled from the page being full rather than from a total.
+  - A failing query showing a blank result area: the failing statement's own message is already rendered in its result tab.
+  - ClickHouse Verify Ca falling back to public roots: a named certificate authority replaces the public roots outright, and an unreadable or empty authority file is an error.
+- Found while reviewing, not on the upstream list:
+  - The rendered INSERT escaped only quotes. MySQL and ClickHouse read a backslash as an escape, so a stored value ending in one closed the literal early and the rest parsed as SQL. Confirmed against MySQL 8.1, which evaluated the payload as an expression and returned 1.
+  - Every SQLite column with no declared type decoded as NULL, so `count(*)` and any expression showed an empty cell.
+- Verification: `tablepro_core::sql_lex` and `sql_literal` unit tests, `crates/core/tests/query_pipeline.rs`, the MySQL, ClickHouse, SQLite and SQL Server container suites, the PostgreSQL release fixture, and the installed GTK suite.
