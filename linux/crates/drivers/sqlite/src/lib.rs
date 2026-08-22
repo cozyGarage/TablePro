@@ -42,6 +42,14 @@ impl DatabaseDriver for SqliteDriver {
         true
     }
 
+    fn supports_index_metadata(&self) -> bool {
+        true
+    }
+
+    fn supports_foreign_key_metadata(&self) -> bool {
+        true
+    }
+
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
         let url = if opts.database.is_empty() || opts.database == ":memory:" {
             "sqlite::memory:".to_string()
@@ -683,6 +691,16 @@ fn map_sqlx_error(err: sqlx::Error) -> DriverError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structure_metadata_declarations_match_the_connection_impl() {
+        let d = SqliteDriver;
+        let source = include_str!("lib.rs");
+        assert!(d.supports_index_metadata());
+        assert!(d.supports_foreign_key_metadata());
+        assert!(source.contains(&["async fn ", "fetch_indexes("].concat()));
+        assert!(source.contains(&["async fn ", "fetch_foreign_keys("].concat()));
+    }
     use tempfile::TempDir;
 
     fn opts_for(path: &str) -> ConnectOptions {

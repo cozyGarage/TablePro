@@ -410,6 +410,16 @@ fn map_duck_error(err: duckdb::Error) -> DriverError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structure_metadata_is_not_declared_without_a_fetch() {
+        let d = DuckdbDriver;
+        let source = include_str!("lib.rs");
+        assert!(!d.supports_index_metadata());
+        assert!(!d.supports_foreign_key_metadata());
+        assert!(!source.contains(&["async fn ", "fetch_indexes("].concat()));
+        assert!(!source.contains(&["async fn ", "fetch_foreign_keys("].concat()));
+    }
     use tempfile::TempDir;
 
     #[test]

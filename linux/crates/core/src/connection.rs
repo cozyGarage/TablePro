@@ -196,13 +196,16 @@ pub trait Connection: Send + Sync {
     }
     /// Indexes defined on `table`. Implementations may include the
     /// implicit primary-key index with `primary = true` so the UI can
-    /// render it as read-only. Default returns empty so existing
-    /// drivers compile before they're filled in.
+    /// render it as read-only. The default answers with an empty list,
+    /// which says nothing about whether the engine has indexes at all:
+    /// `DatabaseDriver::supports_index_metadata` is what tells a caller
+    /// whether this list can be trusted as "none".
     async fn fetch_indexes(&self, _schema: Option<&str>, _table: &str) -> Result<Vec<IndexInfo>, DriverError> {
         Ok(Vec::new())
     }
-    /// Foreign-key constraints declared on `table`. Default returns
-    /// empty for the same reason as `fetch_indexes`.
+    /// Foreign-key constraints declared on `table`. Empty carries the
+    /// same ambiguity as `fetch_indexes`; read
+    /// `DatabaseDriver::supports_foreign_key_metadata` alongside it.
     async fn fetch_foreign_keys(
         &self,
         _schema: Option<&str>,

@@ -1,0 +1,9 @@
+# Ratchet ceilings for panic sites in production Rust (unwrap, expect,
+# panic!, todo!, unimplemented!, unreachable!).
+# scripts/check-panic-sites.sh fails when a listed file grows past its max,
+# or when an unlisted production file has any at all.
+# Lower a max when you remove a site. Do not raise a max; return a typed error instead.
+crates/app/src/ui/app/shortcuts.rs 1
+crates/app/src/ui/cell_editor.rs 6
+crates/app/src/ui/grid/context_menu.rs 2
+crates/app/src/ui/structure_tab/columns.rs 1

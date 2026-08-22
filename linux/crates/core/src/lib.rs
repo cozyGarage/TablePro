@@ -16,7 +16,7 @@ pub mod sql_literal;
 mod tls;
 mod transaction;
 
-pub use activity::{ActivityQuery, activity_sql, parse_session_id};
+pub use activity::{ActivityQuery, ActivityUnsupported, activity_kinds, activity_sql, parse_session_id};
 pub use connection::{AuthMode, ConnectOptions, Connection, SocketOrigin, Transport};
 pub use driver::{DatabaseDriver, DriverMaturity};
 pub use error::DriverError;

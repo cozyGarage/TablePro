@@ -615,6 +615,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn structure_metadata_is_not_declared_without_a_fetch() {
+        let d = MongodbDriver;
+        let source = include_str!("lib.rs");
+        assert!(!d.supports_index_metadata());
+        assert!(!d.supports_foreign_key_metadata());
+        assert!(!source.contains(&["async fn ", "fetch_indexes("].concat()));
+        assert!(!source.contains(&["async fn ", "fetch_foreign_keys("].concat()));
+    }
+
+    #[test]
     fn driver_metadata() {
         let d = MongodbDriver;
         assert_eq!(d.id(), "mongodb");

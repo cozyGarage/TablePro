@@ -30,6 +30,14 @@ impl DatabaseDriver for MysqlDriver {
         3306
     }
 
+    fn supports_index_metadata(&self) -> bool {
+        true
+    }
+
+    fn supports_foreign_key_metadata(&self) -> bool {
+        true
+    }
+
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
         use tablepro_core::TlsMode;
         let mut mysql_opts = MySqlConnectOptions::new()
@@ -683,6 +691,16 @@ fn map_sqlx_error(err: sqlx::Error) -> DriverError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structure_metadata_declarations_match_the_connection_impl() {
+        let d = MysqlDriver;
+        let source = include_str!("lib.rs");
+        assert!(d.supports_index_metadata());
+        assert!(d.supports_foreign_key_metadata());
+        assert!(source.contains(&["async fn ", "fetch_indexes("].concat()));
+        assert!(source.contains(&["async fn ", "fetch_foreign_keys("].concat()));
+    }
 
     #[test]
     fn driver_metadata() {

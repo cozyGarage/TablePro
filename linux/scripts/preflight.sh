@@ -49,6 +49,9 @@ echo "==> file size guardrail"
 echo "==> bounded database operations in the GUI"
 "$ROOT/scripts/check-bounded-operations.sh"
 
+echo "==> panic sites in production code"
+"$ROOT/scripts/check-panic-sites.sh"
+
 echo "==> cargo fmt --check (workspace)"
 cargo fmt --all -- --check
 

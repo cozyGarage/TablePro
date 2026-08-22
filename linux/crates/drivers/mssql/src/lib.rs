@@ -63,6 +63,14 @@ impl DatabaseDriver for MssqlDriver {
         true
     }
 
+    fn supports_index_metadata(&self) -> bool {
+        true
+    }
+
+    fn supports_foreign_key_metadata(&self) -> bool {
+        true
+    }
+
     fn supports_integrated_auth(&self) -> bool {
         true
     }
@@ -822,6 +830,16 @@ fn map_tiberius_error(err: tiberius::error::Error) -> DriverError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structure_metadata_declarations_match_the_connection_impl() {
+        let d = MssqlDriver;
+        let source = include_str!("lib.rs");
+        assert!(d.supports_index_metadata());
+        assert!(d.supports_foreign_key_metadata());
+        assert!(source.contains(&["async fn ", "fetch_indexes("].concat()));
+        assert!(source.contains(&["async fn ", "fetch_foreign_keys("].concat()));
+    }
 
     #[test]
     fn driver_metadata() {

@@ -114,3 +114,40 @@ async fn an_already_cancelled_control_never_reaches_the_database() {
         .expect_err("a cancelled control must refuse before dispatch");
     assert!(matches!(error, DriverError::Cancelled), "unexpected error: {error:?}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_declared_structure_capability_returns_real_catalog_rows() {
+    let directory = TempDir::new().expect("temp dir");
+    let connection = connect_file(&directory).await;
+    connection
+        .execute("CREATE TABLE parent (id INTEGER PRIMARY KEY)")
+        .await
+        .expect("create the referenced table");
+    connection
+        .execute("CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id))")
+        .await
+        .expect("create the referencing table");
+    connection
+        .execute("CREATE UNIQUE INDEX child_parent_idx ON child(parent_id)")
+        .await
+        .expect("create the index");
+
+    assert!(SqliteDriver.supports_index_metadata());
+    let indexes = connection.fetch_indexes(None, "child").await.expect("fetch indexes");
+    assert!(
+        indexes.iter().any(|index| index.name == "child_parent_idx"),
+        "a driver that declares index support must return the index it created: {indexes:?}"
+    );
+
+    assert!(SqliteDriver.supports_foreign_key_metadata());
+    let foreign_keys = connection
+        .fetch_foreign_keys(None, "child")
+        .await
+        .expect("fetch foreign keys");
+    assert!(
+        foreign_keys
+            .iter()
+            .any(|key| key.ref_table == "parent" && key.columns == vec!["parent_id".to_string()]),
+        "a driver that declares foreign-key support must return the constraint it created: {foreign_keys:?}"
+    );
+}
