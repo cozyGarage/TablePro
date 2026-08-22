@@ -26,6 +26,38 @@ impl Default for McpServerConfig {
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const DISCARD_CHUNK_BYTES: u64 = 8 * 1024;
 
+/// Revision advertised to a client that does not ask for one, and the
+/// older revisions still accepted from a client that does.
+const PROTOCOL_VERSION: &str = "2026-07-28";
+const ACCEPTED_PROTOCOL_VERSIONS: &[&str] = &[PROTOCOL_VERSION, "2025-11-25", "2025-06-18"];
+
+fn negotiate_protocol_version(params: &JsonValue) -> Result<&'static str, String> {
+    let Some(requested) = params.get("protocolVersion") else {
+        return Ok(PROTOCOL_VERSION);
+    };
+    let requested = requested
+        .as_str()
+        .ok_or_else(|| "protocolVersion must be a string".to_string())?;
+    ACCEPTED_PROTOCOL_VERSIONS
+        .iter()
+        .find(|accepted| **accepted == requested)
+        .copied()
+        .ok_or_else(|| format!("unsupported protocolVersion; this server accepts {ACCEPTED_PROTOCOL_VERSIONS:?}"))
+}
+
+fn initialize_result(params: &JsonValue) -> Result<JsonValue, String> {
+    let version = negotiate_protocol_version(params)?;
+    Ok(json!({
+        "protocolVersion": version,
+        "capabilities": {"tools": {}},
+        "serverInfo": {"name": "tablepro", "version": "0.1.0"}
+    }))
+}
+
+fn json_rpc_error(id: &JsonValue, code: i64, message: String) -> JsonValue {
+    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
+}
+
 /// Loopback-only bind resolution. A host that is not a loopback literal
 /// is refused before any socket is opened; there is no configuration
 /// that reaches a routable interface.
@@ -121,15 +153,10 @@ pub async fn serve_stdio(bridge: Arc<McpBridge>) -> Result<(), String> {
         let params = request.get("params").cloned().unwrap_or(json!({}));
 
         let response = match method {
-            "initialize" => json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "protocolVersion": "2025-11-25",
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "tablepro", "version": "0.1.0"}
-                }
-            }),
+            "initialize" => match initialize_result(&params) {
+                Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                Err(message) => json_rpc_error(&id, -32602, message),
+            },
             "notifications/initialized" | "initialized" => continue,
             "tools/list" => json!({
                 "jsonrpc": "2.0",
@@ -292,16 +319,17 @@ pub async fn serve_streamable_http(bridge: Arc<McpBridge>, config: McpServerConf
                             "inputSchema": tool_schema(name),
                         })).collect::<Vec<_>>()
                     })),
-                    "initialize" => Ok(json!({
-                        "protocolVersion": "2025-11-25",
-                        "capabilities": {"tools": {}},
-                        "serverInfo": {"name": "tablepro", "version": "0.1.0"}
-                    })),
+                    "initialize" => match initialize_result(&params) {
+                        Ok(result) => Ok(result),
+                        Err(message) => {
+                            return Json(json_rpc_error(&id, -32602, message)).into_response();
+                        }
+                    },
                     other => Err(format!("unsupported method: {other}")),
                 };
                 let response = match result {
                     Ok(r) => json!({"jsonrpc": "2.0", "id": id, "result": r}),
-                    Err(e) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": e}}),
+                    Err(e) => json_rpc_error(&id, -32000, e),
                 };
                 Json(response).into_response()
             }
@@ -343,6 +371,30 @@ mod tests {
         discard_rest_of_line(&mut reader).await.unwrap();
         let mut next = String::new();
         assert_eq!(reader.read_line(&mut next).await.unwrap(), 0);
+    }
+
+    #[test]
+    fn the_advertised_protocol_revision_is_the_current_one() {
+        let result = initialize_result(&json!({})).expect("no requested revision negotiates");
+        assert_eq!(result["protocolVersion"], "2026-07-28");
+    }
+
+    #[test]
+    fn an_older_client_revision_is_accepted_and_echoed() {
+        for older in ["2025-11-25", "2025-06-18"] {
+            let result = initialize_result(&json!({"protocolVersion": older})).expect("older revision");
+            assert_eq!(result["protocolVersion"], older);
+        }
+    }
+
+    #[test]
+    fn an_unknown_protocol_revision_is_refused_as_invalid_params() {
+        for bad in [json!("2019-01-01"), json!("garbage"), json!(7), json!(null)] {
+            let message =
+                initialize_result(&json!({"protocolVersion": bad})).expect_err("an unknown revision must be refused");
+            let error = json_rpc_error(&JsonValue::from(1), -32602, message);
+            assert_eq!(error["error"]["code"], -32602);
+        }
     }
 
     #[test]
