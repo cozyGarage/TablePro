@@ -129,6 +129,7 @@ async fn guarded_tool_path_journals_policy_decision() {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let raw: Arc<dyn Connection> = Arc::new(StubConn {
                 sql_log: Arc::new(std::sync::Mutex::new(Vec::new())),
+                page_log: Arc::new(std::sync::Mutex::new(Vec::new())),
                 result: QueryResult {
                     columns: vec![],
                     rows: vec![vec![Value::Int(1)]],
@@ -273,6 +274,159 @@ async fn csv_export_escapes_separators_quotes_and_newlines() {
     assert_eq!(content, "note,plain\n\"a,b\"\"c\nd\",ok\n");
 }
 
+async fn read_only_harness(
+    allowlist: Vec<Uuid>,
+) -> (
+    Arc<RecordingProvider>,
+    McpBridge,
+    tablepro_mcp::McpToken,
+    tempfile::TempDir,
+) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(TokenStore::open(dir.path().join("tokens.json")).unwrap());
+    let (_metadata, plaintext) = store
+        .issue("ro".into(), TokenPermissions::ReadOnly, allowlist, None)
+        .unwrap();
+    let provider = Arc::new(RecordingProvider::default());
+    let bridge = McpBridge::new(provider.clone(), store);
+    let token = bridge.authenticate(&plaintext).unwrap();
+    (provider, bridge, token, dir)
+}
+
+#[tokio::test]
+async fn table_schema_reads_columns_keys_and_indexes_with_read_scope_only() {
+    let (provider, bridge, token, _dir) = read_only_harness(vec![Uuid::nil()]).await;
+
+    let out = tablepro_mcp::dispatch(
+        &bridge,
+        &token,
+        "table_schema",
+        serde_json::json!({"connection_id": Uuid::nil().to_string(), "schema": "public", "table": "items"}),
+    )
+    .await
+    .expect("a read-scoped token may read table metadata");
+
+    assert_eq!(out["primary_key"], serde_json::json!(["id"]));
+    assert_eq!(out["columns"].as_array().unwrap().len(), 2);
+    assert_eq!(out["indexes"][0]["name"], "items_pkey");
+    assert_eq!(out["foreign_keys"][0]["ref_table"], "notes");
+    assert!(provider.executed_sql().is_empty(), "metadata must not run free SQL");
+}
+
+#[tokio::test]
+async fn table_schema_is_denied_for_a_connection_outside_the_allowlist() {
+    let (provider, bridge, token, _dir) = read_only_harness(vec![Uuid::nil()]).await;
+
+    let error = tablepro_mcp::dispatch(
+        &bridge,
+        &token,
+        "table_schema",
+        serde_json::json!({"connection_id": Uuid::max().to_string(), "table": "items"}),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.contains("not allowed to access this connection"), "{error}");
+    assert_eq!(provider.connection_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn count_rows_counts_a_quoted_target_with_read_scope_only() {
+    let (provider, bridge, token, _dir) = read_only_harness(vec![Uuid::nil()]).await;
+
+    let out = tablepro_mcp::dispatch(
+        &bridge,
+        &token,
+        "count_rows",
+        serde_json::json!({"connection_id": Uuid::nil().to_string(), "schema": "public", "table": "it\"ems"}),
+    )
+    .await
+    .expect("a read-scoped token may count rows");
+
+    assert_eq!(out["row_count"], 1);
+    assert_eq!(out["exact"], true);
+    assert_eq!(
+        provider.executed_sql(),
+        vec!["SELECT COUNT(*) AS row_count FROM \"public\".\"it\"\"ems\"".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn count_rows_is_denied_for_a_token_with_an_empty_allowlist() {
+    let (provider, bridge, token, _dir) = read_only_harness(vec![]).await;
+
+    let error = tablepro_mcp::dispatch(
+        &bridge,
+        &token,
+        "count_rows",
+        serde_json::json!({"connection_id": Uuid::nil().to_string(), "table": "items"}),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.contains("allowlist"), "{error}");
+    assert!(provider.executed_sql().is_empty());
+    assert_eq!(provider.connection_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn browse_table_pages_within_the_row_limit() {
+    let (provider, bridge, token, _dir) = read_only_harness(vec![Uuid::nil()]).await;
+
+    let page = tablepro_mcp::dispatch(
+        &bridge,
+        &token,
+        "browse_table",
+        serde_json::json!({"connection_id": Uuid::nil().to_string(), "table": "items", "offset": 10, "limit": 3}),
+    )
+    .await
+    .expect("a read-scoped token may browse a page");
+    assert_eq!(page["offset"], 10);
+    assert_eq!(page["rows"], serde_json::json!([[10], [11], [12]]));
+    assert_eq!(page["truncated"], false);
+
+    let capped = tablepro_mcp::dispatch(
+        &bridge,
+        &token,
+        "browse_table",
+        serde_json::json!({"connection_id": Uuid::nil().to_string(), "table": "items", "limit": 100_000}),
+    )
+    .await
+    .expect("an oversized page is capped, not refused");
+    assert_eq!(capped["rows"].as_array().unwrap().len(), 500);
+    assert_eq!(capped["truncated"], true);
+
+    assert_eq!(provider.requested_pages(), vec![(10, 3), (0, 500)]);
+}
+
+#[tokio::test]
+async fn browse_table_refuses_a_negative_page_and_an_unlisted_connection() {
+    let (provider, bridge, token, _dir) = read_only_harness(vec![Uuid::nil()]).await;
+
+    let bad_offset = tablepro_mcp::dispatch(
+        &bridge,
+        &token,
+        "browse_table",
+        serde_json::json!({"connection_id": Uuid::nil().to_string(), "table": "items", "offset": -5}),
+    )
+    .await
+    .unwrap_err();
+    assert!(bad_offset.contains("non-negative"), "{bad_offset}");
+
+    let denied = tablepro_mcp::dispatch(
+        &bridge,
+        &token,
+        "browse_table",
+        serde_json::json!({"connection_id": Uuid::max().to_string(), "table": "items"}),
+    )
+    .await
+    .unwrap_err();
+    assert!(denied.contains("not allowed to access this connection"), "{denied}");
+
+    assert!(provider.requested_pages().is_empty());
+    assert_eq!(provider.connection_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
 fn column(name: &str) -> ColumnInfo {
     ColumnInfo {
         name: name.into(),
@@ -289,6 +443,7 @@ struct RecordingProvider {
     connection_calls: std::sync::atomic::AtomicUsize,
     driver_id: String,
     sql_log: Arc<std::sync::Mutex<Vec<String>>>,
+    page_log: Arc<std::sync::Mutex<Vec<(u64, u64)>>>,
     result: QueryResult,
 }
 
@@ -298,6 +453,7 @@ impl Default for RecordingProvider {
             connection_calls: std::sync::atomic::AtomicUsize::new(0),
             driver_id: "postgres".into(),
             sql_log: Arc::new(std::sync::Mutex::new(Vec::new())),
+            page_log: Arc::new(std::sync::Mutex::new(Vec::new())),
             result: QueryResult {
                 columns: vec![],
                 rows: vec![vec![Value::Int(1)]],
@@ -326,6 +482,10 @@ impl RecordingProvider {
         self.sql_log.lock().unwrap().clone()
     }
 
+    fn requested_pages(&self) -> Vec<(u64, u64)> {
+        self.page_log.lock().unwrap().clone()
+    }
+
     fn saved(&self, connection_id: Uuid) -> SavedConnection {
         SavedConnection {
             id: connection_id,
@@ -350,6 +510,7 @@ impl RecordingProvider {
 
 struct StubConn {
     sql_log: Arc<std::sync::Mutex<Vec<String>>>,
+    page_log: Arc<std::sync::Mutex<Vec<(u64, u64)>>>,
     result: QueryResult,
 }
 
@@ -359,12 +520,16 @@ impl Connection for StubConn {
         Ok(vec![])
     }
     async fn fetch_columns(&self, _: Option<&str>, _: &str) -> Result<Vec<ColumnInfo>, DriverError> {
-        Ok(vec![])
+        let mut id = column("id");
+        id.primary_key = true;
+        id.nullable = false;
+        Ok(vec![id, column("note")])
     }
-    async fn fetch_rows(&self, _: Option<&str>, _: &str, _: u64, _: u64) -> Result<QueryResult, DriverError> {
+    async fn fetch_rows(&self, _: Option<&str>, _: &str, offset: u64, limit: u64) -> Result<QueryResult, DriverError> {
+        self.page_log.lock().unwrap().push((offset, limit));
         Ok(QueryResult {
-            columns: vec![],
-            rows: vec![],
+            columns: vec![column("id")],
+            rows: (0..limit).map(|i| vec![Value::Int((offset + i) as i64)]).collect(),
             truncated: false,
         })
     }
@@ -382,10 +547,23 @@ impl Connection for StubConn {
         Err(DriverError::PolicyDenied("journalled deny".into()))
     }
     async fn fetch_indexes(&self, _: Option<&str>, _: &str) -> Result<Vec<IndexInfo>, DriverError> {
-        Ok(vec![])
+        Ok(vec![IndexInfo {
+            name: "items_pkey".into(),
+            columns: vec!["id".into()],
+            unique: true,
+            primary: true,
+        }])
     }
     async fn fetch_foreign_keys(&self, _: Option<&str>, _: &str) -> Result<Vec<ForeignKeyInfo>, DriverError> {
-        Ok(vec![])
+        Ok(vec![ForeignKeyInfo {
+            name: "items_note_fkey".into(),
+            columns: vec!["note".into()],
+            ref_schema: Some("public".into()),
+            ref_table: "notes".into(),
+            ref_columns: vec!["id".into()],
+            on_delete: Some("CASCADE".into()),
+            on_update: None,
+        }])
     }
     async fn ping(&self) -> Result<(), DriverError> {
         Ok(())
@@ -404,6 +582,7 @@ impl ConnectionProvider for RecordingProvider {
         self.connection_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(Arc::new(StubConn {
             sql_log: self.sql_log.clone(),
+            page_log: self.page_log.clone(),
             result: self.result.clone(),
         }))
     }

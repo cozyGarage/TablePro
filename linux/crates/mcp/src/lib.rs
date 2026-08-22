@@ -14,7 +14,7 @@ mod tokens;
 mod tools;
 
 pub use auth::{McpScope, TokenPermissions, authorize_scopes};
-pub use bridge::{ConnectionProvider, McpBridge, McpLimits};
+pub use bridge::{ConnectionProvider, McpBridge, McpLimits, TableSchema};
 pub use rate_limit::RateLimiter;
 pub use server::{McpServerConfig, serve_stdio, serve_streamable_http};
 pub use tokens::{McpToken, TokenStore, generate_token};

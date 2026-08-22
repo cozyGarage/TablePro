@@ -1,7 +1,11 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use tablepro_core::{Connection, ExecResult, OperationControl, QueryResult, TableInfo};
+use tablepro_core::sql_dialect::quote_ident;
+use tablepro_core::{
+    ColumnInfo, Connection, ExecResult, ForeignKeyInfo, IndexInfo, OperationControl, QueryResult, TableInfo, Value,
+    check_pre_dispatch,
+};
 use tablepro_policy::Principal;
 use tablepro_storage::SavedConnection;
 use tokio::time::Instant;
@@ -19,6 +23,8 @@ pub trait ConnectionProvider: Send + Sync {
     async fn list_saved_connections(&self) -> Result<Vec<SavedConnection>, String>;
     async fn connection(&self, connection_id: Uuid, principal: Principal) -> Result<Arc<dyn Connection>, String>;
 }
+
+const MAX_IDENTIFIER_BYTES: usize = 256;
 
 pub struct McpBridge {
     provider: Arc<dyn ConnectionProvider>,
@@ -157,6 +163,100 @@ impl McpBridge {
         .await
     }
 
+    pub async fn table_schema(
+        &self,
+        token: &McpToken,
+        connection_id: Uuid,
+        schema: Option<String>,
+        table: String,
+    ) -> Result<TableSchema, String> {
+        let table = validated_identifier(&table)?;
+        let schema = match schema {
+            Some(schema) => Some(validated_identifier(&schema)?),
+            None => None,
+        };
+        let timeout = self.query_timeout_secs;
+        self.with_connection(token, connection_id, move |conn| {
+            Box::pin(async move {
+                let control = operation_control(timeout);
+                let columns = conn
+                    .fetch_columns_controlled(schema.as_deref(), &table, &control)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                check_pre_dispatch(&control).map_err(|e| e.to_string())?;
+                let indexes = conn
+                    .fetch_indexes(schema.as_deref(), &table)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                check_pre_dispatch(&control).map_err(|e| e.to_string())?;
+                let foreign_keys = conn
+                    .fetch_foreign_keys(schema.as_deref(), &table)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(TableSchema {
+                    columns,
+                    indexes,
+                    foreign_keys,
+                })
+            })
+        })
+        .await
+    }
+
+    pub async fn count_rows(
+        &self,
+        token: &McpToken,
+        connection_id: Uuid,
+        schema: Option<String>,
+        table: String,
+    ) -> Result<u64, String> {
+        let driver_id = self.driver_id_for(token, connection_id).await?;
+        let sql = count_statement(&driver_id, schema.as_deref(), &table)?;
+        let result = self.execute_query(token, connection_id, &sql).await?;
+        let value = result
+            .rows
+            .first()
+            .and_then(|row| row.first())
+            .ok_or("the engine returned no count row")?;
+        count_from_value(value)
+    }
+
+    pub async fn browse_table(
+        &self,
+        token: &McpToken,
+        connection_id: Uuid,
+        schema: Option<String>,
+        table: String,
+        offset: u64,
+        limit: u64,
+    ) -> Result<QueryResult, String> {
+        let table = validated_identifier(&table)?;
+        let schema = match schema {
+            Some(schema) => Some(validated_identifier(&schema)?),
+            None => None,
+        };
+        let capped = limit.clamp(1, self.max_rows);
+        let timeout = self.query_timeout_secs;
+        self.with_connection(token, connection_id, move |conn| {
+            Box::pin(async move {
+                let control = operation_control(timeout);
+                let mut result = conn
+                    .fetch_rows_controlled(schema.as_deref(), &table, offset, capped, &control)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if result.rows.len() as u64 > capped {
+                    result.rows.truncate(capped as usize);
+                    result.truncated = true;
+                }
+                if limit > capped {
+                    result.truncated = true;
+                }
+                Ok(result)
+            })
+        })
+        .await
+    }
+
     pub async fn execute_write(
         &self,
         token: &McpToken,
@@ -207,9 +307,50 @@ impl McpBridge {
 }
 
 #[derive(Debug, Clone)]
+pub struct TableSchema {
+    pub columns: Vec<ColumnInfo>,
+    pub indexes: Vec<IndexInfo>,
+    pub foreign_keys: Vec<ForeignKeyInfo>,
+}
+
+#[derive(Debug, Clone)]
 pub enum WriteOutcome {
     Preview { rows_affected: u64, rolled_back: bool },
     Committed { rows_affected: u64 },
+}
+
+fn validated_identifier(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("identifier must not be empty".into());
+    }
+    if trimmed.len() > MAX_IDENTIFIER_BYTES {
+        return Err(format!("identifier exceeds {MAX_IDENTIFIER_BYTES} bytes"));
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err("identifier must not contain control characters".into());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn count_statement(driver_id: &str, schema: Option<&str>, table: &str) -> Result<String, String> {
+    let table = quote_ident(driver_id, &validated_identifier(table)?);
+    let target = match schema {
+        Some(schema) => format!("{}.{}", quote_ident(driver_id, &validated_identifier(schema)?), table),
+        None => table,
+    };
+    Ok(format!("SELECT COUNT(*) AS row_count FROM {target}"))
+}
+
+fn count_from_value(value: &Value) -> Result<u64, String> {
+    match value {
+        Value::Int(count) if *count >= 0 => Ok(*count as u64),
+        Value::Decimal(count) => count
+            .to_string()
+            .parse::<u64>()
+            .map_err(|_| "the engine returned a count this tool cannot read".to_string()),
+        _ => Err("the engine returned a count this tool cannot read".into()),
+    }
 }
 
 fn operation_control(timeout_secs: u64) -> OperationControl {
@@ -226,7 +367,47 @@ fn sql_looks_like_write(sql: &str, driver_id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{McpLimits, sql_looks_like_write};
+    use super::{McpLimits, count_from_value, count_statement, sql_looks_like_write, validated_identifier};
+    use tablepro_core::Value;
+
+    #[test]
+    fn a_count_statement_quotes_the_target_for_the_engine() {
+        assert_eq!(
+            count_statement("postgres", Some("public"), "items").unwrap(),
+            "SELECT COUNT(*) AS row_count FROM \"public\".\"items\""
+        );
+        assert_eq!(
+            count_statement("mysql", None, "items").unwrap(),
+            "SELECT COUNT(*) AS row_count FROM `items`"
+        );
+        assert_eq!(
+            count_statement("mssql", None, "it]ems").unwrap(),
+            "SELECT COUNT(*) AS row_count FROM [it]]ems]"
+        );
+    }
+
+    #[test]
+    fn a_hostile_identifier_cannot_escape_its_quotes() {
+        let sql = count_statement("postgres", None, "items\"; TRUNCATE users --").unwrap();
+        assert_eq!(
+            sql,
+            "SELECT COUNT(*) AS row_count FROM \"items\"\"; TRUNCATE users --\""
+        );
+        assert!(validated_identifier("").is_err());
+        assert!(validated_identifier("  ").is_err());
+        assert!(validated_identifier("items\nitems").is_err());
+        assert!(validated_identifier("items\0").is_err());
+        assert!(validated_identifier(&"x".repeat(1024)).is_err());
+    }
+
+    #[test]
+    fn only_a_non_negative_integer_count_is_accepted() {
+        assert_eq!(count_from_value(&Value::Int(7)).unwrap(), 7);
+        assert_eq!(count_from_value(&Value::Decimal(12.into())).unwrap(), 12);
+        assert!(count_from_value(&Value::Int(-1)).is_err());
+        assert!(count_from_value(&Value::Text("7".into())).is_err());
+        assert!(count_from_value(&Value::Null).is_err());
+    }
 
     #[test]
     fn the_default_limits_are_the_values_the_bridge_has_always_used() {

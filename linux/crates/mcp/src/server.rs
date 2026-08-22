@@ -228,6 +228,9 @@ fn tool_description(name: &str) -> &'static str {
         "execute_write" => "Run a write with optional transaction preview (preview=true by default)",
         "explain_query" => "Run EXPLAIN on a SQL statement",
         "export_data" => "Run a query and return CSV or JSON",
+        "table_schema" => "Read the columns, primary key, indexes and foreign keys of a table",
+        "count_rows" => "Count the rows of a table exactly",
+        "browse_table" => "Read a page of table rows by offset and limit",
         _ => "",
     }
 }
@@ -246,12 +249,24 @@ fn tool_schema(name: &str) -> JsonValue {
             },
             "required": ["connection_id"]
         }),
-        "describe_table" => json!({
+        "describe_table" | "table_schema" | "count_rows" => json!({
             "type": "object",
             "properties": {
                 "connection_id": {"type": "string"},
                 "schema": {"type": "string"},
                 "table": {"type": "string"},
+                "token": {"type": "string"}
+            },
+            "required": ["connection_id", "table"]
+        }),
+        "browse_table" => json!({
+            "type": "object",
+            "properties": {
+                "connection_id": {"type": "string"},
+                "schema": {"type": "string"},
+                "table": {"type": "string"},
+                "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1},
                 "token": {"type": "string"}
             },
             "required": ["connection_id", "table"]

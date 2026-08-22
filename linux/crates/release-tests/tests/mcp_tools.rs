@@ -251,3 +251,86 @@ async fn a_denied_agent_write_is_journalled() {
         .expect("read the audit journal");
     assert!(!entries.is_empty(), "a denied write must leave an audit record");
 }
+
+#[tokio::test]
+#[ignore = "requires the postgres release fixture"]
+async fn a_read_scoped_agent_reads_table_metadata_a_count_and_a_page() {
+    let harness = Harness::open(TokenPermissions::ReadOnly, false).await;
+    let expected = harness.item_count().await;
+
+    let schema = harness
+        .call(
+            "table_schema",
+            json!({"connection_id": harness.connection_id.to_string(), "schema": "public", "table": "release_items"}),
+        )
+        .await
+        .expect("a read-scoped token may read table metadata");
+    let columns = schema.get("columns").and_then(|v| v.as_array()).expect("columns");
+    assert!(columns.iter().any(|c| c["name"] == "id"), "{schema}");
+    assert_eq!(schema["primary_key"], json!(["id"]));
+
+    let count = harness
+        .call(
+            "count_rows",
+            json!({"connection_id": harness.connection_id.to_string(), "schema": "public", "table": "release_items"}),
+        )
+        .await
+        .expect("a read-scoped token may count rows");
+    assert_eq!(count["row_count"], json!(expected));
+    assert_eq!(count["exact"], json!(true));
+
+    let page = harness
+        .call(
+            "browse_table",
+            json!({
+                "connection_id": harness.connection_id.to_string(),
+                "schema": "public",
+                "table": "release_items",
+                "offset": 1,
+                "limit": 1,
+            }),
+        )
+        .await
+        .expect("a read-scoped token may browse a page");
+    assert_eq!(page["offset"], json!(1));
+    assert_eq!(page["rows"].as_array().expect("rows").len(), 1);
+}
+
+#[tokio::test]
+#[ignore = "requires the postgres release fixture"]
+async fn a_metadata_tool_is_refused_for_a_connection_outside_the_allowlist() {
+    let harness = Harness::open(TokenPermissions::ReadOnly, false).await;
+    let unlisted = Uuid::new_v4().to_string();
+
+    for tool in ["table_schema", "count_rows", "browse_table"] {
+        let error = harness
+            .call(tool, json!({"connection_id": unlisted, "table": "release_items"}))
+            .await
+            .expect_err(tool);
+        assert!(
+            error.contains("not allowed to access this connection"),
+            "{tool}: {error}"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires the postgres release fixture"]
+async fn a_hostile_table_name_cannot_inject_sql_through_a_metadata_tool() {
+    let harness = Harness::open(TokenPermissions::ReadOnly, false).await;
+    let before = harness.item_count().await;
+
+    let error = harness
+        .call(
+            "count_rows",
+            json!({
+                "connection_id": harness.connection_id.to_string(),
+                "table": "release_items\"; DROP TABLE release_items; --",
+            }),
+        )
+        .await
+        .expect_err("a quoted identifier must reach the engine as one name");
+
+    assert!(!error.is_empty());
+    assert_eq!(harness.item_count().await, before, "no table may be dropped");
+}
