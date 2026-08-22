@@ -5,3 +5,10 @@ target/
 docs/audit-*.md
 target/
 packaging/out/
+
+# test-quality tooling output (cargo-mutants, cargo-llvm-cov)
+/mutants.out/
+/mutants-core/
+/mutants-policy/
+/lcov.info
+/coverage.txt
