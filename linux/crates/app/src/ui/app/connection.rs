@@ -9,7 +9,7 @@ use crate::services::database_service::{ConnectionHealth, ConnectionMetadata};
 use crate::services::{connection_service, database_service};
 use crate::ui::connect_dialog::{ConnectDialog, ConnectDialogInit, ConnectDialogOutput};
 
-use super::{App, AppMsg, ConnectionTransition, SwitchDecision, qualified_label};
+use super::{App, AppMsg, ConnectionTransition, SwitchDecision};
 
 impl App {
     /// The policy-guarded connection this window owns, or `None` when the
@@ -522,76 +522,6 @@ impl App {
             _ => self.reconnect_banner.set_revealed(false),
         }
     }
-
-    pub(super) fn refresh_window_title(&self) {
-        // Subtitle: "<connection> · <driver>" when connected, empty
-        // otherwise. The active table goes in the tab title (where it
-        // already lives) — duplicating it in the WindowTitle subtitle
-        // both overruns the slot's intended ~7-word capacity and
-        // pretends the subtitle is the canonical "where am I?" widget
-        // when the tab strip already serves that role. Matches GNOME
-        // Builder (subtitle = branch name only) and Text Editor
-        // (subtitle = filename only) — short, single-purpose.
-        let metadata = self.window_metadata();
-        let connection_name = metadata.as_ref().map(|m| m.name.as_str());
-        let active = self.selected_browse_slot_table();
-        let table_pair = active.as_ref().map(|(s, t)| (s.as_deref(), t.as_str()));
-        let (mut os_title, subtitle) = match (connection_name, &self.current_driver_id, table_pair) {
-            (Some(name), Some(driver), Some((schema, table))) => {
-                let label = qualified_label(schema, table);
-                (
-                    format!("{label} · {name} — TablePro"),
-                    format_connection_subtitle(name, driver, metadata.as_ref()),
-                )
-            }
-            (Some(name), Some(driver), None) => (
-                format!("{name} — TablePro"),
-                format_connection_subtitle(name, driver, metadata.as_ref()),
-            ),
-            (None, Some(driver), _) => (format!("{driver} — TablePro"), driver.clone()),
-            _ => ("TablePro".to_string(), String::new()),
-        };
-        // GNOME Text Editor convention: prefix the OS-level window
-        // title with "• " when any open document has unsaved changes,
-        // so the dirty state is visible from the Activities overview /
-        // Alt-Tab without needing the tab to be focused.
-        if crate::services::change_tracker::any_pending_globally() {
-            os_title = format!("• {os_title}");
-        }
-        self.window.set_title(Some(&os_title));
-        self.window_title.set_subtitle(&subtitle);
-
-        // Sidebar header acts as a breadcrumb: the title shows the
-        // active connection name when connected, falling back to the
-        // generic "Tables" label on the welcome screen. Subtitle stays
-        // empty — the driver / host already lives in the main header.
-        match connection_name {
-            Some(name) => {
-                self.sidebar_title.set_title(name);
-            }
-            None => {
-                self.sidebar_title.set_title(&crate::tr!("Tables"));
-            }
-        }
-    }
-}
-
-fn format_connection_subtitle(
-    name: &str,
-    driver: &str,
-    metadata: Option<&crate::services::database_service::ConnectionMetadata>,
-) -> String {
-    let mut parts = vec![name.to_string(), driver.to_string()];
-    if let Some(meta) = metadata {
-        parts.push(meta.environment.display_name().to_string());
-        if let Some(version) = meta.server_version.as_deref().filter(|v| !v.is_empty()) {
-            parts.push(version.to_string());
-        }
-        if meta.read_only {
-            parts.push("read-only".into());
-        }
-    }
-    parts.join(" · ")
 }
 
 /// Performs the actual disk + keyring teardown for a saved connection.

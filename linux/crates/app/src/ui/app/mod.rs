@@ -1,7 +1,12 @@
 mod browse;
 mod connection;
 mod favorites;
+mod init_css;
+mod init_sidebar;
+mod init_window;
+mod init_workspace;
 mod msg;
+mod render;
 mod row_ops;
 mod schema_index;
 mod shortcuts;
@@ -21,20 +26,21 @@ use relm4::gtk::{gio, glib};
 use relm4::prelude::*;
 use relm4::{Controller, adw, gtk};
 
-use tablepro_core::{DriverRegistry, QueryResult, Value};
+use tablepro_core::DriverRegistry;
 use tablepro_storage::SavedConnection;
 use uuid::Uuid;
 
 use super::browse_tab::BrowseTabInput;
 use super::connect_dialog::ConnectDialog;
-use super::connection_row::{ConnectionRow, ConnectionRowOutput};
+use super::connection_row::ConnectionRow;
 use super::editor::build_schema_buffer;
 use super::history_dialog::HistoryDialog;
-use super::sidebar_row::{SidebarRow, SidebarRowOutput};
+use super::sidebar_row::SidebarRow;
 use super::welcome_view::{WelcomeView, WelcomeViewInit, WelcomeViewOutput};
 use crate::services::database_service::ConnectionHealth;
 
 pub use msg::AppMsg;
+use render::{qualified_label, render_json};
 use types::{CLOSED_TABS_CAPACITY, ConnectionTransition, ExportFormat, StatusKind, SwitchDecision};
 pub use types::{ClosedTabDescriptor, EditorTabSlot, OpenMode, StructureTabSlot, TableTabSlot, WorkspaceTab};
 
@@ -356,482 +362,13 @@ impl SimpleComponent for App {
     fn init(registry: Self::Init, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         let widgets = view_output!();
 
-        // Custom CSS for pending-changeset visual states. Native
-        // Adwaita classes (.warning, .success, .error) don't compose
-        // cleanly on grid cells (background colour washes the row);
-        // these rules use the same accent-tinted alpha approach
-        // GNOME Builder uses for diff markers.
-        if let Some(display) = gtk::gdk::Display::default() {
-            let provider = gtk::CssProvider::new();
-            provider.load_from_string(
-                ".tp-cell-modified {\
-                    background: alpha(@warning_color, 0.18);\
-                }\
-                .tp-row-pending-insert {\
-                    background: alpha(@success_color, 0.16);\
-                }\
-                .tp-row-pending-delete {\
-                    text-decoration: line-through;\
-                    color: alpha(@error_color, 0.7);\
-                    background: alpha(@error_color, 0.10);\
-                }\
-                /* NULL sentinel: italic only — opacity already comes\
-                   from the `dim-label` Adwaita class added alongside.\
-                */\
-                label.tp-null-sentinel {\
-                    font-style: italic;\
-                }\
-                /* Cell focus ring. GtkColumnView's default focus chevron\
-                   on cells is a 1px outline that disappears against the\
-                   selected-row highlight. A 2px inset accent ring is the\
-                   spreadsheet-standard focus-cell signal. Selectors are\
-                   explicit to avoid stacking on `GtkCheckButton`, which\
-                   already paints its own focus indicator.\
-                */\
-                columnview > listview > row > cell:focus-within > label,\
-                columnview > listview > row > cell:focus-within > .tp-cell-editor {\
-                    box-shadow: inset 0 0 0 2px @accent_color;\
-                    border-radius: 2px;\
-                }\
-                /* One-shot flash on the row that produced a failing\
-                   commit statement. Animation fades the red overlay\
-                   to transparent over ~1.8s; the bind callback\
-                   re-applies the class until the BrowseTab clears\
-                   tracker.error_row. No leftmost ribbon — the row's\
-                   background already turns red via the animation,\
-                   matching the pending-state row tints which are\
-                   themselves background-only (no extra gutter).\
-                */\
-                @keyframes tp-flash-error {\
-                    0%   { background: alpha(@error_color, 0.55); }\
-                    100% { background: alpha(@error_color, 0); }\
-                }\
-                .tp-row-leftmost-error-flash {\
-                    animation: tp-flash-error 1.8s ease-out;\
-                }",
-            );
-            gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-        }
+        init_css::install_pending_change_css();
 
-        let restored = crate::services::window_state::load();
-        widgets.window.set_default_size(restored.width, restored.height);
-        if restored.maximized {
-            widgets.window.maximize();
-        }
-        // Window-close handler. Three responsibilities: persist window
-        // size + maximize state, intercept close when any tab has
-        // unsaved edits with a Cancel | Discard | Save dialog, and
-        // route Save through the same SaveCompletedForTab plumbing as
-        // a per-tab close so failures abort cleanly.
-        let force_close: std::rc::Rc<std::cell::Cell<bool>> = std::rc::Rc::new(std::cell::Cell::new(false));
-        let force_close_for_close = force_close.clone();
-        let close_after_save_for_close: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<Uuid, u32>>> =
-            std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
-        let close_window_after_save_for_close: std::rc::Rc<std::cell::Cell<bool>> =
-            std::rc::Rc::new(std::cell::Cell::new(false));
-        let in_flight_saves: std::rc::Rc<std::cell::Cell<usize>> = std::rc::Rc::new(std::cell::Cell::new(0));
-        let close_after_save_handle = close_after_save_for_close.clone();
-        let close_window_after_save_handle = close_window_after_save_for_close.clone();
-        let in_flight_saves_handle = in_flight_saves.clone();
-        let in_flight_saves_for_close = in_flight_saves.clone();
-        let close_request_input_sender = sender.input_sender().clone();
-        widgets.window.connect_close_request(move |w| {
-            // If a Save is mid-flight (async transaction running), block
-            // the close until it resolves. Without this, the completion
-            // handler would dispatch SaveCompleted to a tab that's
-            // already gone — the transaction commits in the background
-            // with no UI feedback.
-            if !force_close_for_close.get() && in_flight_saves_for_close.get() > 0 {
-                let dialog = adw::AlertDialog::new(
-                    Some(&crate::tr!("Saving in progress")),
-                    Some(&crate::tr!(
-                        "Waiting for pending saves to finish before closing the window."
-                    )),
-                );
-                dialog.set_can_close(false);
-                dialog.present(Some(w));
-                let dialog_for_poll = dialog.clone();
-                let window_for_poll = w.clone();
-                let force_close_for_poll = force_close_for_close.clone();
-                let in_flight_for_poll = in_flight_saves_for_close.clone();
-                glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-                    if in_flight_for_poll.get() == 0 {
-                        dialog_for_poll.close();
-                        force_close_for_poll.set(true);
-                        window_for_poll.close();
-                        glib::ControlFlow::Break
-                    } else {
-                        glib::ControlFlow::Continue
-                    }
-                });
-                return glib::Propagation::Stop;
-            }
-            // Already-confirmed close path (set by the dialog handler
-            // below) — skip the guard, save state, allow close.
-            // Browse + Structure tabs share the dirty-state guard:
-            // either source of pending changes triggers the dialog.
-            let has_pending = crate::services::change_tracker::any_pending_globally()
-                || crate::services::structure_tracker::any_pending_globally();
-            if !force_close_for_close.get() && has_pending {
-                // Plural-form heading matches the per-tab dialog's
-                // tone — factual GNOME HIG language rather than the
-                // colloquial "throws them away" the body used to
-                // carry. Per-tab dialog stays specific ("Save changes
-                // to {name}"); window close groups across N tabs so
-                // it stays generic.
-                let dialog = adw::AlertDialog::new(None, None);
-                dialog.set_heading(Some(&crate::tr!("Save changes before closing?")));
-                dialog.set_body(&crate::tr!(
-                    "One or more tabs have unsaved changes. They will be permanently lost if you discard them."
-                ));
-                dialog.add_response("cancel", &crate::tr!("Cancel"));
-                dialog.add_response("discard", &crate::tr!("Discard"));
-                dialog.add_response("save", &crate::tr!("Save"));
-                dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
-                dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
-                dialog.set_default_response(Some("save"));
-                dialog.set_close_response("cancel");
-                let force_close_for_resp = force_close_for_close.clone();
-                let window_for_resp = w.clone();
-                let close_after_save_for_resp = close_after_save_for_close.clone();
-                let close_window_after_save_for_resp = close_window_after_save_for_close.clone();
-                let input_sender_for_resp = close_request_input_sender.clone();
-                dialog.connect_response(None, move |dlg, response| {
-                    dlg.close();
-                    match response {
-                        "discard" => {
-                            for tab_id in crate::services::change_tracker::pending_tabs() {
-                                crate::services::change_tracker::with_tab(tab_id, |t| t.clear());
-                            }
-                            for tab_id in crate::services::structure_tracker::pending_tabs() {
-                                crate::services::structure_tracker::with_tab(tab_id, |t| t.clear());
-                            }
-                            force_close_for_resp.set(true);
-                            // Re-fire close_request — guard sees the flag,
-                            // saves window state, returns Proceed.
-                            window_for_resp.close();
-                        }
-                        "save" => {
-                            // Commit each dirty tab. Browse tabs go through
-                            // SaveActiveBrowseTabById; Structure tabs need
-                            // ExecuteStructureTransaction with materialized
-                            // statements. close_after_save tracks both kinds;
-                            // the SaveCompletedForTab / StructureSaveCompleted
-                            // handlers in App::update close the window once
-                            // the set drains. Any SaveFailed aborts.
-                            let browse_tabs: Vec<Uuid> = crate::services::change_tracker::pending_tabs();
-                            let structure_tabs: Vec<Uuid> = crate::services::structure_tracker::pending_tabs();
-                            // Counter increments — a Table tab listed in both
-                            // sets bumps to 2 so the window close waits for
-                            // BOTH the browse save and the structure save.
-                            {
-                                let mut map = close_after_save_for_resp.borrow_mut();
-                                for id in browse_tabs.iter().copied() {
-                                    *map.entry(id).or_insert(0) += 1;
-                                }
-                                for id in structure_tabs.iter().copied() {
-                                    *map.entry(id).or_insert(0) += 1;
-                                }
-                            }
-                            close_window_after_save_for_resp.set(true);
-                            for id in browse_tabs {
-                                let _ = input_sender_for_resp.send(AppMsg::SaveActiveBrowseTabById(id));
-                            }
-                            for id in structure_tabs {
-                                let _ = input_sender_for_resp.send(AppMsg::SaveActiveStructureTabById(id));
-                            }
-                        }
-                        _ => {} // Cancel: do nothing, stay open.
-                    }
-                });
-                dialog.present(Some(w));
-                return glib::Propagation::Stop;
-            }
-            let (width, height) = if w.is_maximized() {
-                (w.default_width(), w.default_height())
-            } else {
-                (w.width(), w.height())
-            };
-            crate::services::window_state::save(crate::services::window_state::WindowState {
-                width,
-                height,
-                maximized: w.is_maximized(),
-            });
-            glib::Propagation::Proceed
-        });
+        let window_handles = init_window::install_window_lifecycle(&widgets.window, &widgets.split_view, &sender);
 
-        let breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
-            adw::BreakpointConditionLengthType::MaxWidth,
-            600.0,
-            adw::LengthUnit::Sp,
-        ));
-        breakpoint.add_setter(&widgets.split_view, "collapsed", Some(&true.into()));
-        widgets.window.add_breakpoint(breakpoint);
+        let sidebar = init_sidebar::build_sidebar(&widgets, &sender);
 
-        let sidebar_schemas: std::rc::Rc<std::cell::RefCell<Vec<Option<String>>>> =
-            std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-
-        let sidebar_factory: FactoryVecDeque<SidebarRow> = FactoryVecDeque::builder()
-            .launch(
-                gtk::ListBox::builder()
-                    .selection_mode(gtk::SelectionMode::Single)
-                    .activate_on_single_click(true)
-                    .css_classes(["navigation-sidebar"])
-                    .build(),
-            )
-            .forward(sender.input_sender(), |out| match out {
-                SidebarRowOutput::Open { schema, name } => AppMsg::SelectTable {
-                    schema,
-                    name,
-                    open_mode: OpenMode::SwitchOrAppend,
-                },
-                // Plain click + Enter activation route through the parent
-                // ListBox's `row-activated` signal (wired below), which is
-                // the only signal that fires for both mouse and keyboard.
-                // The factory only carries the Ctrl+click / right-click
-                // "open in new tab" path.
-                SidebarRowOutput::OpenInNewTab { schema, name } => AppMsg::SelectTable {
-                    schema,
-                    name,
-                    open_mode: OpenMode::NewTab,
-                },
-                SidebarRowOutput::EditStructure { schema, name } => AppMsg::EditStructureTab { schema, table: name },
-                SidebarRowOutput::ShowCreateTable { schema, name } => {
-                    AppMsg::ShowCreateTableForExisting { schema, table: name }
-                }
-                SidebarRowOutput::DropTable { schema, name } => AppMsg::DropTablePrompt { schema, table: name },
-            });
-
-        let sidebar_listbox = sidebar_factory.widget();
-        widgets.sidebar_scroll.set_child(Some(sidebar_listbox));
-
-        // Plain click + Enter on focused row → SwitchOrAppend. This is
-        // the single source of truth for sidebar activation; per-row
-        // keybinding signals (gtk::ListBoxRow::activate) only fire on
-        // Enter and would miss mouse clicks.
-        let schemas_for_activate = sidebar_schemas.clone();
-        let activate_sender = sender.clone();
-        sidebar_listbox.connect_row_activated(move |_, row| {
-            let name = row.widget_name().to_string();
-            let idx = row.index() as usize;
-            let schema = schemas_for_activate.borrow().get(idx).cloned().unwrap_or(None);
-            activate_sender.input(AppMsg::SelectTable {
-                schema,
-                name,
-                open_mode: OpenMode::SwitchOrAppend,
-            });
-        });
-
-        let search_for_filter = widgets.table_search.clone();
-        let schemas_for_filter = sidebar_schemas.clone();
-        sidebar_listbox.set_filter_func(move |row| {
-            let query = search_for_filter.text().to_lowercase();
-            if query.is_empty() {
-                return true;
-            }
-            // SidebarRow stashes its table name in widget-name; same
-            // identifier is read by sync_sidebar_selection. Search
-            // also matches the row's schema (when present) so a query
-            // for "auth" surfaces every table in the auth schema, and
-            // the qualified `schema.table` form so users with
-            // multi-schema connections can disambiguate by typing the
-            // dotted name they see in the tab title.
-            let table_name = row.widget_name().to_lowercase();
-            if table_name.contains(&query) {
-                return true;
-            }
-            let schemas = schemas_for_filter.borrow();
-            let idx = row.index() as usize;
-            let Some(schema) = schemas.get(idx).and_then(|s| s.as_deref()) else {
-                return false;
-            };
-            let schema_lc = schema.to_lowercase();
-            schema_lc.contains(&query) || format!("{schema_lc}.{table_name}").contains(&query)
-        });
-        let listbox_for_invalidate = sidebar_listbox.clone();
-        widgets.table_search.connect_search_changed(move |_| {
-            listbox_for_invalidate.invalidate_filter();
-        });
-        widgets.table_search_bar.connect_entry(&widgets.table_search);
-        widgets
-            .table_search_bar
-            .set_key_capture_widget(Some(&widgets.sidebar_root));
-
-        // Empty-state placeholder. Shown by GtkListBox when no row is
-        // visible — covers both "the database has zero tables" and
-        // "the search filtered everything out". Without this, the
-        // sidebar renders as a blank surface and reads as broken.
-        // AdwStatusPage `.compact` is the documented empty-state
-        // widget for narrow containers (matches GNOME Files's
-        // sidebar-empty look).
-        let sidebar_placeholder = adw::StatusPage::builder()
-            .icon_name("view-list-symbolic")
-            .title(crate::tr!("No tables"))
-            .description(crate::tr!(
-                "Nothing matches the current search, or this connection has no tables yet."
-            ))
-            .build();
-        sidebar_placeholder.add_css_class("compact");
-        sidebar_listbox.set_placeholder(Some(&sidebar_placeholder));
-
-        // Two-way bind the sidebar header's search toggle to the SearchBar.
-        // Click toggle → SearchBar reveals + entry focuses; press Esc →
-        // SearchBar hides → toggle deactivates.
-        widgets
-            .table_search_toggle
-            .bind_property("active", &widgets.table_search_bar, "search-mode-enabled")
-            .bidirectional()
-            .sync_create()
-            .build();
-
-        let schemas_for_header = sidebar_schemas.clone();
-        let sender_for_header = sender.clone();
-        sidebar_listbox.set_header_func(move |row, before| {
-            let schemas = schemas_for_header.borrow();
-            let total_distinct: std::collections::BTreeSet<&str> =
-                schemas.iter().filter_map(|s| s.as_deref()).collect();
-            // Postgres-style multi-schema connections render a header
-            // per schema with a "+" button for "New Table…". Single-
-            // schema connections (MySQL / SQLite) get one header
-            // anchored to "main" / database-name with the same "+"
-            // affordance — the visual cue matters even when there's
-            // only one schema in the list.
-            let multi_schema = total_distinct.len() >= 2;
-            let idx = row.index();
-            let current = schemas.get(idx as usize).cloned().flatten();
-            let prev_idx = before.map(|b| b.index());
-            let prev = prev_idx.and_then(|i| schemas.get(i as usize)).cloned().flatten();
-            let needs = match (&current, &prev) {
-                (Some(c), Some(p)) => c != p,
-                (Some(_), None) => true,
-                (None, None) => before.is_none() && !multi_schema,
-                (None, Some(_)) => false,
-            };
-            if !needs {
-                row.set_header(gtk::Widget::NONE);
-                return;
-            }
-            let header_box = gtk::Box::builder()
-                .orientation(gtk::Orientation::Horizontal)
-                .spacing(6)
-                .margin_top(12)
-                .margin_bottom(6)
-                .margin_start(12)
-                // Match the row body's `margin_end: 12` so the "+"
-                // button sits flush with where row content ends — the
-                // previous 6px pulled it inward of the row label edge
-                // and read as a misaligned column.
-                .margin_end(12)
-                .build();
-            let label_text = current
-                .as_deref()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| crate::tr!("Tables"));
-            let label = gtk::Label::builder()
-                .label(&label_text)
-                .xalign(0.0)
-                .hexpand(true)
-                .build();
-            // GtkPlacesSidebar section-header typography: small + bold
-            // + ~55% alpha. `.heading` (libadwaita's "emphasized body")
-            // combined with `.dim-label` rendered as bold-dim at body
-            // size — too loud for a section divider. `.caption-heading`
-            // is the small-bold variant the toolkit ships for exactly
-            // this purpose.
-            label.add_css_class("caption-heading");
-            label.add_css_class("dim-label");
-            header_box.append(&label);
-            // "+" button: emit NewTableTab carrying this schema. Flat
-            // styling matches GNOME Files' inline-add buttons; the
-            // tooltip clarifies the destination ("New Table in …")
-            // so the user understands what the schema scoping means.
-            let new_table_button = gtk::Button::builder()
-                .icon_name("list-add-symbolic")
-                .tooltip_text(match current.as_deref() {
-                    Some(s) => crate::tr!("New Table in {schema}…").replace("{schema}", s),
-                    None => crate::tr!("New Table…"),
-                })
-                .valign(gtk::Align::Center)
-                .build();
-            new_table_button.add_css_class("flat");
-            let sender_for_button = sender_for_header.clone();
-            let schema_for_button = current.clone();
-            new_table_button.connect_clicked(move |_| {
-                sender_for_button.input(AppMsg::NewTableTab {
-                    schema: schema_for_button.clone(),
-                });
-            });
-            header_box.append(&new_table_button);
-            row.set_header(Some(&header_box));
-        });
-
-        let connections_factory: FactoryVecDeque<ConnectionRow> = FactoryVecDeque::builder()
-            .launch(
-                gtk::ListBox::builder()
-                    .selection_mode(gtk::SelectionMode::None)
-                    .css_classes(["boxed-list"])
-                    .build(),
-            )
-            .forward(sender.input_sender(), |out| match out {
-                ConnectionRowOutput::Open(saved) => AppMsg::OpenSaved(saved),
-                ConnectionRowOutput::Delete(id) => AppMsg::DeleteConnection(id),
-            });
-
-        // The SplitButton's tooltip already labels the popover, so we drop
-        // the in-popover "Saved Connections" header that previously sat
-        // above the list. Explicit width_request prevents AdwSplitButton's
-        // narrow dropdown trigger from constraining the popover width
-        // (which produced mid-word hyphenation of connection names).
-        let popover_content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(0)
-            .margin_top(6)
-            .margin_bottom(6)
-            .margin_start(6)
-            .margin_end(6)
-            .width_request(320)
-            .build();
-
-        let scroll = gtk::ScrolledWindow::builder()
-            .child(connections_factory.widget())
-            .min_content_width(320)
-            .min_content_height(120)
-            .max_content_height(400)
-            .propagate_natural_height(true)
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .build();
-        popover_content.append(&scroll);
-        widgets.connections_popover.set_child(Some(&popover_content));
-
-        // Workspace outer stack: swaps between an empty StatusPage
-        // ("Select a table") when no tabs are open and the unified
-        // AdwTabOverview hosting both Browse and Editor tabs. The
-        // tab tree itself is built lazily on connect via
-        // `ensure_workspace_root` in app/workspace_tabs.rs.
-        let workspace_outer_stack = gtk::Stack::builder()
-            .transition_type(gtk::StackTransitionType::Crossfade)
-            .build();
-        // CTA button parented inside the empty-state status page so
-        // the "open editor" affordance is reachable with the mouse —
-        // without it the only path was the keyboard shortcut and the
-        // tab-bar "+", and the tab bar is hidden in this empty state.
-        let workspace_empty_cta = gtk::Button::builder()
-            .label(crate::tr!("Open SQL editor"))
-            .action_name("win.open-editor")
-            .halign(gtk::Align::Center)
-            .build();
-        workspace_empty_cta.add_css_class("suggested-action");
-        workspace_empty_cta.add_css_class("pill");
-        let workspace_empty_page = adw::StatusPage::builder()
-            .icon_name(StatusKind::Info.icon())
-            .title(crate::tr!("Select a table"))
-            .description(crate::tr!(
-                "Pick a table from the sidebar, or use the button below (Ctrl+T)."
-            ))
-            .child(&workspace_empty_cta)
-            .build();
-        workspace_outer_stack.add_named(&workspace_empty_page, Some("empty"));
-        workspace_outer_stack.set_visible_child_name("empty");
+        let workspace_chrome = init_workspace::build_workspace_chrome(&widgets, &sender);
 
         let disconnect_action = shortcuts::install_window_actions(&widgets.window, sender.clone());
         shortcuts::install_window_shortcuts(&widgets.window);
@@ -855,19 +392,19 @@ impl SimpleComponent for App {
             window_title: widgets.window_title.clone(),
             sidebar_title: widgets.sidebar_title.clone(),
             disconnect_action,
-            sidebar_factory,
-            sidebar_schemas,
+            sidebar_factory: sidebar.factory,
+            sidebar_schemas: sidebar.schemas,
             content_holder: widgets.content_holder.clone(),
             toast_overlay: widgets.toast_overlay.clone(),
             connect_progress_toast: None,
             reconnect_banner: widgets.reconnect_banner.clone(),
-            connections_factory,
+            connections_factory: workspace_chrome.connections_factory,
             connections_popover: widgets.connections_popover.clone(),
             health_state: None,
             row_op_spinner: widgets.row_op_spinner.clone(),
             read_only_badge: widgets.read_only_badge.clone(),
             table_search: widgets.table_search.clone(),
-            workspace_outer_stack,
+            workspace_outer_stack: workspace_chrome.outer_stack,
             workspace_root: None,
             workspace_tab_view: None,
             workspace_root_added: std::cell::Cell::new(false),
@@ -890,9 +427,9 @@ impl SimpleComponent for App {
             prepared_connection: None,
             switch_saves_pending: std::collections::HashMap::new(),
             switch_cancel_audit_was_disabled: None,
-            close_after_save: close_after_save_handle,
-            close_window_after_save: close_window_after_save_handle,
-            in_flight_saves: in_flight_saves_handle,
+            close_after_save: window_handles.close_after_save,
+            close_window_after_save: window_handles.close_window_after_save,
+            in_flight_saves: window_handles.in_flight_saves,
             structure_saves_in_flight: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
             persist_pending: std::rc::Rc::new(std::cell::Cell::new(false)),
             closed_tabs_stack: std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::with_capacity(
@@ -1139,48 +676,5 @@ impl SimpleComponent for App {
             AppMsg::ReopenClosedTab => self.on_reopen_closed_tab(sender),
             AppMsg::ShowFilterDialog => self.on_show_filter_dialog(),
         }
-    }
-}
-
-fn render_json(result: &QueryResult) -> Vec<u8> {
-    let cols: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
-    let rows: Vec<serde_json::Value> = result
-        .rows
-        .iter()
-        .map(|row| {
-            let mut obj = serde_json::Map::new();
-            for (i, col) in cols.iter().enumerate() {
-                let v = row.get(i).cloned().unwrap_or(Value::Null);
-                obj.insert((*col).to_string(), value_to_json(&v));
-            }
-            serde_json::Value::Object(obj)
-        })
-        .collect();
-    serde_json::to_vec_pretty(&rows).unwrap_or_default()
-}
-
-fn value_to_json(v: &Value) -> serde_json::Value {
-    use serde_json::Value as J;
-    match v {
-        Value::Null => J::Null,
-        Value::Bool(b) => J::Bool(*b),
-        Value::Int(i) => J::from(*i),
-        Value::Float(f) => J::from(*f),
-        Value::Text(s) => J::String(s.clone()),
-        Value::Bytes(b) => J::String(format!("<{} bytes>", b.len())),
-        Value::Date(d) => J::String(d.to_string()),
-        Value::Time(t) => J::String(t.to_string()),
-        Value::DateTime(dt) => J::String(dt.to_string()),
-        Value::TimestampTz(ts) => J::String(ts.to_rfc3339()),
-        Value::Decimal(d) => J::String(d.to_string()),
-        Value::Uuid(u) => J::String(u.to_string()),
-        Value::Json(j) => j.clone(),
-    }
-}
-
-fn qualified_label(schema: Option<&str>, table: &str) -> String {
-    match schema {
-        Some(s) => format!("{s}.{table}"),
-        None => table.to_string(),
     }
 }
