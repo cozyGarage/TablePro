@@ -1,3 +1,4 @@
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use axum::http::{HeaderMap, Uri, header::ORIGIN};
@@ -24,6 +25,59 @@ impl Default for McpServerConfig {
 
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const DISCARD_CHUNK_BYTES: u64 = 8 * 1024;
+
+/// Revision advertised to a client that does not ask for one, and the
+/// older revisions still accepted from a client that does.
+const PROTOCOL_VERSION: &str = "2026-07-28";
+const ACCEPTED_PROTOCOL_VERSIONS: &[&str] = &[PROTOCOL_VERSION, "2025-11-25", "2025-06-18"];
+
+fn negotiate_protocol_version(params: &JsonValue) -> Result<&'static str, String> {
+    let Some(requested) = params.get("protocolVersion") else {
+        return Ok(PROTOCOL_VERSION);
+    };
+    let requested = requested
+        .as_str()
+        .ok_or_else(|| "protocolVersion must be a string".to_string())?;
+    ACCEPTED_PROTOCOL_VERSIONS
+        .iter()
+        .find(|accepted| **accepted == requested)
+        .copied()
+        .ok_or_else(|| format!("unsupported protocolVersion; this server accepts {ACCEPTED_PROTOCOL_VERSIONS:?}"))
+}
+
+fn initialize_result(params: &JsonValue) -> Result<JsonValue, String> {
+    let version = negotiate_protocol_version(params)?;
+    Ok(json!({
+        "protocolVersion": version,
+        "capabilities": {"tools": {}},
+        "serverInfo": {"name": "tablepro", "version": "0.1.0"}
+    }))
+}
+
+fn json_rpc_error(id: &JsonValue, code: i64, message: String) -> JsonValue {
+    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
+}
+
+/// Loopback-only bind resolution. A host that is not a loopback literal
+/// is refused before any socket is opened; there is no configuration
+/// that reaches a routable interface.
+fn loopback_bind_addr(host: &str, port: u16) -> Result<SocketAddr, String> {
+    let host = host.trim();
+    let literal = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(host);
+    let ip: IpAddr = match literal {
+        "localhost" => IpAddr::from([127, 0, 0, 1]),
+        other => other
+            .parse()
+            .map_err(|_| format!("refusing to bind MCP HTTP to a non-loopback host: {other}"))?,
+    };
+    if !ip.is_loopback() {
+        return Err(format!("refusing to bind MCP HTTP outside loopback: {ip}"));
+    }
+    Ok(SocketAddr::new(ip, port))
+}
 
 async fn discard_rest_of_line<R>(reader: &mut R) -> Result<(), String>
 where
@@ -99,15 +153,10 @@ pub async fn serve_stdio(bridge: Arc<McpBridge>) -> Result<(), String> {
         let params = request.get("params").cloned().unwrap_or(json!({}));
 
         let response = match method {
-            "initialize" => json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "protocolVersion": "2025-11-25",
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "tablepro", "version": "0.1.0"}
-                }
-            }),
+            "initialize" => match initialize_result(&params) {
+                Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                Err(message) => json_rpc_error(&id, -32602, message),
+            },
             "notifications/initialized" | "initialized" => continue,
             "tools/list" => json!({
                 "jsonrpc": "2.0",
@@ -179,6 +228,9 @@ fn tool_description(name: &str) -> &'static str {
         "execute_write" => "Run a write with optional transaction preview (preview=true by default)",
         "explain_query" => "Run EXPLAIN on a SQL statement",
         "export_data" => "Run a query and return CSV or JSON",
+        "table_schema" => "Read the columns, primary key, indexes and foreign keys of a table",
+        "count_rows" => "Count the rows of a table exactly",
+        "browse_table" => "Read a page of table rows by offset and limit",
         _ => "",
     }
 }
@@ -197,12 +249,24 @@ fn tool_schema(name: &str) -> JsonValue {
             },
             "required": ["connection_id"]
         }),
-        "describe_table" => json!({
+        "describe_table" | "table_schema" | "count_rows" => json!({
             "type": "object",
             "properties": {
                 "connection_id": {"type": "string"},
                 "schema": {"type": "string"},
                 "table": {"type": "string"},
+                "token": {"type": "string"}
+            },
+            "required": ["connection_id", "table"]
+        }),
+        "browse_table" => json!({
+            "type": "object",
+            "properties": {
+                "connection_id": {"type": "string"},
+                "schema": {"type": "string"},
+                "table": {"type": "string"},
+                "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1},
                 "token": {"type": "string"}
             },
             "required": ["connection_id", "table"]
@@ -238,11 +302,8 @@ fn origin_is_allowed(headers: &HeaderMap) -> bool {
 pub async fn serve_streamable_http(bridge: Arc<McpBridge>, config: McpServerConfig) -> Result<(), String> {
     use axum::response::IntoResponse;
     use axum::{Json, Router, http::StatusCode, routing::post};
-    use std::net::SocketAddr;
 
-    if config.bind_host != "127.0.0.1" && config.bind_host != "localhost" && config.bind_host != "::1" {
-        return Err("refusing to bind MCP HTTP outside loopback".into());
-    }
+    let addr = loopback_bind_addr(&config.bind_host, config.bind_port)?;
 
     let bridge = bridge.clone();
     let app = Router::new().route(
@@ -273,25 +334,23 @@ pub async fn serve_streamable_http(bridge: Arc<McpBridge>, config: McpServerConf
                             "inputSchema": tool_schema(name),
                         })).collect::<Vec<_>>()
                     })),
-                    "initialize" => Ok(json!({
-                        "protocolVersion": "2025-11-25",
-                        "capabilities": {"tools": {}},
-                        "serverInfo": {"name": "tablepro", "version": "0.1.0"}
-                    })),
+                    "initialize" => match initialize_result(&params) {
+                        Ok(result) => Ok(result),
+                        Err(message) => {
+                            return Json(json_rpc_error(&id, -32602, message)).into_response();
+                        }
+                    },
                     other => Err(format!("unsupported method: {other}")),
                 };
                 let response = match result {
                     Ok(r) => json!({"jsonrpc": "2.0", "id": id, "result": r}),
-                    Err(e) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": e}}),
+                    Err(e) => json_rpc_error(&id, -32000, e),
                 };
                 Json(response).into_response()
             }
         }),
     );
 
-    let addr: SocketAddr = format!("{}:{}", config.bind_host, config.bind_port)
-        .parse()
-        .map_err(|e| format!("bad bind address: {e}"))?;
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| e.to_string())?;
     tracing::info!(%addr, "MCP HTTP listening (loopback)");
     axum::serve(listener, app).await.map_err(|e| e.to_string())
@@ -327,6 +386,57 @@ mod tests {
         discard_rest_of_line(&mut reader).await.unwrap();
         let mut next = String::new();
         assert_eq!(reader.read_line(&mut next).await.unwrap(), 0);
+    }
+
+    #[test]
+    fn the_advertised_protocol_revision_is_the_current_one() {
+        let result = initialize_result(&json!({})).expect("no requested revision negotiates");
+        assert_eq!(result["protocolVersion"], "2026-07-28");
+    }
+
+    #[test]
+    fn an_older_client_revision_is_accepted_and_echoed() {
+        for older in ["2025-11-25", "2025-06-18"] {
+            let result = initialize_result(&json!({"protocolVersion": older})).expect("older revision");
+            assert_eq!(result["protocolVersion"], older);
+        }
+    }
+
+    #[test]
+    fn an_unknown_protocol_revision_is_refused_as_invalid_params() {
+        for bad in [json!("2019-01-01"), json!("garbage"), json!(7), json!(null)] {
+            let message =
+                initialize_result(&json!({"protocolVersion": bad})).expect_err("an unknown revision must be refused");
+            let error = json_rpc_error(&JsonValue::from(1), -32602, message);
+            assert_eq!(error["error"]["code"], -32602);
+        }
+    }
+
+    #[test]
+    fn loopback_hosts_resolve_to_a_loopback_socket() {
+        for host in ["127.0.0.1", "localhost", "::1", "[::1]", "127.0.0.53", " 127.0.0.1 "] {
+            let addr = loopback_bind_addr(host, 17432).unwrap_or_else(|e| panic!("{host}: {e}"));
+            assert!(addr.ip().is_loopback(), "{host}");
+            assert_eq!(addr.port(), 17432);
+        }
+    }
+
+    #[test]
+    fn a_non_loopback_bind_host_is_refused() {
+        for host in [
+            "0.0.0.0",
+            "::",
+            "[::]",
+            "192.168.1.10",
+            "10.0.0.1",
+            "203.0.113.5",
+            "example.com",
+            "127.0.0.1.evil.com",
+            "",
+        ] {
+            let error = loopback_bind_addr(host, 17432).expect_err(host);
+            assert!(error.contains("refusing to bind"), "{host}: {error}");
+        }
     }
 
     #[test]

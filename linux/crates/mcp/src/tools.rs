@@ -8,6 +8,9 @@ pub const TOOL_NAMES: &[&str] = &[
     "execute_write",
     "explain_query",
     "export_data",
+    "table_schema",
+    "count_rows",
+    "browse_table",
 ];
 
 use serde_json::{Value as JsonValue, json};
@@ -15,7 +18,7 @@ use tablepro_core::export::{write_csv_header, write_csv_row};
 use tablepro_core::sql_dialect::explain_statement;
 use uuid::Uuid;
 
-use crate::bridge::{McpBridge, WriteOutcome};
+use crate::bridge::{McpBridge, TableSchema, WriteOutcome};
 use crate::tokens::McpToken;
 
 pub async fn dispatch(bridge: &McpBridge, token: &McpToken, name: &str, args: JsonValue) -> Result<JsonValue, String> {
@@ -160,7 +163,87 @@ pub async fn dispatch(bridge: &McpBridge, token: &McpToken, name: &str, args: Js
                 })),
             }
         }
+        "table_schema" => {
+            let id = parse_uuid(&args, "connection_id")?;
+            let table = required_str(&args, "table")?;
+            let schema = optional_str(&args, "schema");
+            let schema_out = bridge.table_schema(token, id, schema, table).await?;
+            Ok(table_schema_json(&schema_out))
+        }
+        "count_rows" => {
+            let id = parse_uuid(&args, "connection_id")?;
+            let table = required_str(&args, "table")?;
+            let schema = optional_str(&args, "schema");
+            let count = bridge.count_rows(token, id, schema, table).await?;
+            Ok(json!({"row_count": count, "exact": true}))
+        }
+        "browse_table" => {
+            let id = parse_uuid(&args, "connection_id")?;
+            let table = required_str(&args, "table")?;
+            let schema = optional_str(&args, "schema");
+            let offset = parse_u64(&args, "offset", 0)?;
+            let limit = parse_u64(&args, "limit", bridge.max_rows)?;
+            let result = bridge.browse_table(token, id, schema, table, offset, limit).await?;
+            Ok(json!({
+                "offset": offset,
+                "columns": result.columns.iter().map(|c| &c.name).collect::<Vec<_>>(),
+                "rows": result.rows.iter().map(|r| {
+                    r.iter().map(value_to_json).collect::<Vec<_>>()
+                }).collect::<Vec<_>>(),
+                "truncated": result.truncated,
+            }))
+        }
         other => Err(format!("unknown tool: {other}")),
+    }
+}
+
+fn table_schema_json(schema: &TableSchema) -> JsonValue {
+    json!({
+        "columns": schema.columns.iter().map(|c| json!({
+            "name": c.name,
+            "data_type": c.data_type,
+            "nullable": c.nullable,
+            "primary_key": c.primary_key,
+            "default_value": c.default_value,
+            "is_auto_increment": c.is_auto_increment,
+            "is_generated": c.is_generated,
+        })).collect::<Vec<_>>(),
+        "primary_key": schema.columns.iter().filter(|c| c.primary_key).map(|c| &c.name).collect::<Vec<_>>(),
+        "indexes": schema.indexes.iter().map(|i| json!({
+            "name": i.name,
+            "columns": i.columns,
+            "unique": i.unique,
+            "primary": i.primary,
+        })).collect::<Vec<_>>(),
+        "foreign_keys": schema.foreign_keys.iter().map(|f| json!({
+            "name": f.name,
+            "columns": f.columns,
+            "ref_schema": f.ref_schema,
+            "ref_table": f.ref_table,
+            "ref_columns": f.ref_columns,
+            "on_delete": f.on_delete,
+            "on_update": f.on_update,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn required_str(args: &JsonValue, key: &str) -> Result<String, String> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("missing {key}"))
+}
+
+fn optional_str(args: &JsonValue, key: &str) -> Option<String> {
+    args.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+}
+
+fn parse_u64(args: &JsonValue, key: &str, default: u64) -> Result<u64, String> {
+    match args.get(key) {
+        None | Some(JsonValue::Null) => Ok(default),
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| format!("{key} must be a non-negative integer")),
     }
 }
 
@@ -197,5 +280,21 @@ mod tests {
     #[test]
     fn shared_query_history_is_not_exposed() {
         assert!(!TOOL_NAMES.contains(&"search_query_history"));
+    }
+
+    #[test]
+    fn the_metadata_tools_are_advertised() {
+        for name in ["table_schema", "count_rows", "browse_table"] {
+            assert!(TOOL_NAMES.contains(&name), "{name}");
+        }
+    }
+
+    #[test]
+    fn pagination_arguments_refuse_a_negative_or_non_numeric_page() {
+        assert_eq!(parse_u64(&json!({}), "offset", 0).unwrap(), 0);
+        assert_eq!(parse_u64(&json!({"offset": 12}), "offset", 0).unwrap(), 12);
+        assert!(parse_u64(&json!({"offset": -1}), "offset", 0).is_err());
+        assert!(parse_u64(&json!({"offset": "3"}), "offset", 0).is_err());
+        assert!(parse_u64(&json!({"offset": 1.5}), "offset", 0).is_err());
     }
 }
