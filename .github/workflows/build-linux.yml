@@ -14,6 +14,13 @@ on:
   schedule:
     - cron: "13 14 * * 1"
   workflow_dispatch:
+    inputs:
+      ref:
+        description: >-
+          Commit SHA, tag or branch to build. Pin a release candidate so
+          every job in the run tests the same tree.
+        required: false
+        default: ""
 
 jobs:
   preflight:
@@ -25,7 +32,10 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ github.event_name == 'schedule' && 'linux' || github.ref }}
+          ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'linux') || github.ref }}
+      - name: Record the commit under test
+        run: |
+          echo "tree under test: $(git rev-parse HEAD)"
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -66,7 +76,10 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ github.event_name == 'schedule' && 'linux' || github.ref }}
+          ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'linux') || github.ref }}
+      - name: Record the commit under test
+        run: |
+          echo "tree under test: $(git rev-parse HEAD)"
       - name: Install system dependencies
         run: |
           apt-get update
@@ -126,7 +139,10 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ github.event_name == 'schedule' && 'linux' || github.ref }}
+          ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'linux') || github.ref }}
+      - name: Record the commit under test
+        run: |
+          echo "tree under test: $(git rev-parse HEAD)"
       - name: Install GTK test dependencies
         run: |
           apt-get update
@@ -171,7 +187,10 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ github.event_name == 'schedule' && 'linux' || github.ref }}
+          ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'linux') || github.ref }}
+      - name: Record the commit under test
+        run: |
+          echo "tree under test: $(git rev-parse HEAD)"
       - name: Install system dependencies
         run: |
           apt-get update
@@ -210,7 +229,10 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ github.event_name == 'schedule' && 'linux' || github.ref }}
+          ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'linux') || github.ref }}
+      - name: Record the commit under test
+        run: |
+          echo "tree under test: $(git rev-parse HEAD)"
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -250,7 +272,10 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ github.event_name == 'schedule' && 'linux' || github.ref }}
+          ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'linux') || github.ref }}
+      - name: Record the commit under test
+        run: |
+          echo "tree under test: $(git rev-parse HEAD)"
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -282,7 +307,10 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ github.event_name == 'schedule' && 'linux' || github.ref }}
+          ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'linux') || github.ref }}
+      - name: Record the commit under test
+        run: |
+          echo "tree under test: $(git rev-parse HEAD)"
       - name: Install system dependencies
         run: |
           sudo apt-get update

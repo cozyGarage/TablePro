@@ -103,7 +103,7 @@ The fixture runs from `./scripts/test-postgres-release.sh` and in the `postgres-
 - [x] Installed GTK pending row edits gate a connection switch without writing to the old database
 - [x] Installed GTK browse tabs read the connection they were reopened against
 
-Phase 4 has a required PR smoke job and a separate daily five-attempt soak. Promotion still requires 30 consecutive retry-free attempts across at least six workflow runs.
+Phase 4 has a required PR smoke job and a separate daily five-attempt soak. Promotion still requires 30 consecutive retry-free attempts across at least six workflow runs, all at one pinned commit. Both workflows now take an explicit `ref` and record the commit they resolved; before that the scheduled soak followed the branch tip, so attempts could not be attributed to a candidate. The ledger stands at 0 of 30.
 
 ### 5: Documentation and capability tracking
 

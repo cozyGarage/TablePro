@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: "17 2 * * *"
   workflow_dispatch:
+    inputs:
+      ref:
+        description: >-
+          Commit SHA, tag or branch to soak. The release ledger counts
+          consecutive retry-free attempts at one commit, so a candidate
+          must be pinned; the default only exists for the daily run and
+          moves with the branch.
+        required: false
+        default: linux
 
 concurrency:
   group: gtk-safety-soak
@@ -23,7 +32,19 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: linux
+          ref: ${{ inputs.ref || 'linux' }}
+      - name: Record the commit under test
+        run: |
+          resolved="$(git rev-parse HEAD)"
+          echo "soak attempt tree: $resolved"
+          {
+            echo "### GTK soak"
+            echo
+            echo "Requested ref: \`${{ inputs.ref || 'linux' }}\`"
+            echo "Resolved commit: \`$resolved\`"
+            echo
+            echo "A ledger entry is only valid for the resolved commit above."
+          } >>"$GITHUB_STEP_SUMMARY"
       - name: Install GTK test dependencies
         run: |
           apt-get update

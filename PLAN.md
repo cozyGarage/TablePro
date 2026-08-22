@@ -54,8 +54,21 @@ jobs.
 
 Note for the ledger: `712efeb02` still carried the non-atomic export and passed
 anyway, which is what makes this class of defect worth a deterministic unit test
-rather than soak attempts. Retry-free attempts stand at 3 of the 30 required,
-across 3 runs of the 6 required.
+rather than soak attempts.
+
+**The ledger is reset to 0 of 30, and none of the runs above count toward it.**
+The gate asks for consecutive retry-free attempts at one commit, but the daily
+soak checked out `linux` by name, and every `build-linux.yml` job fell back to
+the same branch name on a schedule. A scheduled attempt therefore measured
+whatever the branch tip happened to be, and the three green runs recorded above
+are three different trees rather than three attempts at one candidate. Counting
+them together was wrong.
+
+Both workflows now take an explicit `ref` input, every job prints the commit it
+resolved, and the soak writes the requested ref and resolved commit into its run
+summary. A ledger entry is valid only for a resolved commit, so accumulating the
+30 attempts requires a frozen candidate on a `release/*` branch rather than the
+moving branch tip.
 
 Run `cargo deny check` from `linux/`. It does not accept `--manifest-path`.
 
