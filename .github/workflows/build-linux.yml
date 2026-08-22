@@ -22,9 +22,21 @@ on:
         required: false
         default: ""
 
+permissions:
+  contents: read
+
+# A newer push supersedes an in-flight run for the same ref: the older
+# one can no longer gate anything. Scheduled and dispatched runs keep
+# their own group so a release-candidate soak is never cancelled by
+# ordinary branch traffic.
+concurrency:
+  group: build-linux-${{ github.event_name }}-${{ github.ref }}-${{ inputs.ref || 'auto' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+
 jobs:
   preflight:
     name: Preflight and sandbox tier (no GTK app)
+    timeout-minutes: 30
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -59,6 +71,7 @@ jobs:
 
   fast:
     name: Fast checks (GTK)
+    timeout-minutes: 30
     runs-on: ubuntu-24.04
     needs: preflight
     # ubuntu-24.04 ships glib 2.80, but libadwaita 1.6 (workspace pin)
@@ -127,6 +140,7 @@ jobs:
 
   gtk-safety:
     name: Installed GTK safety smoke
+    timeout-minutes: 45
     runs-on: ubuntu-24.04
     needs: fast
     container:
@@ -174,6 +188,7 @@ jobs:
 
   current-stable-clippy:
     name: Current stable Clippy (scheduled)
+    timeout-minutes: 30
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     needs: preflight
@@ -221,6 +236,7 @@ jobs:
 
   integration:
     name: Driver integration tests (docker)
+    timeout-minutes: 45
     runs-on: ubuntu-24.04
     needs: preflight
     defaults:
@@ -264,6 +280,7 @@ jobs:
 
   driver-tls:
     name: Driver TLS fixture (docker)
+    timeout-minutes: 30
     runs-on: ubuntu-24.04
     needs: preflight
     defaults:
@@ -299,6 +316,7 @@ jobs:
 
   postgres-release:
     name: PostgreSQL release fixture (docker)
+    timeout-minutes: 30
     runs-on: ubuntu-24.04
     needs: preflight
     defaults:

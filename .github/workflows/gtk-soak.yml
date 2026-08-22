@@ -14,6 +14,9 @@ on:
         required: false
         default: linux
 
+permissions:
+  contents: read
+
 concurrency:
   group: gtk-safety-soak
   cancel-in-progress: false
@@ -21,6 +24,7 @@ concurrency:
 jobs:
   soak:
     name: Five retry-free GTK attempts
+    timeout-minutes: 90
     runs-on: ubuntu-24.04
     container:
       image: ubuntu:25.10
