@@ -1,3 +1,4 @@
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use axum::http::{HeaderMap, Uri, header::ORIGIN};
@@ -24,6 +25,27 @@ impl Default for McpServerConfig {
 
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const DISCARD_CHUNK_BYTES: u64 = 8 * 1024;
+
+/// Loopback-only bind resolution. A host that is not a loopback literal
+/// is refused before any socket is opened; there is no configuration
+/// that reaches a routable interface.
+fn loopback_bind_addr(host: &str, port: u16) -> Result<SocketAddr, String> {
+    let host = host.trim();
+    let literal = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(host);
+    let ip: IpAddr = match literal {
+        "localhost" => IpAddr::from([127, 0, 0, 1]),
+        other => other
+            .parse()
+            .map_err(|_| format!("refusing to bind MCP HTTP to a non-loopback host: {other}"))?,
+    };
+    if !ip.is_loopback() {
+        return Err(format!("refusing to bind MCP HTTP outside loopback: {ip}"));
+    }
+    Ok(SocketAddr::new(ip, port))
+}
 
 async fn discard_rest_of_line<R>(reader: &mut R) -> Result<(), String>
 where
@@ -238,11 +260,8 @@ fn origin_is_allowed(headers: &HeaderMap) -> bool {
 pub async fn serve_streamable_http(bridge: Arc<McpBridge>, config: McpServerConfig) -> Result<(), String> {
     use axum::response::IntoResponse;
     use axum::{Json, Router, http::StatusCode, routing::post};
-    use std::net::SocketAddr;
 
-    if config.bind_host != "127.0.0.1" && config.bind_host != "localhost" && config.bind_host != "::1" {
-        return Err("refusing to bind MCP HTTP outside loopback".into());
-    }
+    let addr = loopback_bind_addr(&config.bind_host, config.bind_port)?;
 
     let bridge = bridge.clone();
     let app = Router::new().route(
@@ -289,9 +308,6 @@ pub async fn serve_streamable_http(bridge: Arc<McpBridge>, config: McpServerConf
         }),
     );
 
-    let addr: SocketAddr = format!("{}:{}", config.bind_host, config.bind_port)
-        .parse()
-        .map_err(|e| format!("bad bind address: {e}"))?;
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| e.to_string())?;
     tracing::info!(%addr, "MCP HTTP listening (loopback)");
     axum::serve(listener, app).await.map_err(|e| e.to_string())
@@ -327,6 +343,33 @@ mod tests {
         discard_rest_of_line(&mut reader).await.unwrap();
         let mut next = String::new();
         assert_eq!(reader.read_line(&mut next).await.unwrap(), 0);
+    }
+
+    #[test]
+    fn loopback_hosts_resolve_to_a_loopback_socket() {
+        for host in ["127.0.0.1", "localhost", "::1", "[::1]", "127.0.0.53", " 127.0.0.1 "] {
+            let addr = loopback_bind_addr(host, 17432).unwrap_or_else(|e| panic!("{host}: {e}"));
+            assert!(addr.ip().is_loopback(), "{host}");
+            assert_eq!(addr.port(), 17432);
+        }
+    }
+
+    #[test]
+    fn a_non_loopback_bind_host_is_refused() {
+        for host in [
+            "0.0.0.0",
+            "::",
+            "[::]",
+            "192.168.1.10",
+            "10.0.0.1",
+            "203.0.113.5",
+            "example.com",
+            "127.0.0.1.evil.com",
+            "",
+        ] {
+            let error = loopback_bind_addr(host, 17432).expect_err(host);
+            assert!(error.contains("refusing to bind"), "{host}: {error}");
+        }
     }
 
     #[test]

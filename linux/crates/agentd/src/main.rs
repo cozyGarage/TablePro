@@ -302,6 +302,16 @@ mod tests {
     }
 
     #[test]
+    fn the_daemon_exposes_no_network_bind_option() {
+        for flag in ["--bind", "--host", "--port", "--listen", "--http", "--address"] {
+            let parsed = Args::try_parse_from(["tablepro-agentd", "--policy", "policy.toml", flag, "0.0.0.0"]);
+            assert!(parsed.is_err(), "{flag} must not be accepted");
+        }
+        let stdio_only = Args::try_parse_from(["tablepro-agentd", "--policy", "policy.toml"]);
+        assert!(stdio_only.is_ok(), "the daemon serves stdio with only a policy path");
+    }
+
+    #[test]
     fn token_connections_require_at_least_one_saved_connection() {
         let id = Uuid::new_v4();
         let saved = vec![saved_connection(id)];
