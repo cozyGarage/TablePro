@@ -1,3 +1,5 @@
+use sha2::Digest;
+
 use super::*;
 
 #[tokio::test]
@@ -295,4 +297,32 @@ async fn an_expired_deadline_skips_the_blast_radius_count() {
         "{error}"
     );
     assert_eq!(queries.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn list_views_records_a_governed_read_outcome() {
+    let audit = Arc::new(SequenceAuditSink::new(vec![]));
+    let guard = PolicyGuard::new(
+        connection(Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))),
+        context(
+            Principal::human_gui(),
+            Environment::Local,
+            PolicyConfig::default(),
+            Arc::new(AutoApproveSink),
+            audit.clone(),
+            Arc::new(AuditState::new()),
+        ),
+    );
+
+    let views = guard.list_views().await.expect("list views");
+    assert!(views.is_empty());
+
+    let events = audit.events.lock().expect("event lock");
+    let expected_hash = hex::encode(sha2::Sha256::digest(b"LIST VIEWS"));
+    assert!(
+        events
+            .iter()
+            .any(|event| event.decision_rule == "metadata_read" && event.sql_hash == expected_hash),
+        "list_views must write a metadata audit record"
+    );
 }

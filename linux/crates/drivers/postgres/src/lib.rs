@@ -42,6 +42,10 @@ impl DatabaseDriver for PgDriver {
         true
     }
 
+    fn supports_view_metadata(&self) -> bool {
+        true
+    }
+
     fn forwarded_socket_name(&self, service_port: u16) -> Option<String> {
         Some(format!(".s.PGSQL.{service_port}"))
     }
@@ -111,6 +115,25 @@ impl Connection for PgConnection {
              FROM pg_tables
              WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
              ORDER BY schemaname, tablename",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        Ok(rows
+            .into_iter()
+            .map(|r| TableInfo {
+                schema: Some(r.get::<String, _>(0)),
+                name: r.get::<String, _>(1),
+            })
+            .collect())
+    }
+
+    async fn list_views(&self) -> Result<Vec<TableInfo>, DriverError> {
+        let rows = sqlx::query(
+            "SELECT schemaname, viewname
+             FROM pg_views
+             WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+             ORDER BY schemaname, viewname",
         )
         .fetch_all(&self.pool)
         .await
@@ -910,8 +933,10 @@ mod tests {
         let source = include_str!("lib.rs");
         assert!(d.supports_index_metadata());
         assert!(d.supports_foreign_key_metadata());
+        assert!(d.supports_view_metadata());
         assert!(source.contains(&["async fn ", "fetch_indexes("].concat()));
         assert!(source.contains(&["async fn ", "fetch_foreign_keys("].concat()));
+        assert!(source.contains(&["async fn ", "list_views("].concat()));
     }
 
     #[test]

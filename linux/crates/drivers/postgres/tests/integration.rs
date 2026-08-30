@@ -265,6 +265,17 @@ async fn connect_list_tables_and_pk_detection() {
     let result = conn.fetch_rows(None, "pk_demo", 0, 100).await.unwrap();
     assert_eq!(result.rows.len(), 2);
     assert!(!result.truncated);
+
+    conn.execute("CREATE VIEW pk_demo_names AS SELECT name FROM pk_demo")
+        .await
+        .unwrap();
+    let views = conn.list_views().await.unwrap();
+    assert!(
+        views.iter().any(|view| view.name == "pk_demo_names"),
+        "list_views must return the created view"
+    );
+    let view_rows = conn.fetch_rows(None, "pk_demo_names", 0, 100).await.unwrap();
+    assert_eq!(view_rows.rows.len(), 2);
 }
 
 #[tokio::test]

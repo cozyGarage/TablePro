@@ -785,6 +785,10 @@ async fn run_connect(request: ConnectRequest) -> Result<connection_service::Prep
         .list_tables_controlled(&control)
         .await
         .map_err(|e| format!("list_tables: {e}"))?;
+    let views = conn
+        .list_views_controlled(&control)
+        .await
+        .map_err(|e| format!("list_views: {e}"))?;
 
     let existing = find_existing(&driver_id, &opts_clone, driver.is_file_based(), ssh.as_ref()).await;
     let id = existing
@@ -877,6 +881,7 @@ async fn run_connect(request: ConnectRequest) -> Result<connection_service::Prep
     };
     Ok(connection_service::PreparedConnection::new(
         tables,
+        views,
         saved.driver_id.clone(),
         metadata,
         conn,

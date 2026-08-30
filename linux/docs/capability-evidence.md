@@ -19,6 +19,7 @@ Evidence tiers are the regression tiers in [CLAUDE.md](../../CLAUDE.md):
 | Query history | 2 tests against ~600 lines of code | **Weak** — the least-tested subsystem in the workspace relative to its size |
 | CSV and JSON export | Core CSV escaping, agent release coverage, and an installed GTK current-page CSV scenario | **Partial** — the GUI intentionally exports only the loaded page; snapshot/full-table streaming is deferred and JSON UI automation is absent |
 | Activity and EXPLAIN | 2 unit tests plus 2 release tests for activity, 7 unit tests plus release coverage for EXPLAIN classification | **Integrated** |
+| Read-only schema review | Unit tests for the empty default and a governed `list_views` read, plus a PostgreSQL integration assertion | **Partial** — PostgreSQL views list through the guard. Other object kinds are not started |
 | SSH, TLS, reconnect and Kerberos foundations | 8 release tests for TLS identity, 2 for reconnect, 3 for the shared transport | **Partial** — proven on PostgreSQL only. Kerberos has no test of any kind; there is no KDC in any fixture |
 | MCP and headless agent foundations | 9 + 2 sandbox tests, 6 release tests, 1 transport regression test | **Integrated** |
 
