@@ -64,7 +64,7 @@ MCP authorization and SQL policy answer different questions:
 
 | Boundary | Responsibility |
 |---|---|
-| MCP token scopes and connection allowlists | Decide which saved connections and MCP tools a caller may access |
+| MCP token scopes and connection allowlists | Decide which saved connections and MCP tools a caller may access. MCP may ask policy whether a statement needs write capability for that scope check; it does not evaluate rules or write audit records. |
 | `PolicyGuard` | Classify SQL, apply environment rules, request approval, mask results, and record audit events |
 
 A token scope never bypasses `PolicyGuard`. Policy approval never bypasses a token's connection allowlist. The GTK app and `tablepro-agentd` build guarded connection handles before governed operations run.
