@@ -80,6 +80,9 @@
 
 ### Fixed
 
+- A denied statement or dismissed approval is refused if that denial cannot be written to the audit journal
+- The last open connection is reopened when the app starts. If it cannot connect, its tabs stay with that connection instead of attaching to another database
+- Saved connection rows show the environment as a colour
 - Measuring how many rows an UPDATE or DELETE would touch now uses the same timeout and cancellation as the write itself, instead of running an unbounded count first
 - Reading a table's indexes and foreign keys now stops at the query timeout, and a failed read no longer pretends the table has none
 - Structure tabs reopen after a reconnect, and the saved workspace no longer points at the wrong tab when a draft was skipped

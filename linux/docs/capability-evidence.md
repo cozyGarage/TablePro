@@ -12,7 +12,7 @@ Evidence tiers are the regression tiers in [CLAUDE.md](../../CLAUDE.md):
 | Capability | Strongest evidence | Verdict |
 |---|---|---|
 | Saved connections and secret storage | Connection-file compatibility tests plus a real Secret Service round-trip in the required GTK job | **Integrated** — exact-candidate hosted and installed-package evidence remain RC gates |
-| Multi-tab workspace and restoration | Unit tests on workspace state, including structure-tab restore mapping, plus an installed GTK scenario that switches away and back after the persist debounce | **Weak** — a switch no longer wipes the previous connection's tabs, and structure tabs are persisted. No test starts the app, opens tabs, restarts the process, and checks they return |
+| Multi-tab workspace and restoration | Unit tests on workspace state, including structure-tab restore mapping, last-connection restore selection, plus an installed GTK scenario that switches away and back after the persist debounce | **Weak** — a switch no longer wipes the previous connection's tabs, structure tabs are persisted, and startup reopens the last connection when that saved id still exists. No installed test starts the app, opens tabs, restarts the process, and checks they return |
 | SQL editor and multi-result execution | 19 unit tests on the SQL text scanner, 15 on completion, 1 gtk scenario for parameters | **Partial** — editing and completion are well covered; nothing proves one batch produces several result tabs |
 | Browse/edit/filter/sort/pagination | 34 unit tests on filters, 6 release tests covering all 17 operators, keyset vs offset paging, and an injection payload | **Release-verified** for filter, sort, and pagination. The inline-edit write path has unit tests only |
 | Table/column/index/foreign-key editing | 76 unit tests on DDL generation, 5 release tests against PostgreSQL | **Release-verified**. This suite found two real bugs when it was written |
@@ -28,9 +28,10 @@ Three claims need work before the list is accurate:
 
 1. **Query history** carries the most code per test of anything in the
    workspace. It stores user SQL, so it is also privacy-relevant.
-2. **Workspace restoration** after a process restart is still untested. A
-   connection switch no longer wipes the previous connection's tabs; that race
-   has an installed GTK scenario.
+2. **Workspace restoration** after a process restart is still untested in the
+   installed suite. Startup now reopens the last connection when that saved id
+   still exists. A connection switch no longer wipes the previous connection's
+   tabs; that race has an installed GTK scenario.
 3. **JSON export** still needs installed GTK automation. Current-page CSV is
    covered with a 150-row fixture that asserts only the first 100 PK-ordered
    rows are written; full-table snapshot streaming is a separate future capability.

@@ -53,7 +53,17 @@ pub(super) fn install_pending_change_css() {
             }\
             .tp-row-leftmost-error-flash {\
                 animation: tp-flash-error 1.8s ease-out;\
-            }",
+            }\
+            .tp-env-swatch {\
+                min-width: 6px;\
+                border-radius: 3px;\
+                margin-top: 8px;\
+                margin-bottom: 8px;\
+            }\
+            .tp-env-local { background-color: @success_color; }\
+            .tp-env-dev { background-color: @accent_color; }\
+            .tp-env-staging { background-color: @warning_color; }\
+            .tp-env-prod { background-color: @error_color; }",
         );
         gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }

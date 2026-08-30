@@ -3,7 +3,7 @@ use relm4::factory::{DynamicIndex, FactoryComponent, FactorySender};
 use relm4::{adw, gtk};
 use uuid::Uuid;
 
-use tablepro_core::AuthMode;
+use tablepro_core::{AuthMode, Environment};
 use tablepro_storage::{ConnectionOrganization, SavedConnection};
 
 /// What a row needs to render: the saved record plus its organisation
@@ -60,6 +60,15 @@ impl FactoryComponent for ConnectionRow {
             set_subtitle: &subtitle_for(&self.saved, &self.organization),
             set_activatable: true,
             connect_activated => ConnectionRowMsg::Open,
+
+            add_prefix = &gtk::Box {
+                add_css_class: "tp-env-swatch",
+                add_css_class: environment_css_class(self.saved.environment),
+                set_valign: gtk::Align::Fill,
+                set_hexpand: false,
+                set_width_request: 6,
+                set_tooltip_text: Some(self.saved.environment.display_name()),
+            },
 
             add_prefix = &gtk::Button {
                 set_icon_name: if self.organization.favorite {
@@ -169,6 +178,15 @@ impl FactoryComponent for ConnectionRow {
     }
 }
 
+pub(crate) fn environment_css_class(environment: Environment) -> &'static str {
+    match environment {
+        Environment::Local => "tp-env-local",
+        Environment::Dev => "tp-env-dev",
+        Environment::Staging => "tp-env-staging",
+        Environment::Prod => "tp-env-prod",
+    }
+}
+
 fn subtitle_for(saved: &SavedConnection, organization: &ConnectionOrganization) -> String {
     let mut subtitle = endpoint_for(saved);
     if let Some(group) = organization.group.as_deref() {
@@ -259,5 +277,13 @@ mod tests {
             subtitle_for(&saved("sa", AuthMode::Password), &plain()),
             endpoint_for(&saved("sa", AuthMode::Password))
         );
+    }
+
+    #[test]
+    fn each_environment_has_its_own_colour_class() {
+        assert_eq!(environment_css_class(Environment::Local), "tp-env-local");
+        assert_eq!(environment_css_class(Environment::Dev), "tp-env-dev");
+        assert_eq!(environment_css_class(Environment::Staging), "tp-env-staging");
+        assert_eq!(environment_css_class(Environment::Prod), "tp-env-prod");
     }
 }

@@ -125,7 +125,7 @@ Phase 5 documentation is current as of 2026-08-18. Keeping it current is a stand
 - [ ] SQL file open/save with external-change detection
 - [ ] PostgreSQL objects, users/roles, and administration
 - [ ] Import/export and backup/restore
-- [x] Connection groups, tags, favourites, search, and URL import (Phase 10.2)
+- [x] Connection groups, tags, favourites, search, URL import, and environment colour (Phase 10.2)
 - [ ] Reusable SSH and transport profiles
 - [ ] True result streaming and optional Parquet export
 
@@ -152,7 +152,7 @@ The repository extraction completed on 2026-08-17. Product planning now follows 
 ### 10: DBA operations at scale
 
 - [x] Several connections open at once, with fail-closed per-tab ownership across all of them
-- [x] Connection groups, tags, favorites, search, and URL import
+- [x] Connection groups, tags, favorites, search, URL import, and environment colour on each row
 - [ ] A typed sessions and locks console with capability-declared driver support and governed session termination
 - [ ] A PostgreSQL server health panel that degrades cleanly when a statistics extension is absent
 - [ ] Configurable pool size and timeouts per saved connection, honoured by the driver

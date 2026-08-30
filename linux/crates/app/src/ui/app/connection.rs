@@ -72,6 +72,7 @@ impl App {
         // Restore tabs (browse + editor) persisted from the prior session
         // for this connection.
         if let Some(connection_id) = self.connection_id {
+            crate::services::window_state::set_last_connection_id(Some(connection_id));
             self.restore_workspace_tabs(connection_id, sender.clone());
             // Stamp `last_opened_at = now()` then reload connections so
             // the popover + welcome view re-sort with the fresh
@@ -148,6 +149,9 @@ impl App {
         // different connection would target a non-existent table.
         self.clear_closed_tabs_stack();
         if let Some(id) = self.connection_id.take() {
+            if crate::services::window_state::load().last_connection_id == Some(id) {
+                crate::services::window_state::set_last_connection_id(None);
+            }
             database_service::instance().close(id);
         }
         self.schema_buffer.set_text(crate::ui::editor::SQL_KEYWORDS);
@@ -197,8 +201,24 @@ impl App {
             ));
         self.prune_connection_organization(sender.clone());
         if !self.connected {
-            self.show_welcome_page(sender);
+            self.show_welcome_page(sender.clone());
+            self.restore_last_connection(connections, sender);
         }
+    }
+
+    fn restore_last_connection(&mut self, connections: &[SavedConnection], sender: ComponentSender<Self>) {
+        if !crate::services::window_state::take_session_restore_turn() {
+            return;
+        }
+        let last = crate::services::window_state::load().last_connection_id;
+        let available: Vec<Uuid> = connections.iter().map(|saved| saved.id).collect();
+        let Some(id) = crate::services::window_state::connection_id_to_restore(last, &available) else {
+            return;
+        };
+        let Some(saved) = connections.iter().find(|saved| saved.id == id).cloned() else {
+            return;
+        };
+        self.on_open_saved(saved, sender);
     }
 
     pub(super) fn on_poll_health(&mut self) {
@@ -538,6 +558,9 @@ fn execute_delete_connection(id: Uuid, sender: ComponentSender<App>) {
                 let _ = tablepro_storage::delete_password(id).await;
                 let _ = tablepro_storage::delete_ssh_password(id).await;
                 let _ = tablepro_storage::delete_ssh_passphrase(id).await;
+                if crate::services::window_state::load().last_connection_id == Some(id) {
+                    crate::services::window_state::set_last_connection_id(None);
+                }
                 sender_clone.input(AppMsg::ReloadConnections);
             })
             .drop_on_shutdown()

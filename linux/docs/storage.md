@@ -33,6 +33,8 @@ Connection records contain host, port, database, username, TLS mode, read-only s
 
 Application services own the JSON files for preferences, window state, workspace state, column widths, and table filters. They read from the XDG config directory and use defaults when a file is absent or cannot be decoded.
 
+Window state stores size, maximize flag, and the last connection id. Closing a window keeps that id so the next launch can reopen the same connection. An explicit disconnect or deleting that saved connection clears it. Geometry writes do not drop the last connection id.
+
 Workspace state is keyed by connection UUID and limited before it is written. Unknown tab variants deserialize as `Unknown` and are dropped during restore. This lets an older build ignore a newer tab kind without rejecting the whole workspace file.
 
 ## Query history

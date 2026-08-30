@@ -173,11 +173,7 @@ pub(super) fn install_window_lifecycle(
         } else {
             (w.width(), w.height())
         };
-        crate::services::window_state::save(crate::services::window_state::WindowState {
-            width,
-            height,
-            maximized: w.is_maximized(),
-        });
+        crate::services::window_state::save_geometry(width, height, w.is_maximized());
         glib::Propagation::Proceed
     });
 

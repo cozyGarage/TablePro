@@ -532,12 +532,16 @@ Removed material included retired application source, tests, project files, runt
 
 In progress since 2026-08-21. Slice 10.1 is implemented and locally
 release-verified: activation is additive, each window owns and releases its own
-connection, and the single-connection limit is gone. Slice 10.2 is implemented:
-groups, tags, favourites, search, and URL import. Welcome rows still do not
-show an environment colour. Slice 10.3 has a capability-declared TSV activity
-dialog whose in-flight query is cancelled when the dialog closes. The typed
-sessions console and blocking trees are not started. Structure edit tabs now
-restore with the rest of the workspace. Slices 10.4 through 10.7 are not started.
+connection, and the single-connection limit is gone. Startup reopens the last
+connection this window used; a failed reconnect leaves the welcome page up and
+does not attach those tabs to another connection. Restoring every connection
+that still has saved tabs, including other windows, is not started. Slice 10.2
+is implemented: groups, tags, favourites, search, URL import, and an
+environment colour on each saved-connection row. Slice 10.3 has a
+capability-declared TSV activity dialog whose in-flight query is cancelled when
+the dialog closes. The typed sessions console and blocking trees are not
+started. Structure edit tabs now restore with the rest of the workspace.
+Slices 10.4 through 10.7 are not started.
 
 The product is strong on safety and thin on operations. A DBA who manages many
 servers gets one active connection per process, an activity dialog that renders

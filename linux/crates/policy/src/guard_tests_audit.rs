@@ -432,3 +432,74 @@ async fn null_sink_denies_production_write() {
 
     assert_eq!(executes.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn human_policy_deny_fails_closed_when_outcome_cannot_be_recorded() {
+    let executes = Arc::new(AtomicUsize::new(0));
+    let mut ctx = context(
+        Principal::human_gui(),
+        Environment::Local,
+        PolicyConfig::default(),
+        Arc::new(AutoApproveSink),
+        Arc::new(SequenceAuditSink::new(vec![AuditRecordPhase::Outcome])),
+        Arc::new(AuditState::new()),
+    );
+    ctx.read_only = true;
+    let guard = PolicyGuard::new(connection(executes.clone(), Arc::new(AtomicUsize::new(0))), ctx);
+
+    let error = guard
+        .execute("INSERT INTO jobs(id) VALUES (1)")
+        .await
+        .expect_err("unaudited deny must fail closed");
+
+    assert!(error.to_string().contains("audit recording failed"));
+    assert_eq!(executes.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn human_approval_deny_fails_closed_when_outcome_cannot_be_recorded() {
+    let executes = Arc::new(AtomicUsize::new(0));
+    let guard = PolicyGuard::new(
+        connection(executes.clone(), Arc::new(AtomicUsize::new(0))),
+        context(
+            Principal::human_gui(),
+            Environment::Prod,
+            PolicyConfig::default(),
+            Arc::new(DenyApprovalSink),
+            Arc::new(SequenceAuditSink::new(vec![AuditRecordPhase::Outcome])),
+            Arc::new(AuditState::new()),
+        ),
+    );
+
+    let error = guard
+        .execute("INSERT INTO jobs(id) VALUES (1)")
+        .await
+        .expect_err("unaudited approval deny must fail closed");
+
+    assert!(error.to_string().contains("audit recording failed"));
+    assert_eq!(executes.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn human_policy_deny_keeps_the_policy_message_when_audit_succeeds() {
+    let executes = Arc::new(AtomicUsize::new(0));
+    let mut ctx = context(
+        Principal::human_gui(),
+        Environment::Local,
+        PolicyConfig::default(),
+        Arc::new(AutoApproveSink),
+        Arc::new(SequenceAuditSink::new(vec![])),
+        Arc::new(AuditState::new()),
+    );
+    ctx.read_only = true;
+    let guard = PolicyGuard::new(connection(executes.clone(), Arc::new(AtomicUsize::new(0))), ctx);
+
+    let error = guard
+        .execute("INSERT INTO jobs(id) VALUES (1)")
+        .await
+        .expect_err("read-only write must be denied");
+
+    assert!(error.to_string().contains("read-only"));
+    assert!(!error.to_string().contains("audit recording failed"));
+    assert_eq!(executes.load(Ordering::SeqCst), 0);
+}

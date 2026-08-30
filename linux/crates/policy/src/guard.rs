@@ -471,13 +471,9 @@ impl PolicyGuard {
         let Err(error) = result else {
             return Ok(());
         };
-        if self.ctx.principal.is_agent() {
-            return Err(DriverError::PolicyDenied(format!(
-                "operation denied because audit recording failed: {error}"
-            )));
-        }
-        tracing::warn!(error = %error, "audit outcome could not be persisted");
-        Ok(())
+        Err(DriverError::PolicyDenied(format!(
+            "operation denied because audit recording failed: {error}"
+        )))
     }
 
     fn handle_read_audit_failure(&self, result: Result<(), AuditError>) -> Result<(), DriverError> {
