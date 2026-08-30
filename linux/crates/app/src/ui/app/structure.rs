@@ -497,14 +497,42 @@ impl App {
                         ));
                         return;
                     }
-                    let indexes = conn
-                        .fetch_indexes(schema_for_cmd.as_deref(), &table_for_cmd)
+                    if let Err(e) = tablepro_core::check_pre_dispatch(&control) {
+                        sender_for_cmd.input(AppMsg::ShowToast(
+                            crate::tr!("Couldn't read indexes: {error}").replace("{error}", &format!("{e}")),
+                        ));
+                        return;
+                    }
+                    let indexes = match conn
+                        .fetch_indexes_controlled(schema_for_cmd.as_deref(), &table_for_cmd, &control)
                         .await
-                        .unwrap_or_default();
-                    let fks = conn
-                        .fetch_foreign_keys(schema_for_cmd.as_deref(), &table_for_cmd)
+                    {
+                        Ok(indexes) => indexes,
+                        Err(e) => {
+                            sender_for_cmd.input(AppMsg::ShowToast(
+                                crate::tr!("Couldn't read indexes: {error}").replace("{error}", &format!("{e}")),
+                            ));
+                            return;
+                        }
+                    };
+                    if let Err(e) = tablepro_core::check_pre_dispatch(&control) {
+                        sender_for_cmd.input(AppMsg::ShowToast(
+                            crate::tr!("Couldn't read foreign keys: {error}").replace("{error}", &format!("{e}")),
+                        ));
+                        return;
+                    }
+                    let fks = match conn
+                        .fetch_foreign_keys_controlled(schema_for_cmd.as_deref(), &table_for_cmd, &control)
                         .await
-                        .unwrap_or_default();
+                    {
+                        Ok(fks) => fks,
+                        Err(e) => {
+                            sender_for_cmd.input(AppMsg::ShowToast(
+                                crate::tr!("Couldn't read foreign keys: {error}").replace("{error}", &format!("{e}")),
+                            ));
+                            return;
+                        }
+                    };
                     // Synthesise the CreateTable op directly from the
                     // fetched schema. DraftColumn::from_info preserves
                     // the original ColumnInfo so materialise emits the
@@ -583,11 +611,43 @@ impl App {
                             return;
                         }
                     };
-                    let indexes = conn.fetch_indexes(schema.as_deref(), &table).await.unwrap_or_default();
-                    let fks = conn
-                        .fetch_foreign_keys(schema.as_deref(), &table)
+                    if let Err(e) = tablepro_core::check_pre_dispatch(&control) {
+                        sender_for_cmd.input(AppMsg::StructureLoadFailed {
+                            tab_id,
+                            message: format!("{e}"),
+                        });
+                        return;
+                    }
+                    let indexes = match conn.fetch_indexes_controlled(schema.as_deref(), &table, &control).await {
+                        Ok(indexes) => indexes,
+                        Err(e) => {
+                            sender_for_cmd.input(AppMsg::StructureLoadFailed {
+                                tab_id,
+                                message: format!("{e}"),
+                            });
+                            return;
+                        }
+                    };
+                    if let Err(e) = tablepro_core::check_pre_dispatch(&control) {
+                        sender_for_cmd.input(AppMsg::StructureLoadFailed {
+                            tab_id,
+                            message: format!("{e}"),
+                        });
+                        return;
+                    }
+                    let fks = match conn
+                        .fetch_foreign_keys_controlled(schema.as_deref(), &table, &control)
                         .await
-                        .unwrap_or_default();
+                    {
+                        Ok(fks) => fks,
+                        Err(e) => {
+                            sender_for_cmd.input(AppMsg::StructureLoadFailed {
+                                tab_id,
+                                message: format!("{e}"),
+                            });
+                            return;
+                        }
+                    };
                     sender_for_cmd.input(AppMsg::StructureDataLoaded {
                         tab_id,
                         columns,

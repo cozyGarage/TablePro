@@ -7,7 +7,7 @@ use relm4::{Component, ComponentController, ComponentSender, adw, gtk};
 
 use uuid::Uuid;
 
-use crate::services::workspace_state::{self, WorkspaceTabRecord};
+use crate::services::workspace_state;
 use crate::ui::browse_tab::{BrowseTab, BrowseTabInit, BrowseTabInput, BrowseTabOutput};
 use crate::ui::editor::{SqlEditor, SqlEditorInit, SqlEditorInput, SqlEditorOutput, derive_tab_label};
 
@@ -220,46 +220,24 @@ impl App {
             self.workspace_outer_stack.set_visible_child_name("empty");
             return;
         }
-        // Legacy Browse / Structure records are migrated to Table by
-        // `clamp_connection`, so the load path only has to handle
-        // Editor + Table. Unknown variants are stripped by clamp too.
         for record in &saved.tabs {
-            match record {
-                WorkspaceTabRecord::Editor { query } => {
-                    self.append_editor_tab(Some(query.clone()), sender.clone());
+            match workspace_state::restored_workspace_tab(record) {
+                Some(workspace_state::RestoredWorkspaceTab::Editor { query }) => {
+                    self.append_editor_tab(Some(query), sender.clone());
                 }
-                WorkspaceTabRecord::Table {
+                Some(workspace_state::RestoredWorkspaceTab::Table {
                     schema,
                     table,
-                    mode,
                     offset,
                     page_size,
-                    sort_col,
-                    sort_asc,
-                } => {
-                    // The persisted `mode` field is now ignored — Data
-                    // and Structure are separate AdwTabPages. Restoring
-                    // a Table record always opens the Data side; if the
-                    // user had a Structure tab open, that's captured as
-                    // a separate `WorkspaceTabRecord::Structure` record.
-                    let _ = mode;
-                    self.append_table_tab(
-                        schema.clone(),
-                        table.clone(),
-                        *offset,
-                        *page_size,
-                        match (sort_col, sort_asc) {
-                            (Some(c), Some(a)) => Some((*c, *a)),
-                            _ => None,
-                        },
-                        sender.clone(),
-                    );
+                    sort,
+                }) => {
+                    self.append_table_tab(schema, table, offset, page_size, sort, sender.clone());
                 }
-                WorkspaceTabRecord::Browse { .. }
-                | WorkspaceTabRecord::Structure { .. }
-                | WorkspaceTabRecord::Unknown => {
-                    // Unreachable post-clamp.
+                Some(workspace_state::RestoredWorkspaceTab::Structure { schema, table }) => {
+                    self.append_existing_structure_tab(schema, table, sender.clone());
                 }
+                None => {}
             }
         }
         if let Some(tab_view) = self.workspace_tab_view.as_ref()
@@ -845,9 +823,26 @@ impl App {
         self.refresh_window_title();
     }
 
+    pub(super) fn this_window_tab_ids(&self) -> Vec<Uuid> {
+        self.workspace_tabs.borrow().keys().copied().collect()
+    }
+
+    pub(super) fn window_has_pending(&self) -> bool {
+        let ids = self.this_window_tab_ids();
+        crate::services::change_tracker::any_pending_in(ids.iter().copied())
+            || crate::services::structure_tracker::any_pending_in(ids)
+    }
+
+    pub(super) fn window_pending_browse_tabs(&self) -> Vec<Uuid> {
+        crate::services::change_tracker::pending_among(self.this_window_tab_ids())
+    }
+
+    pub(super) fn window_pending_structure_tabs(&self) -> Vec<Uuid> {
+        crate::services::structure_tracker::pending_among(self.this_window_tab_ids())
+    }
+
     pub(super) fn teardown_workspace_tabs(&mut self) {
-        // Synchronous flush — debouncer would skip the write since
-        // teardown drops state before the 500ms timer would fire.
+        self.cancel_persist_timer();
         self.do_persist_workspace_state_now();
         self.cancel_all_editor_runs();
         // Drop per-tab pending-change trackers — disconnecting wipes

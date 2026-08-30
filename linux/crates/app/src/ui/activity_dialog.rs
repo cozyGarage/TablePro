@@ -2,8 +2,12 @@
 //! the policy-gated connection owned by the calling window and shows the
 //! result grid.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk};
+use tokio_util::sync::CancellationToken;
 
 use tablepro_core::{ActivityQuery, ActivityUnsupported, Value, activity_kinds, activity_sql, parse_session_id};
 
@@ -66,6 +70,7 @@ pub fn present(parent: &gtk::Window, connection_id: Option<uuid::Uuid>) {
     status.add_css_class("dim-label");
 
     let driver_id = meta.driver_id.clone();
+    let in_flight = Rc::new(RefCell::new(CancellationToken::new()));
     let actions = [
         ("Sessions", ActivityQuery::Sessions),
         ("Blocking locks", ActivityQuery::BlockingLocks),
@@ -82,6 +87,7 @@ pub fn present(parent: &gtk::Window, connection_id: Option<uuid::Uuid>) {
             btn.set_sensitive(false);
             btn.set_tooltip_text(Some(&unsupported_text(&driver_id)));
         }
+        let in_flight_for_query = in_flight.clone();
         btn.connect_clicked(move |_| {
             let sql = match activity_sql(&driver, kind, None) {
                 Ok(sql) => sql,
@@ -97,11 +103,15 @@ pub fn present(parent: &gtk::Window, connection_id: Option<uuid::Uuid>) {
             status_l.set_text(&tr!("Running…"));
             let text_buf = text_buf.clone();
             let status_l = status_l.clone();
+            let token = replace_in_flight(&in_flight_for_query);
             let timeout_secs = crate::services::operation_control::configured_timeout_secs();
             glib::spawn_future_local(async move {
-                let control = crate::services::operation_control::bounded(timeout_secs);
+                let control = crate::services::operation_control::bounded_with(timeout_secs, token.clone());
                 match conn.query_controlled(&sql, &control).await {
                     Ok(result) => {
+                        if token.is_cancelled() {
+                            return;
+                        }
                         let cols: Vec<String> = result.columns.iter().map(|c| c.name.clone()).collect();
                         let rendered = render_result(&cols, &result.rows);
                         let n = result.rows.len();
@@ -109,6 +119,9 @@ pub fn present(parent: &gtk::Window, connection_id: Option<uuid::Uuid>) {
                         status_l.set_text(&format!("{n} rows"));
                     }
                     Err(e) => {
+                        if token.is_cancelled() {
+                            return;
+                        }
                         text_buf.set_text(&e.to_string());
                         status_l.set_text(&tr!("Query failed"));
                     }
@@ -133,6 +146,7 @@ pub fn present(parent: &gtk::Window, connection_id: Option<uuid::Uuid>) {
     let status_l = status.clone();
     let driver = driver_id.clone();
     let kill_entry_c = kill_entry.clone();
+    let in_flight_for_kill = in_flight.clone();
     kill_btn.connect_clicked(move |_| {
         let id = match parse_session_id(&kill_entry_c.text()) {
             Some(id) => id,
@@ -153,15 +167,22 @@ pub fn present(parent: &gtk::Window, connection_id: Option<uuid::Uuid>) {
         };
         let text_buf = text_buf.clone();
         let status_l = status_l.clone();
+        let token = replace_in_flight(&in_flight_for_kill);
         let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         glib::spawn_future_local(async move {
-            let control = crate::services::operation_control::bounded(timeout_secs);
+            let control = crate::services::operation_control::bounded_with(timeout_secs, token.clone());
             match conn.execute_controlled(&sql, &control).await {
                 Ok(r) => {
+                    if token.is_cancelled() {
+                        return;
+                    }
                     text_buf.set_text(&format!("Kill issued; rows_affected={}", r.rows_affected));
                     status_l.set_text(&tr!("Done"));
                 }
                 Err(e) => {
+                    if token.is_cancelled() {
+                        return;
+                    }
                     text_buf.set_text(&e.to_string());
                     status_l.set_text(&tr!("Kill failed"));
                 }
@@ -176,7 +197,18 @@ pub fn present(parent: &gtk::Window, connection_id: Option<uuid::Uuid>) {
     box_.append(&status);
     toolbar.set_content(Some(&box_));
     dialog.set_child(Some(&toolbar));
+    let in_flight_for_close = in_flight;
+    dialog.connect_closed(move |_| {
+        in_flight_for_close.borrow().cancel();
+    });
     dialog.present(Some(parent));
+}
+
+fn replace_in_flight(current: &RefCell<CancellationToken>) -> CancellationToken {
+    current.borrow().cancel();
+    let next = CancellationToken::new();
+    *current.borrow_mut() = next.clone();
+    next
 }
 
 /// The dialog offers every activity view, so a button the engine cannot

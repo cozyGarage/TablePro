@@ -38,6 +38,10 @@ pub fn start_background() -> Option<Arc<McpBridge>> {
         tracing::error!("MCP server disabled because the required audit journal is unavailable");
         return None;
     }
+    if !database_service::instance().policy_available() {
+        tracing::error!("MCP server disabled because the policy file could not be loaded");
+        return None;
+    }
     let tokens = match TokenStore::open_default() {
         Ok(t) => Arc::new(t),
         Err(e) => {

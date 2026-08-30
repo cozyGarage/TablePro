@@ -1,6 +1,6 @@
 # TablePro Linux development plan
 
-Last audited: 2026-08-21
+Last audited: 2026-08-30
 
 This plan is the source of truth for the Linux application. It separates:
 
@@ -29,7 +29,7 @@ Verified locally on 2026-08-21 against Arch stable Rust 1.97.1:
 - Full-workspace strict Clippy passes with `-D warnings`
 - The unit tier passes: 575 tests, one ignored Secret Service test
 - The sandbox tier passes: 431 tests, two ignored
-- The installed GTK tier passes: 12 of 12 scenarios, retry-free
+- The installed GTK tier is 14 scenarios, including persist-after-switch and two-window pending-edit isolation. Adding those scenarios restarts the Phase 4 soak ledger.
 - `cargo deny check` reports advisories, bans, licenses, and sources ok
 - All 45 Docker driver integration tests passed on 2026-08-22: PostgreSQL 9, MySQL 7, SQL Server 12, ClickHouse 12, and SQLite 5 without Docker
 - The PostgreSQL release fixture passes 44 tests
@@ -193,7 +193,9 @@ Primary files:
 
 ## 1.5 Merge partial policy configuration safely
 
-Environment and connection overrides deserialize as optional fields and merge onto the selected environment's secure defaults. A partial production configuration retains `agent_writes = deny` unless the user explicitly changes it, and omitted masking rules retain the default sensitive-field patterns.
+Environment and connection overrides deserialize as optional fields and merge onto the selected environment's secure defaults. A partial production configuration retains `agent_writes = deny` unless the user explicitly changes it. Omitted masking rules and an explicit empty `mask_patterns` list both keep the default sensitive-field patterns. Turning off agent masking is `mask_agent_results = false`, not an empty pattern list.
+
+A `policy.toml` that exists but cannot be read or parsed is refused. The GUI keeps the last loaded policy on reload, uses defaults and disables MCP on first-load failure, and `tablepro-agentd` still requires a readable `--policy` file.
 
 ## Acceptance criteria
 
@@ -204,6 +206,11 @@ Environment and connection overrides deserialize as optional fields and merge on
 - [x] Session IDs parse as positive integers before SQL is built.
 - [x] An empty MCP allowlist exposes no connection data or history.
 - [x] Partial production policy retains secure defaults.
+- [x] An explicit empty mask list keeps the default sensitive-field patterns.
+- [x] A corrupt policy file fails to load. MCP stays off, and a reload keeps the last good policy.
+- [x] `list_tables` and `describe_table` use the same timeout, identifier checks, and audit path as the other metadata tools.
+- [x] Blast-radius COUNT uses the write's deadline and cancellation, or a 30-second bound when the write has none.
+- [x] Index and foreign-key reads use the same controlled path as column reads.
 - [x] Mixed transaction batches preserve DDL and unscoped DML restrictions in either statement order.
 - [x] Agent token issuance requires at least one existing saved connection.
 - [x] One batch requests at most one approval.
@@ -525,8 +532,12 @@ Removed material included retired application source, tests, project files, runt
 
 In progress since 2026-08-21. Slice 10.1 is implemented and locally
 release-verified: activation is additive, each window owns and releases its own
-connection, and the single-connection limit is gone. Slices 10.2 through 10.7
-are not started.
+connection, and the single-connection limit is gone. Slice 10.2 is implemented:
+groups, tags, favourites, search, and URL import. Welcome rows still do not
+show an environment colour. Slice 10.3 has a capability-declared TSV activity
+dialog whose in-flight query is cancelled when the dialog closes. The typed
+sessions console and blocking trees are not started. Structure edit tabs now
+restore with the rest of the workspace. Slices 10.4 through 10.7 are not started.
 
 The product is strong on safety and thin on operations. A DBA who manages many
 servers gets one active connection per process, an activity dialog that renders
@@ -685,7 +696,7 @@ Primary files:
 - [x] Several connections are open at once, and a query result reaches only the tab that owns its connection.
 - [x] Closing one connection leaves every other connection usable and ends only its own monitor task.
 - [ ] Workspace restoration reopens every referenced connection, and a failed reconnect leaves that tab inert.
-- [ ] Saved connections group, tag, filter, and search, and legacy connection files without the new fields still load.
+- [x] Saved connections group, tag, filter, and search, and legacy connection files without the new fields still load.
 - [ ] Each driver declares which activity queries it supports, and the UI offers only those.
 - [ ] A real blocking pair is reported as a blocking tree on PostgreSQL, MySQL, and SQL Server.
 - [ ] Terminating a session in production requires approval and records a terminal audit state, and dismissal leaves the session alive.

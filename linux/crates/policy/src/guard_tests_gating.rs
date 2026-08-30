@@ -245,3 +245,54 @@ async fn transaction_batch_requests_one_approval() {
     assert_eq!(approvals.load(Ordering::SeqCst), 1);
     assert_eq!(executes.load(Ordering::SeqCst), 2);
 }
+
+#[tokio::test]
+async fn blast_radius_count_runs_through_the_controlled_query_path() {
+    let queries = Arc::new(AtomicUsize::new(0));
+    let guard = PolicyGuard::new(
+        query_counting_connection(queries.clone()),
+        context(
+            Principal::human_gui(),
+            Environment::Local,
+            PolicyConfig::default(),
+            Arc::new(AutoApproveSink),
+            Arc::new(SequenceAuditSink::new(vec![])),
+            Arc::new(AuditState::new()),
+        ),
+    );
+
+    guard
+        .execute("UPDATE jobs SET status = 'done' WHERE id = 1")
+        .await
+        .expect("local write");
+
+    assert_eq!(queries.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn an_expired_deadline_skips_the_blast_radius_count() {
+    let queries = Arc::new(AtomicUsize::new(0));
+    let guard = PolicyGuard::new(
+        query_counting_connection(queries.clone()),
+        context(
+            Principal::human_gui(),
+            Environment::Local,
+            PolicyConfig::default(),
+            Arc::new(AutoApproveSink),
+            Arc::new(SequenceAuditSink::new(vec![])),
+            Arc::new(AuditState::new()),
+        ),
+    );
+    let control = OperationControl::with_timeout(std::time::Duration::ZERO);
+
+    let error = guard
+        .execute_controlled("UPDATE jobs SET status = 'done' WHERE id = 1", &control)
+        .await
+        .expect_err("expired control must refuse the write");
+
+    assert!(
+        matches!(error, DriverError::TimedOut) || error.to_string().contains("timed out"),
+        "{error}"
+    );
+    assert_eq!(queries.load(Ordering::SeqCst), 0);
+}

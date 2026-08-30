@@ -177,8 +177,10 @@ pub struct App {
     /// page-size change / state-changed event; without coalescing,
     /// each one triggers a load-modify-write of the entire
     /// connections JSON. This flag stays `true` while a 500ms timer
-    /// is pending; subsequent persist requests in the window no-op.
+    /// is pending.
     persist_pending: std::rc::Rc<std::cell::Cell<bool>>,
+    persist_timeout: std::rc::Rc<std::cell::RefCell<Option<glib::SourceId>>>,
+    persist_generation: std::rc::Rc<std::cell::Cell<u64>>,
     /// LIFO stack of recently-closed tab descriptors for Ctrl+Shift+T
     /// reopen. Capped at `CLOSED_TABS_CAPACITY`; the oldest entry is
     /// dropped when a new one is pushed against a full stack. Cleared
@@ -370,7 +372,13 @@ impl SimpleComponent for App {
 
         init_css::install_pending_change_css();
 
-        let window_handles = init_window::install_window_lifecycle(&widgets.window, &widgets.split_view, &sender);
+        let workspace_tabs = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+        let window_handles = init_window::install_window_lifecycle(
+            &widgets.window,
+            &widgets.split_view,
+            &sender,
+            workspace_tabs.clone(),
+        );
 
         let sidebar = init_sidebar::build_sidebar(&widgets, &sender);
 
@@ -417,7 +425,7 @@ impl SimpleComponent for App {
             workspace_root: None,
             workspace_tab_view: None,
             workspace_root_added: std::cell::Cell::new(false),
-            workspace_tabs: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
+            workspace_tabs,
             dialog: None,
             schema_buffer: build_schema_buffer(),
             favorites: Vec::new(),
@@ -442,6 +450,8 @@ impl SimpleComponent for App {
             in_flight_saves: window_handles.in_flight_saves,
             structure_saves_in_flight: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
             persist_pending: std::rc::Rc::new(std::cell::Cell::new(false)),
+            persist_timeout: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            persist_generation: std::rc::Rc::new(std::cell::Cell::new(0)),
             closed_tabs_stack: std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::with_capacity(
                 CLOSED_TABS_CAPACITY,
             ))),
@@ -501,10 +511,16 @@ impl SimpleComponent for App {
                 name,
                 open_mode,
             } => self.on_select_table(schema, name, open_mode, sender),
-            AppMsg::ColumnsLoaded(tab_id, columns) => self.on_browse_columns_loaded(tab_id, columns, sender),
-            AppMsg::RowsLoaded(tab_id, offset, result) => self.on_browse_rows_loaded(tab_id, offset, result),
-            AppMsg::LoadFailed(tab_id, msg) => self.on_browse_load_failed(tab_id, msg),
-            AppMsg::RowCountLoaded(tab_id, count) => self.on_browse_row_count_loaded(tab_id, count),
+            AppMsg::ColumnsLoaded(tab_id, columns, generation) => {
+                self.on_browse_columns_loaded(tab_id, columns, generation, sender)
+            }
+            AppMsg::RowsLoaded(tab_id, offset, result, generation) => {
+                self.on_browse_rows_loaded(tab_id, offset, result, generation)
+            }
+            AppMsg::LoadFailed(tab_id, msg, generation) => self.on_browse_load_failed(tab_id, msg, generation),
+            AppMsg::RowCountLoaded(tab_id, count, generation) => {
+                self.on_browse_row_count_loaded(tab_id, count, generation)
+            }
             AppMsg::FetchBrowsePage(tab_id) => self.fetch_browse_page(tab_id, sender),
             AppMsg::FetchBrowseColumns(tab_id) => self.fetch_browse_columns(tab_id, sender),
             AppMsg::FetchBrowseRowCount(tab_id) => self.fetch_browse_row_count(tab_id, sender),

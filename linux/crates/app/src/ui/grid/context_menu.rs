@@ -5,7 +5,7 @@ use gtk4::prelude::*;
 use gtk4::{self as gtk, gio, glib};
 
 use super::GridMsg;
-use super::display::POSITION_SLOT;
+use super::display::{POSITION_SLOT, ROW_KEY_SLOT};
 use super::editing::enter_edit_mode;
 
 #[derive(Clone)]
@@ -115,10 +115,11 @@ pub(super) fn install_grid_context_menus(column_view: &gtk::ColumnView, sender: 
         gio::ActionEntry::builder("set-null")
             .activate(move |_, _, _| {
                 if let Some(slot) = ctx.borrow().as_ref() {
-                    let position = POSITION_SLOT.get(&slot.widget).unwrap_or(0);
+                    let (row_position, row_key) = cell_row_identity(&slot.widget);
                     s.send(GridMsg::SetCellNull {
-                        row_position: position,
+                        row_position,
                         col_index: slot.col_index,
+                        row_key,
                     })
                     .ok();
                 }
@@ -131,8 +132,8 @@ pub(super) fn install_grid_context_menus(column_view: &gtk::ColumnView, sender: 
         gio::ActionEntry::builder("delete-row")
             .activate(move |_, _, _| {
                 if let Some(slot) = ctx.borrow().as_ref() {
-                    let position = POSITION_SLOT.get(&slot.widget).unwrap_or(0);
-                    s.send(GridMsg::DeleteRowAt { row_position: position }).ok();
+                    let (row_position, row_key) = cell_row_identity(&slot.widget);
+                    s.send(GridMsg::DeleteRowAt { row_position, row_key }).ok();
                 }
             })
             .build()
@@ -284,6 +285,12 @@ pub(super) fn attach_cell_gesture(
     let shortcut_controller = gtk::ShortcutController::new();
     shortcut_controller.add_shortcut(menu_shortcut);
     widget.add_controller(shortcut_controller);
+}
+
+fn cell_row_identity(widget: &gtk::Widget) -> (u32, Vec<tablepro_core::Value>) {
+    let position = POSITION_SLOT.get(widget).unwrap_or(0);
+    let row_key = ROW_KEY_SLOT.cloned(widget).unwrap_or_default();
+    (position, row_key)
 }
 
 fn cell_text(widget: &gtk::Widget) -> String {

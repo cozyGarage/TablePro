@@ -202,16 +202,21 @@ pub fn policy_path() -> Result<PathBuf, String> {
     Ok(base.join("tablepro").join("policy.toml"))
 }
 
-pub fn load_policy() -> PolicyConfig {
+pub fn load_policy() -> Result<PolicyConfig, String> {
     match policy_path() {
-        Ok(path) if path.exists() => load_from_path(&path).unwrap_or_default(),
-        _ => PolicyConfig::default(),
+        Ok(path) if path.exists() => load_from_path(&path),
+        Ok(_) => Ok(PolicyConfig::default()),
+        Err(error) => Err(error),
     }
 }
 
 pub fn load_from_path(path: &Path) -> Result<PolicyConfig, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    toml::from_str(&text).map_err(|e| e.to_string())
+    let mut policy: PolicyConfig = toml::from_str(&text).map_err(|e| e.to_string())?;
+    if policy.mask_patterns.is_empty() {
+        policy.mask_patterns = default_mask_rules();
+    }
+    Ok(policy)
 }
 
 #[cfg(test)]
@@ -291,6 +296,23 @@ mod tests {
     #[test]
     fn omitted_mask_patterns_keep_sensitive_defaults() {
         let policy: PolicyConfig = toml::from_str("").unwrap();
+        assert!(!policy.mask_patterns.is_empty());
+    }
+
+    #[test]
+    fn a_corrupt_policy_file_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.toml");
+        std::fs::write(&path, "this is not toml [[[").unwrap();
+        assert!(load_from_path(&path).is_err());
+    }
+
+    #[test]
+    fn an_explicit_empty_mask_list_keeps_sensitive_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.toml");
+        std::fs::write(&path, "mask_patterns = []").unwrap();
+        let policy = load_from_path(&path).unwrap();
         assert!(!policy.mask_patterns.is_empty());
     }
 }

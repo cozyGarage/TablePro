@@ -102,8 +102,7 @@ impl App {
         // the connection mid-edit silently destroys the user's work.
         // Confirm via an AlertDialog mirroring the window-close-with-
         // pending and F5-with-pending paths.
-        let has_pending = crate::services::change_tracker::any_pending_globally()
-            || crate::services::structure_tracker::any_pending_globally();
+        let has_pending = self.window_has_pending();
         if has_pending {
             let dialog = adw::AlertDialog::new(
                 Some(&crate::tr!("Discard pending changes?")),
@@ -366,8 +365,7 @@ impl App {
             return;
         }
 
-        let has_pending = crate::services::change_tracker::any_pending_globally()
-            || crate::services::structure_tracker::any_pending_globally();
+        let has_pending = self.window_has_pending();
         if has_pending {
             self.connection_transition = ConnectionTransition::AwaitingDecision;
             let dialog = adw::AlertDialog::new(
@@ -416,17 +414,17 @@ impl App {
                 self.continue_connection_switch(sender);
             }
             SwitchDecision::DiscardChanges => {
-                for id in crate::services::change_tracker::pending_tabs() {
+                for id in self.window_pending_browse_tabs() {
                     crate::services::change_tracker::with_tab(id, |tracker| tracker.clear());
                 }
-                for id in crate::services::structure_tracker::pending_tabs() {
+                for id in self.window_pending_structure_tabs() {
                     crate::services::structure_tracker::with_tab(id, |tracker| tracker.clear());
                 }
                 self.activate_prepared_connection(sender);
             }
             SwitchDecision::SaveChanges => {
-                let browse = crate::services::change_tracker::pending_tabs();
-                let structure = crate::services::structure_tracker::pending_tabs();
+                let browse = self.window_pending_browse_tabs();
+                let structure = self.window_pending_structure_tabs();
                 self.switch_saves_pending.clear();
                 for id in browse.iter().copied() {
                     *self.switch_saves_pending.entry(id).or_insert(0) += 1;

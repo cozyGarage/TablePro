@@ -107,6 +107,65 @@ pub enum PersistedTableMode {
     Structure,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RestoredWorkspaceTab {
+    Editor {
+        query: String,
+    },
+    Table {
+        schema: Option<String>,
+        table: String,
+        offset: u64,
+        page_size: u64,
+        sort: Option<(usize, bool)>,
+    },
+    Structure {
+        schema: Option<String>,
+        table: String,
+    },
+}
+
+pub(crate) fn restored_workspace_tab(record: &WorkspaceTabRecord) -> Option<RestoredWorkspaceTab> {
+    match record {
+        WorkspaceTabRecord::Editor { query } => Some(RestoredWorkspaceTab::Editor { query: query.clone() }),
+        WorkspaceTabRecord::Table {
+            schema,
+            table,
+            mode: PersistedTableMode::Data,
+            offset,
+            page_size,
+            sort_col,
+            sort_asc,
+        } => Some(RestoredWorkspaceTab::Table {
+            schema: schema.clone(),
+            table: table.clone(),
+            offset: *offset,
+            page_size: *page_size,
+            sort: match (sort_col, sort_asc) {
+                (Some(column), Some(ascending)) => Some((*column, *ascending)),
+                _ => None,
+            },
+        }),
+        WorkspaceTabRecord::Table {
+            schema,
+            table,
+            mode: PersistedTableMode::Structure,
+            ..
+        }
+        | WorkspaceTabRecord::Structure { schema, table } => {
+            if table.is_empty() {
+                None
+            } else {
+                Some(RestoredWorkspaceTab::Structure {
+                    schema: schema.clone(),
+                    table: table.clone(),
+                })
+            }
+        }
+        WorkspaceTabRecord::Browse { .. } | WorkspaceTabRecord::Unknown => None,
+    }
+}
+
 fn load_locked() -> WorkspaceState {
     let Some(path) = xdg_config_path(FILE_NAME) else {
         return WorkspaceState::default();
@@ -365,6 +424,73 @@ mod tests {
             }
             _ => panic!("expected Browse"),
         }
+    }
+
+    #[test]
+    fn a_structure_record_restores_as_a_structure_tab() {
+        let record = WorkspaceTabRecord::Structure {
+            schema: Some("public".into()),
+            table: "users".into(),
+        };
+        assert_eq!(
+            restored_workspace_tab(&record),
+            Some(RestoredWorkspaceTab::Structure {
+                schema: Some("public".into()),
+                table: "users".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_table_record_in_structure_mode_restores_as_a_structure_tab() {
+        let record = WorkspaceTabRecord::Table {
+            schema: Some("public".into()),
+            table: "users".into(),
+            mode: PersistedTableMode::Structure,
+            offset: 100,
+            page_size: DEFAULT_PAGE_SIZE,
+            sort_col: Some(1),
+            sort_asc: Some(true),
+        };
+        assert_eq!(
+            restored_workspace_tab(&record),
+            Some(RestoredWorkspaceTab::Structure {
+                schema: Some("public".into()),
+                table: "users".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_table_record_in_data_mode_restores_browse_state() {
+        let record = WorkspaceTabRecord::Table {
+            schema: None,
+            table: "jobs".into(),
+            mode: PersistedTableMode::Data,
+            offset: 50,
+            page_size: 100,
+            sort_col: Some(2),
+            sort_asc: Some(false),
+        };
+        assert_eq!(
+            restored_workspace_tab(&record),
+            Some(RestoredWorkspaceTab::Table {
+                schema: None,
+                table: "jobs".into(),
+                offset: 50,
+                page_size: 100,
+                sort: Some((2, false)),
+            })
+        );
+    }
+
+    #[test]
+    fn an_empty_structure_table_is_not_restored() {
+        let record = WorkspaceTabRecord::Structure {
+            schema: None,
+            table: String::new(),
+        };
+        assert_eq!(restored_workspace_tab(&record), None);
     }
 
     #[test]

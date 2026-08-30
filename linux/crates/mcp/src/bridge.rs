@@ -133,8 +133,36 @@ impl McpBridge {
     }
 
     pub async fn list_tables(&self, token: &McpToken, connection_id: Uuid) -> Result<Vec<TableInfo>, String> {
-        self.with_connection(token, connection_id, |conn| {
-            Box::pin(async move { conn.list_tables().await.map_err(|e| e.to_string()) })
+        let timeout = self.query_timeout_secs;
+        self.with_connection(token, connection_id, move |conn| {
+            Box::pin(async move {
+                let control = operation_control(timeout);
+                conn.list_tables_controlled(&control).await.map_err(|e| e.to_string())
+            })
+        })
+        .await
+    }
+
+    pub async fn describe_table(
+        &self,
+        token: &McpToken,
+        connection_id: Uuid,
+        schema: Option<String>,
+        table: String,
+    ) -> Result<Vec<ColumnInfo>, String> {
+        let table = validated_identifier(&table)?;
+        let schema = match schema {
+            Some(schema) => Some(validated_identifier(&schema)?),
+            None => None,
+        };
+        let timeout = self.query_timeout_secs;
+        self.with_connection(token, connection_id, move |conn| {
+            Box::pin(async move {
+                let control = operation_control(timeout);
+                conn.fetch_columns_controlled(schema.as_deref(), &table, &control)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
         })
         .await
     }
@@ -185,12 +213,12 @@ impl McpBridge {
                     .map_err(|e| e.to_string())?;
                 check_pre_dispatch(&control).map_err(|e| e.to_string())?;
                 let indexes = conn
-                    .fetch_indexes(schema.as_deref(), &table)
+                    .fetch_indexes_controlled(schema.as_deref(), &table, &control)
                     .await
                     .map_err(|e| e.to_string())?;
                 check_pre_dispatch(&control).map_err(|e| e.to_string())?;
                 let foreign_keys = conn
-                    .fetch_foreign_keys(schema.as_deref(), &table)
+                    .fetch_foreign_keys_controlled(schema.as_deref(), &table, &control)
                     .await
                     .map_err(|e| e.to_string())?;
                 Ok(TableSchema {

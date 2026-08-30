@@ -7,7 +7,7 @@ use relm4::gtk::glib;
 use relm4::{ComponentSender, adw};
 use uuid::Uuid;
 
-use super::{App, AppMsg};
+use super::{App, AppMsg, WorkspaceTab};
 
 /// Owning handles the model needs from the window-close plumbing: the
 /// close-after-save counters, the "close the window once the map
@@ -23,6 +23,7 @@ pub(super) fn install_window_lifecycle(
     window: &adw::ApplicationWindow,
     split_view: &adw::OverlaySplitView,
     sender: &ComponentSender<App>,
+    workspace_tabs: Rc<RefCell<HashMap<Uuid, WorkspaceTab>>>,
 ) -> WindowLifecycleHandles {
     let restored = crate::services::window_state::load();
     window.set_default_size(restored.width, restored.height);
@@ -46,6 +47,7 @@ pub(super) fn install_window_lifecycle(
     };
     let in_flight_saves_for_close = in_flight_saves.clone();
     let close_request_input_sender = sender.input_sender().clone();
+    let workspace_tabs_for_close = workspace_tabs;
     window.connect_close_request(move |w| {
         // If a Save is mid-flight (async transaction running), block
         // the close until it resolves. Without this, the completion
@@ -81,8 +83,9 @@ pub(super) fn install_window_lifecycle(
         // below) — skip the guard, save state, allow close.
         // Browse + Structure tabs share the dirty-state guard:
         // either source of pending changes triggers the dialog.
-        let has_pending = crate::services::change_tracker::any_pending_globally()
-            || crate::services::structure_tracker::any_pending_globally();
+        let window_tab_ids: Vec<Uuid> = workspace_tabs_for_close.borrow().keys().copied().collect();
+        let has_pending = crate::services::change_tracker::any_pending_in(window_tab_ids.iter().copied())
+            || crate::services::structure_tracker::any_pending_in(window_tab_ids.iter().copied());
         if !force_close_for_close.get() && has_pending {
             // Plural-form heading matches the per-tab dialog's
             // tone — factual GNOME HIG language rather than the
@@ -107,14 +110,19 @@ pub(super) fn install_window_lifecycle(
             let close_after_save_for_resp = close_after_save_for_close.clone();
             let close_window_after_save_for_resp = close_window_after_save_for_close.clone();
             let input_sender_for_resp = close_request_input_sender.clone();
+            let window_tab_ids_for_resp = window_tab_ids.clone();
             dialog.connect_response(None, move |dlg, response| {
                 dlg.close();
                 match response {
                     "discard" => {
-                        for tab_id in crate::services::change_tracker::pending_tabs() {
+                        for tab_id in
+                            crate::services::change_tracker::pending_among(window_tab_ids_for_resp.iter().copied())
+                        {
                             crate::services::change_tracker::with_tab(tab_id, |t| t.clear());
                         }
-                        for tab_id in crate::services::structure_tracker::pending_tabs() {
+                        for tab_id in
+                            crate::services::structure_tracker::pending_among(window_tab_ids_for_resp.iter().copied())
+                        {
                             crate::services::structure_tracker::with_tab(tab_id, |t| t.clear());
                         }
                         force_close_for_resp.set(true);
@@ -130,8 +138,10 @@ pub(super) fn install_window_lifecycle(
                         // the SaveCompletedForTab / StructureSaveCompleted
                         // handlers in App::update close the window once
                         // the set drains. Any SaveFailed aborts.
-                        let browse_tabs: Vec<Uuid> = crate::services::change_tracker::pending_tabs();
-                        let structure_tabs: Vec<Uuid> = crate::services::structure_tracker::pending_tabs();
+                        let browse_tabs: Vec<Uuid> =
+                            crate::services::change_tracker::pending_among(window_tab_ids_for_resp.iter().copied());
+                        let structure_tabs: Vec<Uuid> =
+                            crate::services::structure_tracker::pending_among(window_tab_ids_for_resp.iter().copied());
                         // Counter increments — a Table tab listed in both
                         // sets bumps to 2 so the window close waits for
                         // BOTH the browse save and the structure save.

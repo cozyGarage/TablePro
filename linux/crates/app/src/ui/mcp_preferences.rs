@@ -9,7 +9,7 @@ use crate::services::mcp_service;
 use crate::tr;
 
 pub fn build_page() -> adw::PreferencesPage {
-    crate::services::database_service::instance().reload_policy();
+    let policy_reload = crate::services::database_service::instance().reload_policy();
 
     let page = adw::PreferencesPage::builder()
         .title(tr!("MCP"))
@@ -22,6 +22,17 @@ pub fn build_page() -> adw::PreferencesPage {
             "Loopback MCP server on 127.0.0.1:17432. Tokens gate which connections agents may use."
         ))
         .build();
+
+    if let Err(error) = policy_reload {
+        tracing::warn!(error = %error, "policy reload failed; keeping the previous policy");
+        let row = adw::ActionRow::builder()
+            .title(tr!("Policy file could not be reloaded"))
+            .subtitle(tr!(
+                "The previous policy is still in use. Fix the policy file and reopen Preferences."
+            ))
+            .build();
+        status_group.add(&row);
+    }
 
     let endpoint_row = adw::ActionRow::builder()
         .title(tr!("Endpoint"))

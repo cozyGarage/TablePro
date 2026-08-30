@@ -114,13 +114,14 @@ pub(super) const SUPPRESS_SLOT: WidgetSlot<bool> = WidgetSlot::new("tp-suppress-
 pub(super) const POPOVER_SLOT: WidgetSlot<gtk4::Popover> = WidgetSlot::new("tp-popover");
 pub(super) const PREEDIT_SLOT: WidgetSlot<bool> = WidgetSlot::new("tp-preedit-active");
 
-pub fn focused_cell_coords(widget: &impl IsA<gtk4::Widget>) -> Option<(u32, usize)> {
+pub fn focused_cell_identity(widget: &impl IsA<gtk4::Widget>) -> Option<(u32, usize, Vec<Value>)> {
     let root = widget.root()?;
     let window = root.dynamic_cast::<gtk4::Window>().ok()?;
     let focused = gtk4::prelude::GtkWindowExt::focus(&window)?;
     let position = POSITION_SLOT.get(&focused)?;
     let column = COLUMN_SLOT.get(&focused)?;
-    Some((position, column))
+    let row_key = ROW_KEY_SLOT.cloned(&focused).unwrap_or_default();
+    Some((position, column, row_key))
 }
 
 #[cfg(test)]

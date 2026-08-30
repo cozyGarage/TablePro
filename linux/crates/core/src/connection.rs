@@ -203,6 +203,14 @@ pub trait Connection: Send + Sync {
     async fn fetch_indexes(&self, _schema: Option<&str>, _table: &str) -> Result<Vec<IndexInfo>, DriverError> {
         Ok(Vec::new())
     }
+    async fn fetch_indexes_controlled(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        control: &OperationControl,
+    ) -> Result<Vec<IndexInfo>, DriverError> {
+        run_controlled(self.fetch_indexes(schema, table), control).await
+    }
     /// Foreign-key constraints declared on `table`. Empty carries the
     /// same ambiguity as `fetch_indexes`; read
     /// `DatabaseDriver::supports_foreign_key_metadata` alongside it.
@@ -212,6 +220,14 @@ pub trait Connection: Send + Sync {
         _table: &str,
     ) -> Result<Vec<ForeignKeyInfo>, DriverError> {
         Ok(Vec::new())
+    }
+    async fn fetch_foreign_keys_controlled(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        control: &OperationControl,
+    ) -> Result<Vec<ForeignKeyInfo>, DriverError> {
+        run_controlled(self.fetch_foreign_keys(schema, table), control).await
     }
     /// Open an interactive transaction for preview-then-commit flows.
     /// Default returns `Unsupported` so drivers adopt incrementally.
@@ -258,6 +274,18 @@ mod controlled_default_tests {
         }
 
         async fn fetch_columns(&self, _schema: Option<&str>, _table: &str) -> Result<Vec<ColumnInfo>, DriverError> {
+            self.stall().await
+        }
+
+        async fn fetch_indexes(&self, _schema: Option<&str>, _table: &str) -> Result<Vec<IndexInfo>, DriverError> {
+            self.stall().await
+        }
+
+        async fn fetch_foreign_keys(
+            &self,
+            _schema: Option<&str>,
+            _table: &str,
+        ) -> Result<Vec<ForeignKeyInfo>, DriverError> {
             self.stall().await
         }
 
@@ -333,6 +361,14 @@ mod controlled_default_tests {
             Err(DriverError::Cancelled)
         ));
         assert!(matches!(
+            connection.fetch_indexes_controlled(None, "t", &control).await,
+            Err(DriverError::Cancelled)
+        ));
+        assert!(matches!(
+            connection.fetch_foreign_keys_controlled(None, "t", &control).await,
+            Err(DriverError::Cancelled)
+        ));
+        assert!(matches!(
             connection.fetch_rows_controlled(None, "t", 0, 10, &control).await,
             Err(DriverError::Cancelled)
         ));
@@ -361,6 +397,14 @@ mod controlled_default_tests {
         ));
         assert!(matches!(
             connection.fetch_columns_controlled(None, "t", &control).await,
+            Err(DriverError::TimedOut)
+        ));
+        assert!(matches!(
+            connection.fetch_indexes_controlled(None, "t", &control).await,
+            Err(DriverError::TimedOut)
+        ));
+        assert!(matches!(
+            connection.fetch_foreign_keys_controlled(None, "t", &control).await,
             Err(DriverError::TimedOut)
         ));
         assert!(matches!(

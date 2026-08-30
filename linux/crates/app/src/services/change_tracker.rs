@@ -770,15 +770,14 @@ impl ChangeTrackerRegistry {
         self.trackers.remove(&tab_id);
     }
 
-    pub fn any_pending(&self) -> bool {
-        self.trackers.values().any(|t| t.has_pending())
+    pub fn any_pending_in(&self, ids: impl IntoIterator<Item = Uuid>) -> bool {
+        ids.into_iter()
+            .any(|id| self.trackers.get(&id).is_some_and(|tracker| tracker.has_pending()))
     }
 
-    pub fn pending_tabs(&self) -> Vec<Uuid> {
-        self.trackers
-            .iter()
-            .filter(|(_, t)| t.has_pending())
-            .map(|(id, _)| *id)
+    pub fn pending_among(&self, ids: impl IntoIterator<Item = Uuid>) -> Vec<Uuid> {
+        ids.into_iter()
+            .filter(|id| self.trackers.get(id).is_some_and(|tracker| tracker.has_pending()))
             .collect()
     }
 }
@@ -815,15 +814,12 @@ pub fn close_tab(tab_id: Uuid) {
     REGISTRY.with(|reg| reg.borrow_mut().close_tab(tab_id));
 }
 
-/// True if any open tab has pending changes — used by the app-level
-/// quit guard to decide whether to show the "Unsaved changes" dialog.
-pub fn any_pending_globally() -> bool {
-    REGISTRY.with(|reg| reg.borrow().any_pending())
+pub fn any_pending_in(ids: impl IntoIterator<Item = Uuid>) -> bool {
+    REGISTRY.with(|reg| reg.borrow().any_pending_in(ids))
 }
 
-/// Tabs with pending changes — ordered arbitrary (HashMap iteration).
-pub fn pending_tabs() -> Vec<Uuid> {
-    REGISTRY.with(|reg| reg.borrow().pending_tabs())
+pub fn pending_among(ids: impl IntoIterator<Item = Uuid>) -> Vec<Uuid> {
+    REGISTRY.with(|reg| reg.borrow().pending_among(ids))
 }
 
 #[cfg(test)]
@@ -1049,14 +1045,18 @@ mod tests {
         let mut reg = ChangeTrackerRegistry::new();
         let id = Uuid::new_v4();
         reg.open_tab(id);
-        assert!(!reg.any_pending());
+        assert!(!reg.any_pending_in([id]));
         let key = rk(&[Value::Int(1)]);
         reg.trackers
             .get_mut(&id)
             .unwrap()
             .track_cell_edit(key, 0, Value::Int(1), Value::Int(2));
-        assert!(reg.any_pending());
-        assert_eq!(reg.pending_tabs(), vec![id]);
+        assert!(reg.any_pending_in([id]));
+        let foreign = Uuid::new_v4();
+        assert!(!reg.any_pending_in([foreign]));
+        assert!(reg.any_pending_in([id, foreign]));
+        assert_eq!(reg.pending_among([foreign, id]), vec![id]);
+        assert!(reg.pending_among([foreign]).is_empty());
     }
 
     #[test]

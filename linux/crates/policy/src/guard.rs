@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -21,6 +21,8 @@ use crate::config::PolicyConfig;
 use crate::mask::apply_masking;
 use crate::principal::Principal;
 use crate::rules::{Decision, evaluate_categorical, evaluate_eligible_write};
+
+const BLAST_RADIUS_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct GuardContext {
@@ -83,7 +85,12 @@ impl PolicyGuard {
         &self.ctx
     }
 
-    async fn authorize(&self, sql: &str, _is_params_exec: bool) -> Result<Authorization, DriverError> {
+    async fn authorize(
+        &self,
+        sql: &str,
+        _is_params_exec: bool,
+        control: Option<&OperationControl>,
+    ) -> Result<Authorization, DriverError> {
         let facts = classify(sql, &self.ctx.driver_id);
         let env_policy = self
             .ctx
@@ -101,7 +108,7 @@ impl PolicyGuard {
 
         self.require_governed_write_available()?;
         let estimated_rows = if facts.contains_mutating_dml && env_policy.blast_radius_max_rows.is_some() {
-            self.estimate_blast_radius(sql, &facts).await?
+            self.estimate_blast_radius(sql, &facts, control).await?
         } else {
             None
         };
@@ -216,7 +223,12 @@ impl PolicyGuard {
         }
     }
 
-    async fn estimate_blast_radius(&self, sql: &str, facts: &StatementFacts) -> Result<Option<u64>, DriverError> {
+    async fn estimate_blast_radius(
+        &self,
+        sql: &str,
+        facts: &StatementFacts,
+        control: Option<&OperationControl>,
+    ) -> Result<Option<u64>, DriverError> {
         let Some(rewrite) = count_sql_for_mutation(sql, &self.ctx.driver_id) else {
             return Ok(None);
         };
@@ -227,7 +239,15 @@ impl PolicyGuard {
             ))
         })?;
         let start = Instant::now();
-        let result = self.inner.query(&rewrite.count_sql).await;
+        let owned_control;
+        let control = match control {
+            Some(control) => control,
+            None => {
+                owned_control = OperationControl::with_timeout(BLAST_RADIUS_TIMEOUT);
+                &owned_control
+            }
+        };
+        let result = self.inner.query_controlled(&rewrite.count_sql, control).await;
         let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
         let audit_result = match &result {
             Ok(_) => {
@@ -247,7 +267,7 @@ impl PolicyGuard {
                 self.record_outcome(
                     &operation,
                     AuditOutcome {
-                        terminal_status: AuditTerminalStatus::Failed,
+                        terminal_status: controlled_error_terminal_status(error),
                         transaction_outcome: AuditTransactionOutcome::NotApplicable,
                         rows_affected: None,
                         error_category: Some(error_category(error)),

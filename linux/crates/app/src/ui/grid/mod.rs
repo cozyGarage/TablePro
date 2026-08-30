@@ -13,7 +13,7 @@ use crate::ui::row_object::RowObject;
 use column::{build_column, is_cell_editable};
 use context_menu::install_grid_context_menus;
 
-pub use display::{editable_null_sentinel, focused_cell_coords, value_to_display_text};
+pub use display::{editable_null_sentinel, focused_cell_identity, value_to_display_text};
 
 #[derive(Debug)]
 pub enum GridMsg {
@@ -34,9 +34,11 @@ pub enum GridMsg {
     SetCellNull {
         row_position: u32,
         col_index: usize,
+        row_key: Vec<tablepro_core::Value>,
     },
     DeleteRowAt {
         row_position: u32,
+        row_key: Vec<tablepro_core::Value>,
     },
     InsertRow,
     DuplicateRow {

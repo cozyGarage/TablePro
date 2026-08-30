@@ -34,6 +34,7 @@ pub struct SqlEditor {
     results_holder: gtk::Box,
     status: gtk::Label,
     cancel_token: Option<CancellationToken>,
+    run_generation: u64,
     executing_sql: Option<String>,
     executing_metadata: Option<ConnectionMetadata>,
     executing_started_at: Option<SystemTime>,
@@ -69,9 +70,9 @@ pub enum SqlEditorInput {
         values: std::collections::HashMap<String, tablepro_core::Value>,
     },
     Cancel,
-    ShowOutcomes(Vec<StatementOutcome>),
-    ShowCancelled,
-    ShowTimedOut(u32),
+    ShowOutcomes(u64, Vec<StatementOutcome>),
+    ShowCancelled(u64),
+    ShowTimedOut(u64, u32),
     ReplaceQuery(String),
     Format,
     RunAtCursor,
@@ -344,6 +345,7 @@ impl SimpleComponent for SqlEditor {
             results_holder: widgets.results_holder.clone(),
             status: widgets.status.clone(),
             cancel_token: None,
+            run_generation: 0,
             executing_sql: None,
             executing_metadata: None,
             executing_started_at: None,
@@ -407,7 +409,10 @@ impl SimpleComponent for SqlEditor {
                 }
             }
 
-            SqlEditorInput::ShowOutcomes(outcomes) => {
+            SqlEditorInput::ShowOutcomes(generation, outcomes) => {
+                if !crate::services::request_generation::is_current(generation, self.run_generation) {
+                    return;
+                }
                 self.cancel_token = None;
                 self.run_button.set_sensitive(true);
                 self.cancel_button.set_visible(false);
@@ -445,7 +450,10 @@ impl SimpleComponent for SqlEditor {
                 render_outcomes(&self.results_holder, &outcomes);
             }
 
-            SqlEditorInput::ShowCancelled => {
+            SqlEditorInput::ShowCancelled(generation) => {
+                if !crate::services::request_generation::is_current(generation, self.run_generation) {
+                    return;
+                }
                 self.cancel_token = None;
                 self.run_button.set_sensitive(true);
                 self.cancel_button.set_visible(false);
@@ -468,7 +476,10 @@ impl SimpleComponent for SqlEditor {
                 self.results_holder.append(&cancelled_page);
             }
 
-            SqlEditorInput::ShowTimedOut(secs) => {
+            SqlEditorInput::ShowTimedOut(generation, secs) => {
+                if !crate::services::request_generation::is_current(generation, self.run_generation) {
+                    return;
+                }
                 self.cancel_token = None;
                 self.run_button.set_sensitive(true);
                 self.cancel_button.set_visible(false);
@@ -571,6 +582,8 @@ impl SqlEditor {
         if let Some(prev) = self.cancel_token.take() {
             prev.cancel();
         }
+        self.run_generation = self.run_generation.wrapping_add(1);
+        let generation = self.run_generation;
         let token = CancellationToken::new();
         self.cancel_token = Some(token.clone());
 
@@ -598,8 +611,8 @@ impl SqlEditor {
                     let statements = split_statements(&trimmed, &driver_id);
                     let control = crate::services::operation_control::bounded_with(timeout_secs, token);
                     let msg = match run_statements(conn, statements, &driver_id, &parameter_values, &control).await {
-                        ScriptRunResult::Cancelled => SqlEditorInput::ShowCancelled,
-                        ScriptRunResult::TimedOut => SqlEditorInput::ShowTimedOut(timeout_secs),
+                        ScriptRunResult::Cancelled => SqlEditorInput::ShowCancelled(generation),
+                        ScriptRunResult::TimedOut => SqlEditorInput::ShowTimedOut(generation, timeout_secs),
                         ScriptRunResult::Completed(outcomes) => {
                             let total_ms: u128 = outcomes.iter().map(|o| o.elapsed_ms).sum();
                             let n_ok = outcomes
@@ -611,7 +624,7 @@ impl SqlEditor {
                                 .filter(|o| matches!(o.kind, StatementOutcomeKind::Error(_)))
                                 .count();
                             tracing::info!(n_ok, n_err, total_ms, "script run complete");
-                            SqlEditorInput::ShowOutcomes(outcomes)
+                            SqlEditorInput::ShowOutcomes(generation, outcomes)
                         }
                     };
                     sender_clone.input(msg);

@@ -84,14 +84,14 @@ impl StructureTrackerRegistry {
         self.trackers.get(&tab_id).map(f)
     }
 
-    pub fn any_pending_globally(&self) -> bool {
-        self.trackers.values().any(|t| t.has_pending())
+    pub fn any_pending_in(&self, ids: impl IntoIterator<Item = Uuid>) -> bool {
+        ids.into_iter()
+            .any(|id| self.trackers.get(&id).is_some_and(|tracker| tracker.has_pending()))
     }
 
-    pub fn pending_tabs(&self) -> Vec<Uuid> {
-        self.trackers
-            .iter()
-            .filter_map(|(id, t)| if t.has_pending() { Some(*id) } else { None })
+    pub fn pending_among(&self, ids: impl IntoIterator<Item = Uuid>) -> Vec<Uuid> {
+        ids.into_iter()
+            .filter(|id| self.trackers.get(id).is_some_and(|tracker| tracker.has_pending()))
             .collect()
     }
 }
@@ -122,12 +122,12 @@ where
     REGISTRY.with(|r| r.borrow().with_tab_ref(tab_id, f))
 }
 
-pub fn any_pending_globally() -> bool {
-    REGISTRY.with(|r| r.borrow().any_pending_globally())
+pub fn any_pending_in(ids: impl IntoIterator<Item = Uuid>) -> bool {
+    REGISTRY.with(|r| r.borrow().any_pending_in(ids))
 }
 
-pub fn pending_tabs() -> Vec<Uuid> {
-    REGISTRY.with(|r| r.borrow().pending_tabs())
+pub fn pending_among(ids: impl IntoIterator<Item = Uuid>) -> Vec<Uuid> {
+    REGISTRY.with(|r| r.borrow().pending_among(ids))
 }
 
 #[cfg(test)]
@@ -195,8 +195,10 @@ mod tests {
         });
         assert!(r.with_tab_ref(a, |t| t.has_pending()).unwrap());
         assert!(!r.with_tab_ref(b, |t| t.has_pending()).unwrap_or(false));
-        assert_eq!(r.pending_tabs(), vec![a]);
+        assert!(!r.any_pending_in([b]));
+        assert!(r.any_pending_in([a, b]));
+        assert_eq!(r.pending_among([b, a]), vec![a]);
         r.close_tab(a);
-        assert!(!r.any_pending_globally());
+        assert!(!r.any_pending_in([a]));
     }
 }

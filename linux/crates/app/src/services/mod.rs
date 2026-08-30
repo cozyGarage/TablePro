@@ -12,6 +12,7 @@ pub mod operation_control;
 pub mod preferences;
 pub mod query_parameters;
 pub mod quick_switcher;
+pub mod request_generation;
 pub mod single_instance;
 pub mod structure_tracker;
 pub mod window_state;

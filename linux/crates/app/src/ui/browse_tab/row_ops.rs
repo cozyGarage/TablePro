@@ -221,11 +221,7 @@ impl BrowseTab {
         // row. Committing then writes the new value to a row the user
         // never opened. Compare the primary key captured when editing
         // started with the one at that position now.
-        if !self.row_position_still_holds(row_position, &row_key) {
-            let _ = sender.output(BrowseTabOutput::ShowToast(crate::tr!(
-                "That row moved while you were editing. The change was not applied."
-            )));
-            self.refresh_row(row_position);
+        if self.reject_stale_row_edit(row_position, &row_key, &sender) {
             return;
         }
         // Cell edits route through the per-tab change tracker
@@ -307,7 +303,27 @@ impl BrowseTab {
         row_key_matches(&self.current_columns, &row_obj.cells_clone(), expected_key)
     }
 
-    pub(super) fn handle_grid_set_cell_null(&mut self, row_position: u32, col_index: usize) {
+    fn reject_stale_row_edit(&mut self, row_position: u32, row_key: &[Value], sender: &ComponentSender<Self>) -> bool {
+        if self.row_position_still_holds(row_position, row_key) {
+            return false;
+        }
+        let _ = sender.output(BrowseTabOutput::ShowToast(crate::tr!(
+            "That row moved while you were editing. The change was not applied."
+        )));
+        self.refresh_row(row_position);
+        true
+    }
+
+    pub(super) fn handle_grid_set_cell_null(
+        &mut self,
+        row_position: u32,
+        col_index: usize,
+        row_key: Vec<Value>,
+        sender: ComponentSender<Self>,
+    ) {
+        if self.reject_stale_row_edit(row_position, &row_key, &sender) {
+            return;
+        }
         let Some((key, row)) = self.row_key_at(row_position) else {
             return;
         };
@@ -317,7 +333,15 @@ impl BrowseTab {
         });
     }
 
-    pub(super) fn handle_grid_delete_row(&mut self, row_position: u32) {
+    pub(super) fn handle_grid_delete_row(
+        &mut self,
+        row_position: u32,
+        row_key: Vec<Value>,
+        sender: ComponentSender<Self>,
+    ) {
+        if self.reject_stale_row_edit(row_position, &row_key, &sender) {
+            return;
+        }
         let Some((key, row)) = self.row_key_at(row_position) else {
             return;
         };
@@ -453,7 +477,7 @@ impl BrowseTab {
 
     pub(super) fn handle_discard_all(&mut self, sender: ComponentSender<Self>) {
         crate::services::change_tracker::with_tab(self.tab_id, |t| t.clear());
-        let _ = sender.output(BrowseTabOutput::FetchPage);
+        self.emit_fetch_page(&sender);
     }
 
     pub(super) fn handle_pending_count_changed(&mut self, n: usize, sender: ComponentSender<Self>) {
@@ -492,8 +516,7 @@ impl BrowseTab {
         self.refresh_pending_bar(0);
         self.save_button.set_sensitive(true);
         self.discard_button.set_sensitive(true);
-        let _ = sender.output(BrowseTabOutput::FetchPage);
-        let _ = sender.output(BrowseTabOutput::FetchRowCount);
+        self.emit_fetch_page_and_count(&sender);
     }
 
     pub(super) fn handle_save_failed(&mut self, message: String, sender: ComponentSender<Self>) {

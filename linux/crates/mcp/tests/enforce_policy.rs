@@ -314,6 +314,23 @@ async fn table_schema_reads_columns_keys_and_indexes_with_read_scope_only() {
 }
 
 #[tokio::test]
+async fn describe_table_refuses_an_invalid_identifier_without_opening_a_connection() {
+    let (provider, bridge, token, _dir) = read_only_harness(vec![Uuid::nil()]).await;
+
+    let error = tablepro_mcp::dispatch(
+        &bridge,
+        &token,
+        "describe_table",
+        serde_json::json!({"connection_id": Uuid::nil().to_string(), "table": "items\nitems"}),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.contains("control characters"), "{error}");
+    assert_eq!(provider.connection_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn table_schema_is_denied_for_a_connection_outside_the_allowlist() {
     let (provider, bridge, token, _dir) = read_only_harness(vec![Uuid::nil()]).await;
 

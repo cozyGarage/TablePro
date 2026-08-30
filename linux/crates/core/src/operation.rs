@@ -27,6 +27,10 @@ impl OperationControl {
     pub fn deadline(&self) -> Option<Instant> {
         self.deadline
     }
+
+    pub fn with_timeout(timeout: Duration) -> Self {
+        Self::new(CancellationToken::new(), Some(Instant::now() + timeout))
+    }
 }
 
 pub const CONTROL_SETUP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -208,6 +212,15 @@ mod tests {
             .expect_err("operation should be interrupted");
 
         assert!(matches!(error, DriverError::TimedOut));
+    }
+
+    #[tokio::test]
+    async fn with_timeout_sets_a_deadline_in_the_future() {
+        let before = Instant::now();
+        let control = OperationControl::with_timeout(Duration::from_secs(5));
+        let deadline = control.deadline().expect("timeout must produce a deadline");
+        assert!(deadline > before);
+        assert!(deadline <= before + Duration::from_secs(6));
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 # TablePro Linux roadmap
 
-Last audited: 2026-08-22
+Last audited: 2026-08-30
 
 The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Linux capability backlog. This file is the concise status view.
 
@@ -35,7 +35,7 @@ Status terms:
 | Query history | Implemented | MCP access must be isolated before being re-exposed |
 | CSV/JSON export | Implemented | GUI CSV and JSON export the loaded page only; full-table snapshot streaming and Parquet are deferred |
 | Activity and EXPLAIN | Implemented | Administrative classification and numeric session-ID validation are covered |
-| Policy, MCP, and agentd | Integrated | Approval and audit failures deny governed operations; read-only denial is release-verified against PostgreSQL; the GUI and agentd share one connection transport, release-verified through the fixture bastion |
+| Policy, MCP, and agentd | Integrated | Approval and audit failures deny governed operations; a policy file that cannot be read keeps the last good policy and leaves MCP off; `list_tables` and `describe_table` use the same timeout and identifier checks as the other metadata tools; read-only denial is release-verified against PostgreSQL; the GUI and agentd share one connection transport, release-verified through the fixture bastion |
 | Audit journal | Integrated | Durable intent/outcome records, recovery, private mode, and cross-process locking are locally verified |
 | Internal Arch RC | Implemented | Immutable-commit/checksum recipe exists; install, upgrade, rollback, and Wayland verification remain |
 | Debian, Flatpak, AUR | Scaffolded | Not release targets and not ready for public publication |
@@ -102,8 +102,10 @@ The fixture runs from `./scripts/test-postgres-release.sh` and in the `postgres-
 - [x] Installed GTK audit failure cannot be approved around
 - [x] Installed GTK pending row edits gate a connection switch without writing to the old database
 - [x] Installed GTK browse tabs read the connection they were reopened against
+- [x] Installed GTK connection switch keeps the previous connection's tabs after the persist debounce
+- [x] Installed GTK pending edits stay in their own window when another window switches
 
-Phase 4 has a required PR smoke job and a separate daily five-attempt soak. Promotion still requires 30 consecutive retry-free attempts across at least six workflow runs, all at one pinned commit. Both workflows now take an explicit `ref` and record the commit they resolved; before that the scheduled soak followed the branch tip, so attempts could not be attributed to a candidate. The ledger stands at 0 of 30.
+Phase 4 has a required PR smoke job and a separate daily five-attempt soak. Promotion still requires 30 consecutive retry-free attempts across at least six workflow runs, all at one pinned commit. Both workflows now take an explicit `ref` and record the commit they resolved; before that the scheduled soak followed the branch tip, so attempts could not be attributed to a candidate. Adding a scenario restarts the ledger. The ledger stands at 0 of 30.
 
 ### 5: Documentation and capability tracking
 
@@ -123,7 +125,8 @@ Phase 5 documentation is current as of 2026-08-18. Keeping it current is a stand
 - [ ] SQL file open/save with external-change detection
 - [ ] PostgreSQL objects, users/roles, and administration
 - [ ] Import/export and backup/restore
-- [ ] Connection organization and reusable transport profiles
+- [x] Connection groups, tags, favourites, search, and URL import (Phase 10.2)
+- [ ] Reusable SSH and transport profiles
 - [ ] True result streaming and optional Parquet export
 
 ### 7: Driver expansion

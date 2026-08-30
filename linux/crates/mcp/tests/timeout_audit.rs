@@ -327,6 +327,20 @@ fn metadata_harness(timeout_secs: u64, audit: Arc<RecordingAuditSink>) -> Metada
 async fn a_read_scoped_agent_may_read_table_metadata_and_a_page() {
     let harness = metadata_harness(30, Arc::new(RecordingAuditSink::recording()));
 
+    let tables = harness
+        .bridge
+        .list_tables(&harness.token, harness.connection_id)
+        .await
+        .expect("read scope is enough to list tables");
+    assert!(tables.is_empty());
+
+    let columns = harness
+        .bridge
+        .describe_table(&harness.token, harness.connection_id, None, "jobs".into())
+        .await
+        .expect("read scope is enough to describe a table");
+    assert!(columns.is_empty());
+
     let schema = harness
         .bridge
         .table_schema(&harness.token, harness.connection_id, None, "jobs".into())
@@ -358,7 +372,7 @@ async fn a_read_scoped_agent_may_read_table_metadata_and_a_page() {
         .iter()
         .filter(|event| event.phase == AuditRecordPhase::Outcome)
         .collect::<Vec<_>>();
-    assert_eq!(terminal.len(), 5, "every governed metadata read is audited: {events:?}");
+    assert_eq!(terminal.len(), 7, "every governed metadata read is audited: {events:?}");
     assert!(
         terminal
             .iter()
@@ -370,6 +384,20 @@ async fn a_read_scoped_agent_may_read_table_metadata_and_a_page() {
 #[tokio::test]
 async fn a_timed_out_metadata_read_is_refused_without_a_half_open_audit_operation() {
     let harness = metadata_harness(0, Arc::new(RecordingAuditSink::recording()));
+
+    let list_error = harness
+        .bridge
+        .list_tables(&harness.token, harness.connection_id)
+        .await
+        .expect_err("an expired deadline must refuse the table list");
+    assert!(list_error.contains("timed out"), "{list_error}");
+
+    let describe_error = harness
+        .bridge
+        .describe_table(&harness.token, harness.connection_id, None, "jobs".into())
+        .await
+        .expect_err("an expired deadline must refuse the column list");
+    assert!(describe_error.contains("timed out"), "{describe_error}");
 
     let schema_error = harness
         .bridge
@@ -414,6 +442,22 @@ async fn a_metadata_read_is_denied_when_audit_intent_cannot_be_persisted() {
     let harness = metadata_harness(30, Arc::new(RecordingAuditSink::unavailable()));
 
     for (tool, error) in [
+        (
+            "list_tables",
+            harness
+                .bridge
+                .list_tables(&harness.token, harness.connection_id)
+                .await
+                .err(),
+        ),
+        (
+            "describe_table",
+            harness
+                .bridge
+                .describe_table(&harness.token, harness.connection_id, None, "jobs".into())
+                .await
+                .err(),
+        ),
         (
             "table_schema",
             harness

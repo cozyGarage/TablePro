@@ -29,9 +29,13 @@ pub fn column_is_sensitive(column_name: &str, patterns: &[String]) -> bool {
 /// Mask sensitive columns in a result set. Non-null values become the
 /// redaction sentinel; Null stays Null.
 pub fn apply_masking(mut result: QueryResult, patterns: &[String]) -> QueryResult {
-    if patterns.is_empty() {
-        return result;
-    }
+    let fallback = patterns.is_empty().then(|| {
+        DEFAULT_SENSITIVE_PATTERNS
+            .iter()
+            .map(|pattern| (*pattern).to_string())
+            .collect::<Vec<_>>()
+    });
+    let patterns = fallback.as_deref().unwrap_or(patterns);
     let sensitive: Vec<bool> = result
         .columns
         .iter()
@@ -93,5 +97,24 @@ mod tests {
         let masked = apply_masking(result, &patterns);
         assert_eq!(masked.rows[0][0], Value::Int(1));
         assert_eq!(masked.rows[0][1], Value::Text(REDACTED.into()));
+    }
+
+    #[test]
+    fn an_empty_pattern_list_still_redacts_default_sensitive_columns() {
+        let result = QueryResult {
+            columns: vec![ColumnInfo {
+                name: "password".into(),
+                data_type: "text".into(),
+                nullable: true,
+                primary_key: false,
+                is_auto_increment: false,
+                default_value: None,
+                is_generated: false,
+            }],
+            rows: vec![vec![Value::Text("secret".into())]],
+            truncated: false,
+        };
+        let masked = apply_masking(result, &[]);
+        assert_eq!(masked.rows[0][0], Value::Text(REDACTED.into()));
     }
 }

@@ -80,6 +80,18 @@
 
 ### Fixed
 
+- Measuring how many rows an UPDATE or DELETE would touch now uses the same timeout and cancellation as the write itself, instead of running an unbounded count first
+- Reading a table's indexes and foreign keys now stops at the query timeout, and a failed read no longer pretends the table has none
+- Structure tabs reopen after a reconnect, and the saved workspace no longer points at the wrong tab when a draft was skipped
+- Closing the server activity dialog, or starting another activity query, stops the one that was still running
+- Agent table lists and column descriptions now stop at the query timeout, reject invalid names, and are refused when audit storage is unavailable
+- A policy file that cannot be read is no longer treated as an empty policy. Agent access stays off until the file can be loaded, and reopening Preferences keeps the previous policy instead of replacing it
+- An empty mask list no longer turns off result masking. Use the environment setting that disables agent masking if that is what you want
+- Query history export is written so another program never reads a half-finished file
+- Setting a cell to NULL or deleting a row from the grid is discarded if the row moved, instead of changing whichever row took its place
+- Switching connections no longer clears the previous connection's saved tabs
+- A browse page or SQL run that finishes late no longer replaces a newer page or result
+- Unsaved edits in one window no longer block or discard edits in another window
 - The headless agent daemon reuses one database session per connection instead of opening a new one on every tool call
 - The agent rate limiter forgets idle callers instead of growing for the lifetime of the process
 - Saved connections are written so only the owner can read them, and a save that fails part way leaves the previous file intact

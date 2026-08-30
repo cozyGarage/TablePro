@@ -49,32 +49,19 @@ pub async fn dispatch(bridge: &McpBridge, token: &McpToken, name: &str, args: Js
         }
         "describe_table" => {
             let id = parse_uuid(&args, "connection_id")?;
-            let table = args
-                .get("table")
-                .and_then(|v| v.as_str())
-                .ok_or("missing table")?
-                .to_string();
-            let schema = args.get("schema").and_then(|v| v.as_str()).map(|s| s.to_string());
-            bridge
-                .with_connection(token, id, |conn| {
-                    Box::pin(async move {
-                        let cols = conn
-                            .fetch_columns(schema.as_deref(), &table)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        Ok(json!(
-                            cols.into_iter()
-                                .map(|c| json!({
-                                    "name": c.name,
-                                    "data_type": c.data_type,
-                                    "nullable": c.nullable,
-                                    "primary_key": c.primary_key,
-                                }))
-                                .collect::<Vec<_>>()
-                        ))
-                    })
-                })
-                .await
+            let table = required_str(&args, "table")?;
+            let schema = optional_str(&args, "schema");
+            let cols = bridge.describe_table(token, id, schema, table).await?;
+            Ok(json!(
+                cols.into_iter()
+                    .map(|c| json!({
+                        "name": c.name,
+                        "data_type": c.data_type,
+                        "nullable": c.nullable,
+                        "primary_key": c.primary_key,
+                    }))
+                    .collect::<Vec<_>>()
+            ))
         }
         "execute_query" => {
             let id = parse_uuid(&args, "connection_id")?;

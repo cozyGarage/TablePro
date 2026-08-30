@@ -105,6 +105,7 @@ pub struct DatabaseService {
     policy: Mutex<Arc<PolicyConfig>>,
     audit: Arc<dyn tablepro_policy::AuditSink>,
     audit_available: bool,
+    policy_available: bool,
     audit_state: Arc<AuditState>,
     approval: Mutex<Arc<dyn tablepro_policy::ApprovalSink>>,
 }
@@ -112,11 +113,22 @@ pub struct DatabaseService {
 impl DatabaseService {
     fn new() -> Self {
         let audit = AuditRuntime::open_default();
+        let (policy, policy_available) = match load_policy() {
+            Ok(policy) => (Arc::new(policy), true),
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    "policy file could not be loaded; using defaults and disabling MCP"
+                );
+                (Arc::new(PolicyConfig::default()), false)
+            }
+        };
         Self {
             connections: Mutex::new(HashMap::new()),
-            policy: Mutex::new(Arc::new(load_policy())),
+            policy: Mutex::new(policy),
             audit: audit.sink,
             audit_available: audit.available,
+            policy_available,
             audit_state: audit.state,
             approval: Mutex::new(Arc::new(DenyApprovalSink)),
         }
@@ -124,6 +136,10 @@ impl DatabaseService {
 
     pub fn audit_available(&self) -> bool {
         self.audit_available
+    }
+
+    pub fn policy_available(&self) -> bool {
+        self.policy_available
     }
 
     /// Whether a prior governed operation has an unresolved outcome.  The UI
@@ -137,10 +153,11 @@ impl DatabaseService {
         *self.approval.lock().unwrap_or_else(|e| e.into_inner()) = sink;
     }
 
-    pub fn reload_policy(&self) {
-        let next = Arc::new(load_policy());
-        *self.policy.lock().unwrap_or_else(|e| e.into_inner()) = next;
+    pub fn reload_policy(&self) -> Result<(), String> {
+        let next = load_policy()?;
+        *self.policy.lock().unwrap_or_else(|e| e.into_inner()) = Arc::new(next);
         tracing::info!("policy reloaded");
+        Ok(())
     }
 
     /// Register a fully validated connection and give it focus. Callers must

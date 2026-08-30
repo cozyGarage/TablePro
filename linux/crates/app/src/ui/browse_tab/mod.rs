@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use tablepro_core::{ColumnInfo, QueryResult, Value};
 
+use crate::services::request_generation;
 use crate::ui::grid::{GridMsg, TabGridContext, build_column_view};
 
 const PAGE_SIZE_OPTIONS: &[u64] = &[100, 500, 1_000, 5_000, 10_000];
@@ -131,6 +132,8 @@ pub struct BrowseTab {
     /// PageSizeChanged emits don't fire while the combo is being driven by
     /// programmatic state restores.
     suppress_combo_emit: Rc<std::cell::Cell<bool>>,
+    load_generation: u64,
+    page_cancel: Option<tokio_util::sync::CancellationToken>,
 }
 
 #[derive(Debug)]
@@ -139,13 +142,23 @@ pub enum BrowseTabInput {
     RowsLoaded {
         offset: u64,
         result: QueryResult,
+        generation: u64,
     },
     /// Schema columns for the current table arrived (governs editability).
-    ColumnsLoaded(Vec<ColumnInfo>),
+    ColumnsLoaded {
+        columns: Vec<ColumnInfo>,
+        generation: u64,
+    },
     /// Total row count for paginator label.
-    RowCountLoaded(u64),
+    RowCountLoaded {
+        count: u64,
+        generation: u64,
+    },
     /// Show an error status page.
-    ShowError(String),
+    ShowError {
+        message: String,
+        generation: u64,
+    },
     /// Re-issue the fetch for this tab (F5).
     Refresh,
     /// Clear a multi-row selection (Esc when 2+ rows are selected
@@ -200,9 +213,11 @@ pub enum BrowseTabInput {
     GridSetCellNull {
         row_position: u32,
         col_index: usize,
+        row_key: Vec<Value>,
     },
     GridDeleteRowAt {
         row_position: u32,
+        row_key: Vec<Value>,
     },
     GridCopyRowAsInsert {
         row_position: u32,
@@ -370,6 +385,33 @@ impl BrowseTab {
 
     pub fn driver_id(&self) -> &str {
         &self.driver_id
+    }
+
+    pub fn load_generation(&self) -> u64 {
+        self.load_generation
+    }
+
+    pub fn page_cancel_token(&self) -> tokio_util::sync::CancellationToken {
+        self.page_cancel.clone().unwrap_or_default()
+    }
+
+    fn begin_load(&mut self) {
+        if let Some(previous) = self.page_cancel.take() {
+            previous.cancel();
+        }
+        self.load_generation = self.load_generation.wrapping_add(1);
+        self.page_cancel = Some(tokio_util::sync::CancellationToken::new());
+    }
+
+    fn emit_fetch_page(&mut self, sender: &ComponentSender<Self>) {
+        self.begin_load();
+        let _ = sender.output(BrowseTabOutput::FetchPage);
+    }
+
+    fn emit_fetch_page_and_count(&mut self, sender: &ComponentSender<Self>) {
+        self.begin_load();
+        let _ = sender.output(BrowseTabOutput::FetchPage);
+        let _ = sender.output(BrowseTabOutput::FetchRowCount);
     }
 }
 
@@ -576,13 +618,14 @@ impl SimpleComponent for BrowseTab {
         let null_shortcut = gtk::Shortcut::builder()
             .trigger(&crate::ui::shortcut::parse("<Primary><Shift>n"))
             .action(&gtk::CallbackAction::new(move |widget, _| {
-                let Some((row_position, col_index)) = crate::ui::grid::focused_cell_coords(widget) else {
+                let Some((row_position, col_index, row_key)) = crate::ui::grid::focused_cell_identity(widget) else {
                     return glib::Propagation::Proceed;
                 };
                 grid_sender_for_null
                     .send(GridMsg::SetCellNull {
                         row_position,
                         col_index,
+                        row_key,
                     })
                     .ok();
                 glib::Propagation::Stop
@@ -705,16 +748,18 @@ impl SimpleComponent for BrowseTab {
             GridMsg::SetCellNull {
                 row_position,
                 col_index,
+                row_key,
             } => BrowseTabInput::GridSetCellNull {
                 row_position,
                 col_index,
+                row_key,
             },
-            GridMsg::DeleteRowAt { row_position } => BrowseTabInput::GridDeleteRowAt { row_position },
+            GridMsg::DeleteRowAt { row_position, row_key } => BrowseTabInput::GridDeleteRowAt { row_position, row_key },
             GridMsg::InsertRow => BrowseTabInput::InsertRow,
             GridMsg::DuplicateRow { row_position } => BrowseTabInput::DuplicateRow { row_position },
         }));
 
-        let model = BrowseTab {
+        let mut model = BrowseTab {
             tab_id: init.tab_id,
             schema: init.schema,
             table: init.table,
@@ -754,6 +799,8 @@ impl SimpleComponent for BrowseTab {
             pending_label: pending.pending_label,
             grid_sender,
             suppress_combo_emit,
+            load_generation: 0,
+            page_cancel: None,
         };
         model.refresh_crud_buttons();
         model.refresh_pending_bar(0);
@@ -785,13 +832,21 @@ impl SimpleComponent for BrowseTab {
         // Fetch metadata first. The parent starts count + row queries only
         // after ColumnsLoaded, because deterministic ordering and typed
         // filters depend on this schema information.
+        model.begin_load();
         let _ = sender.output(BrowseTabOutput::FetchColumns);
         ComponentParts { model, widgets: () }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
-            BrowseTabInput::RowsLoaded { offset, result } => {
+            BrowseTabInput::RowsLoaded {
+                offset,
+                result,
+                generation,
+            } => {
+                if !request_generation::is_current(generation, self.load_generation) {
+                    return;
+                }
                 self.current_offset = offset;
                 // Driver fallback: every shipping driver derives the
                 // `QueryResult.columns` list from the FIRST returned
@@ -817,7 +872,10 @@ impl SimpleComponent for BrowseTab {
                 // ColumnsLoaded fires next and triggers a re-render.
                 self.render_grid_if_ready(sender);
             }
-            BrowseTabInput::ColumnsLoaded(columns) => {
+            BrowseTabInput::ColumnsLoaded { columns, generation } => {
+                if !request_generation::is_current(generation, self.load_generation) {
+                    return;
+                }
                 let words: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
                 self.current_columns = columns.clone();
                 // Late-arriving columns: if RowsLoaded already cached a
@@ -843,7 +901,10 @@ impl SimpleComponent for BrowseTab {
                 // editability map. Otherwise wait for RowsLoaded.
                 self.render_grid_if_ready(sender);
             }
-            BrowseTabInput::RowCountLoaded(count) => {
+            BrowseTabInput::RowCountLoaded { count, generation } => {
+                if !request_generation::is_current(generation, self.load_generation) {
+                    return;
+                }
                 self.current_total_rows = Some(count);
                 // If the saved offset is now past the end, clamp it back to
                 // the last full page and refetch — guards against stale
@@ -852,13 +913,16 @@ impl SimpleComponent for BrowseTab {
                     let last_page_offset = count.saturating_sub(1) / self.page_size * self.page_size;
                     if last_page_offset != self.current_offset {
                         self.current_offset = last_page_offset;
-                        let _ = sender.output(BrowseTabOutput::FetchPage);
+                        self.emit_fetch_page(&sender);
                         let _ = sender.output(BrowseTabOutput::StateChanged);
                     }
                 }
                 self.update_paginator_label();
             }
-            BrowseTabInput::ShowError(message) => {
+            BrowseTabInput::ShowError { message, generation } => {
+                if !request_generation::is_current(generation, self.load_generation) {
+                    return;
+                }
                 // Clear any cached page state so a follow-up refresh
                 // doesn't render against the stale snapshot before
                 // RowsLoaded arrives. Paginator label is left empty
@@ -879,8 +943,7 @@ impl SimpleComponent for BrowseTab {
                     &crate::tr!("Loading…"),
                     &crate::tr!("Fetching rows from {table}").replace("{table}", &self.table_label()),
                 );
-                let _ = sender.output(BrowseTabOutput::FetchPage);
-                let _ = sender.output(BrowseTabOutput::FetchRowCount);
+                self.emit_fetch_page_and_count(&sender);
             }
             BrowseTabInput::ClearSelection => {
                 let Some(sel) = self.current_selection.as_ref() else {
@@ -921,15 +984,14 @@ impl SimpleComponent for BrowseTab {
                 if let Some(strip) = self.filter_strip.as_ref() {
                     strip.update_filter(set);
                 }
-                let _ = sender.output(BrowseTabOutput::FetchPage);
-                let _ = sender.output(BrowseTabOutput::FetchRowCount);
+                self.emit_fetch_page_and_count(&sender);
                 let _ = sender.output(BrowseTabOutput::StateChanged);
             }
             BrowseTabInput::FirstPage => {
                 if self.current_offset > 0 {
                     self.current_offset = 0;
                     self.keyset_cursor = None;
-                    let _ = sender.output(BrowseTabOutput::FetchPage);
+                    self.emit_fetch_page(&sender);
                     let _ = sender.output(BrowseTabOutput::StateChanged);
                 }
             }
@@ -939,13 +1001,13 @@ impl SimpleComponent for BrowseTab {
                     // Reverse keyset is not implemented; clear cursor so
                     // the fetch falls back to OFFSET for this page.
                     self.keyset_cursor = None;
-                    let _ = sender.output(BrowseTabOutput::FetchPage);
+                    self.emit_fetch_page(&sender);
                     let _ = sender.output(BrowseTabOutput::StateChanged);
                 }
             }
             BrowseTabInput::NextPage => {
                 self.current_offset += self.page_size;
-                let _ = sender.output(BrowseTabOutput::FetchPage);
+                self.emit_fetch_page(&sender);
                 let _ = sender.output(BrowseTabOutput::StateChanged);
             }
             BrowseTabInput::LastPage => {
@@ -962,7 +1024,7 @@ impl SimpleComponent for BrowseTab {
                 if self.current_offset != last_page_offset {
                     self.current_offset = last_page_offset;
                     self.keyset_cursor = None;
-                    let _ = sender.output(BrowseTabOutput::FetchPage);
+                    self.emit_fetch_page(&sender);
                     let _ = sender.output(BrowseTabOutput::StateChanged);
                 }
             }
@@ -981,7 +1043,7 @@ impl SimpleComponent for BrowseTab {
                 self.current_offset = 0;
                 self.keyset_cursor = None;
                 self.capture_focus_for_restore();
-                let _ = sender.output(BrowseTabOutput::FetchPage);
+                self.emit_fetch_page(&sender);
                 let _ = sender.output(BrowseTabOutput::StateChanged);
             }
             BrowseTabInput::PageSizeChanged(size) => {
@@ -991,7 +1053,7 @@ impl SimpleComponent for BrowseTab {
                 self.page_size = size;
                 self.current_offset = 0;
                 self.keyset_cursor = None;
-                let _ = sender.output(BrowseTabOutput::FetchPage);
+                self.emit_fetch_page(&sender);
                 let _ = sender.output(BrowseTabOutput::StateChanged);
             }
             BrowseTabInput::DuplicateRow { row_position } => self.handle_duplicate_row(row_position, sender),
@@ -1006,8 +1068,11 @@ impl SimpleComponent for BrowseTab {
             BrowseTabInput::GridSetCellNull {
                 row_position,
                 col_index,
-            } => self.handle_grid_set_cell_null(row_position, col_index),
-            BrowseTabInput::GridDeleteRowAt { row_position } => self.handle_grid_delete_row(row_position),
+                row_key,
+            } => self.handle_grid_set_cell_null(row_position, col_index, row_key, sender),
+            BrowseTabInput::GridDeleteRowAt { row_position, row_key } => {
+                self.handle_grid_delete_row(row_position, row_key, sender)
+            }
             BrowseTabInput::GridCopyRowAsInsert { row_position } => {
                 self.handle_grid_copy_row_as_insert(row_position, sender)
             }

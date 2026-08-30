@@ -937,7 +937,9 @@ impl HistoryDialog {
         dialog.save(parent_window.as_ref(), gio::Cancellable::NONE, move |outcome| {
             let Ok(file) = outcome else { return };
             let Some(path) = file.path() else { return };
-            if let Err(e) = std::fs::write(&path, content.as_bytes()) {
+            if let Err(e) =
+                tablepro_core::export::write_atomically(&path, |output| output.write_all(content.as_bytes()))
+            {
                 tracing::warn!(error = %e, path = %path.display(), "history export write failed");
             }
         });

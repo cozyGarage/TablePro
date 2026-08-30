@@ -1,4 +1,3 @@
-use relm4::adw::prelude::*;
 use relm4::{ComponentSender, adw, gtk};
 
 use tablepro_core::{ColumnInfo, QueryResult};

@@ -11,12 +11,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-UNCONTROLLED='(conn|connection)\.(query|query_params|execute|execute_params|execute_in_transaction|fetch_rows|fetch_columns|list_tables)\('
+UNCONTROLLED='(conn|connection)\.(query|query_params|execute|execute_params|execute_in_transaction|fetch_rows|fetch_columns|fetch_indexes|fetch_foreign_keys|list_tables)\('
 
-if hits=$(grep -rnE "$UNCONTROLLED" crates/app/src 2>/dev/null); then
-  echo "error: unbounded database calls in the GUI (use the *_controlled form):" >&2
+if hits=$(grep -rnE "$UNCONTROLLED" crates/app/src crates/mcp/src 2>/dev/null); then
+  echo "error: unbounded database calls in the GUI or MCP (use the *_controlled form):" >&2
   echo "$hits" >&2
   exit 1
 fi
 
-echo "bounded-operations: ok (every GUI database call carries an OperationControl)"
+echo "bounded-operations: ok (every GUI and MCP database call carries an OperationControl)"

@@ -13,6 +13,7 @@ TablePro uses XDG files for local state, SQLite for query history, a JSONL audit
 | Column widths | JSON | `$XDG_CONFIG_HOME/tablepro/column_widths.json` |
 | Table filters | JSON | `$XDG_CONFIG_HOME/tablepro/filter_settings.json` |
 | Query history | SQLite with FTS5 | `$XDG_CONFIG_HOME/tablepro/history.db` |
+| Policy | TOML | `$XDG_CONFIG_HOME/tablepro/policy.toml` |
 | Audit journal | Hash-chained JSONL | `$XDG_DATA_HOME/tablepro/audit.jsonl` |
 | Database passwords, SSH passwords, SSH key passphrases, MCP secrets | Secret Service through `oo7` | Desktop keyring |
 
@@ -41,6 +42,12 @@ Workspace state is keyed by connection UUID and limited before it is written. Un
 History records include query text, driver and connection identity, execution time, duration, affected rows, success, cancellation, pin state, and an optional error. Search supports text, connection, outcome, time, and limit filters. Unpinned entries can be pruned by age.
 
 A query larger than 1 MiB is rejected by the history recorder.
+
+History export from the GUI writes through a temporary sibling file and a rename, the same way current-page CSV and JSON export do.
+
+## Policy
+
+The GUI loads `$XDG_CONFIG_HOME/tablepro/policy.toml` at startup. A missing file uses the built-in defaults. A file that exists but cannot be read or parsed is refused: the GUI uses defaults, disables MCP, and a later reload that fails keeps the policy already in memory. An explicit empty `mask_patterns` list is treated as the default sensitive-field patterns. `tablepro-agentd` still requires a readable `--policy` path and does not start without one.
 
 ## Audit journal
 
@@ -71,7 +78,7 @@ When changing storage behavior:
 2. Preserve existing file locations unless the change includes a tested migration.
 3. Keep saved connection versions explicit and reject versions the code cannot read.
 4. Test missing files, malformed or unsupported data, round trips, and migration behavior.
-5. Keep audit failures fail-closed for governed writes.
+5. Keep audit failures fail-closed for governed writes. A policy file that cannot be read must not become an empty or silently defaulted policy for MCP.
 6. Update this document from the implementation, not from planned APIs.
 
 ## Query favorites

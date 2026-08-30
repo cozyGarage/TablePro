@@ -765,6 +765,11 @@ def open_saved_connection(name):
     invoke_named_action_within(name, "Open connection")
 
 
+def open_saved_connection_within(root, name):
+    invoke(wait_within(root, name="Open saved connection", role=pyatspi.ROLE_TOGGLE_BUTTON))
+    invoke_named_action_within_node(root, name, "Open connection")
+
+
 def successful_switch_keeps_database_ownership(database, base):
     run_sql("CREATE TABLE ownership_old (id INTEGER PRIMARY KEY); INSERT INTO safety_items(id) VALUES (11)")
     wait_for_database_count(database, 1)
@@ -975,6 +980,61 @@ def two_windows_hold_two_connections(database, base):
 two_windows_hold_two_connections.environment = "local"
 
 
+def switched_connection_keeps_workspace_tabs_after_debounce(database, _base):
+    with sqlite3.connect(database) as connection:
+        connection.executemany(
+            "INSERT INTO safety_items(id) VALUES (?)",
+            ((identifier,) for identifier in range(1, 6)),
+        )
+
+    invoke_named_action_within("safety_items", "Open safety_items")
+    wait_for_node_containing("Rows 1 – 5")
+
+    open_saved_connection(CONNECTION_B_NAME)
+    wait_for_frame_containing(f"{CONNECTION_B_NAME} — TablePro")
+    time.sleep(0.7)
+
+    open_saved_connection(CONNECTION_NAME)
+    wait_for_frame_containing(f"{CONNECTION_NAME} — TablePro")
+    wait_for_node_containing("Rows 1 – 5")
+
+
+switched_connection_keeps_workspace_tabs_after_debounce.environment = "local"
+
+
+def switching_one_window_leaves_the_other_windows_edits(database, base):
+    database_b = base / "safety-b.sqlite"
+
+    invoke_accessible_action("win.new-window")
+    second_window = wait_for_node(name="TablePro", role=pyatspi.ROLE_FRAME)
+    invoke_named_action_within_node(second_window, CONNECTION_B_NAME, "Open connection")
+    second_window = wait_for_frame_containing(f"{CONNECTION_B_NAME} — TablePro")
+
+    invoke_named_action_within_node(second_window, "safety_items", "Open safety_items")
+    wait_within(second_window, name="No rows on this page")
+    invoke(wait_within(second_window, name="Insert row", role=pyatspi.ROLE_PUSH_BUTTON))
+    wait_within(second_window, name="1 unsaved change")
+
+    first_window = find_frame_containing(f"{CONNECTION_NAME} — TablePro")
+    assert first_window is not None, f"the first window disappeared:\n{accessible_snapshot()}"
+    open_saved_connection_within(first_window, CONNECTION_B_NAME)
+    time.sleep(SETTLE_SECONDS / 3)
+    assert find_node(name="Save changes before switching?") is None, (
+        f"switching a clean window prompted for another window's edits:\n{accessible_snapshot()}"
+    )
+    wait_within(second_window, name="1 unsaved change")
+
+    invoke(wait_within(second_window, name="Save"))
+    wait_for_database_count(database_b, 1)
+    assert database_ids(database) == [], (
+        f"the second window's pending edit reached the first database: {database_ids(database)}"
+    )
+    assert database_ids(database_b) == [1], f"second window database: {database_ids(database_b)}"
+
+
+switching_one_window_leaves_the_other_windows_edits.environment = "local"
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: gtk_safety.py /path/to/tablepro-app")
@@ -994,6 +1054,8 @@ def main():
         pending_edits_gate_a_connection_switch,
         a_browse_tab_reads_the_new_connection_after_a_switch,
         two_windows_hold_two_connections,
+        switched_connection_keeps_workspace_tabs_after_debounce,
+        switching_one_window_leaves_the_other_windows_edits,
     ]
     selected = os.environ.get("TABLEPRO_GTK_SCENARIO")
     if selected:
