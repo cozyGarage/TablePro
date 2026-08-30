@@ -144,6 +144,14 @@ struct MCPToolRegistryGuardTests {
         #expect(readWrite.count > readOnly.count)
     }
 
+    @Test("A read-write scope set never yields a tool that needs admin")
+    func readWriteScopesNeverYieldAdminTools() {
+        let readWriteNames = Set(MCPToolRegistry.tools(for: MCPScope.readWriteSet).map { type(of: $0).name })
+        #expect(!readWriteNames.contains("confirm_destructive_operation"))
+        let fullAccessNames = Set(MCPToolRegistry.tools(for: MCPScope.fullAccessSet).map { type(of: $0).name })
+        #expect(fullAccessNames.contains("confirm_destructive_operation"))
+    }
+
     @Test("A tool that needs write never claims to be read-only")
     func writeToolsNeverClaimReadOnly() {
         for tool in MCPToolRegistry.allTools {

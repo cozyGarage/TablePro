@@ -113,3 +113,52 @@ struct QueryClassifierMultiStatementTests {
         #expect(!QueryClassifier.isMultiStatement("-- note", databaseType: .mysql))
     }
 }
+
+@Suite("QueryClassifier write capability")
+struct QueryClassifierWriteCapabilityTests {
+    @Test("Only a provable read skips the write capability check")
+    func onlyAProvableReadSkipsTheWriteCapabilityCheck() {
+        for sql in ["SELECT 1", "SELECT id FROM t WHERE id = 1"] {
+            #expect(
+                !QueryClassifier.statementRequiresWriteCapability(sql, databaseType: .postgresql),
+                "\(sql)"
+            )
+        }
+        for sql in [
+            "DELETE FROM t WHERE id = 1",
+            "CREATE TABLE t (id int)",
+            "SELECT pg_read_file('/etc/passwd')",
+            "COPY t TO PROGRAM 'sh'",
+            "this is not sql at all"
+        ] {
+            #expect(
+                QueryClassifier.statementRequiresWriteCapability(sql, databaseType: .postgresql),
+                "\(sql)"
+            )
+        }
+    }
+
+    @Test("An empty string does not require write capability")
+    func emptyStringDoesNotRequireWriteCapability() {
+        #expect(!QueryClassifier.statementRequiresWriteCapability("", databaseType: .postgresql))
+        #expect(!QueryClassifier.statementRequiresWriteCapability("   \n\t ", databaseType: .postgresql))
+    }
+
+    @Test("isWriteQuery matches statementRequiresWriteCapability")
+    func isWriteQueryMatchesTheCapabilityHelper() {
+        for sql in ["SELECT 1", "UPDATE t SET a = 1", "DROP TABLE t", "not sql"] {
+            #expect(
+                QueryClassifier.isWriteQuery(sql, databaseType: .postgresql)
+                    == QueryClassifier.statementRequiresWriteCapability(sql, databaseType: .postgresql)
+            )
+        }
+    }
+
+    @Test("OperationKind follows the same write-capability split")
+    func operationKindFollowsWriteCapability() {
+        #expect(OperationKind.fromStatement("SELECT 1", databaseType: .postgresql) == .readQuery)
+        #expect(OperationKind.fromStatement("UPDATE t SET a = 1", databaseType: .postgresql) == .writeQuery)
+        #expect(OperationKind.fromStatement("DROP TABLE t", databaseType: .postgresql) == .destructiveQuery)
+        #expect(OperationKind.fromStatement("this is not sql at all", databaseType: .postgresql) == .writeQuery)
+    }
+}

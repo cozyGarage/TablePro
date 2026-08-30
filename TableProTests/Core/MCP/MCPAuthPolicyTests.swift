@@ -250,6 +250,24 @@ struct MCPAuthPolicyTests {
         #expect(required == [.toolsWrite])
     }
 
+    @Test("An unparseable execute_query statement needs the write scope")
+    func unparseableStatementNeedsWriteScope() async throws {
+        let policy = makePolicy(makeSnapshot())
+
+        let decision = try await policy.authorize(
+            principal: makePrincipal(scopes: MCPScope.readOnlySet),
+            tool: "execute_query",
+            connectionId: connectionA,
+            sql: "this is not sql at all"
+        )
+
+        guard case .deniedInsufficientScope(let required, _) = decision else {
+            Issue.record("Expected an insufficient scope refusal, got \(decision)")
+            return
+        }
+        #expect(required == [.toolsWrite])
+    }
+
     @Test("A read-only token still reads")
     func readOnlyTokenStillReads() async throws {
         let policy = makePolicy(makeSnapshot())
@@ -458,5 +476,36 @@ struct MCPAuthPolicyTests {
         )
 
         #expect(readable == [visible])
+    }
+
+    @Test("Safe Mode goes through the injected execution gate")
+    func safeModeUsesTheInjectedGate() async throws {
+        let policy = MCPAuthPolicy(
+            connectionResolver: { _ in nil },
+            connectionIdsProvider: { [] },
+            executionGate: DenyingExecutionGate()
+        )
+
+        do {
+            try await policy.checkSafeModeDialog(
+                sql: "SELECT 1",
+                connectionId: connectionA,
+                databaseType: .postgresql,
+                capabilities: [.mayWrite]
+            )
+            Issue.record("Expected the injected gate to deny")
+        } catch let error as MCPDataLayerError {
+            guard case .forbidden(let reason, _) = error else {
+                Issue.record("Expected a forbidden error, got \(error)")
+                return
+            }
+            #expect(reason == "stub-denied")
+        }
+    }
+}
+
+private struct DenyingExecutionGate: ExecutionGate {
+    func authorize(_ request: OperationRequest) async -> OperationDecision {
+        .denied(reason: "stub-denied")
     }
 }

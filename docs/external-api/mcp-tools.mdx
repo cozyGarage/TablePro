@@ -31,7 +31,7 @@ Row limits default to the server's **Default row limit** setting (500) and are c
 
 ## Scopes and gates
 
-Fourteen tools need `tools:write`: `connect`, `disconnect`, `switch_database`, `switch_schema`, `insert_rows`, `confirm_destructive_operation`, `transaction_control`, `create_database`, `drop_database_object`, `run_maintenance`, `stop_server_session`, `focus_query_tab`, `open_connection_window`, `open_table_tab`. The other 32 need `tools:read`, `execute_query` among them until the statement writes.
+Fourteen tools can write. Thirteen of them need `tools:write` only: `connect`, `disconnect`, `switch_database`, `switch_schema`, `insert_rows`, `transaction_control`, `create_database`, `drop_database_object`, `run_maintenance`, `stop_server_session`, `focus_query_tab`, `open_connection_window`, `open_table_tab`. The other 32 need `tools:read`, `execute_query` among them until the statement writes. MCP asks the shared statement classifier whether that statement needs write capability; it does not evaluate Safe Mode or write audit records itself.
 
 Past the scope, a call clears three more gates:
 
@@ -39,7 +39,7 @@ Past the scope, a call clears three more gates:
 2. **Connection policy.** **External Clients** set to **Blocked** hides the connection: `list_connections` omits it and any tool that names it is refused. An AI policy of **Never** does the same. **Ask Each Time** shows an approval dialog on the first call that touches the connection, and the answer is remembered for that token until it is revoked.
 3. **Safe Mode.** A write goes through the connection's Safe Mode, which may ask the user to confirm it or to authenticate. See [Approvals](/external-api/mcp-protocol#approvals-and-input-required).
 
-`confirm_destructive_operation` needs `admin` as well, so it takes a Full Access token, and **Read Only** refuses it outright whatever the token carries. No token skips the user's approval.
+`confirm_destructive_operation` needs `tools:write` and `admin`, so `tools/list` hides it from anything below Full Access, and **Read Only** refuses it outright whatever the token carries. No token skips the user's approval.
 
 Statements that read or write files, or that run server-side code, are refused on every tool. So is more than one statement in a single call.
 

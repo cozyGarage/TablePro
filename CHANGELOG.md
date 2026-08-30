@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `tools/list` no longer offers `confirm_destructive_operation` to a token that lacks admin, matching the scope that tool already required.
+
 ### Fixed
 
 - Switch Connection and Open Database now open on a narrow window, and after you remove their toolbar button, instead of doing nothing at all.

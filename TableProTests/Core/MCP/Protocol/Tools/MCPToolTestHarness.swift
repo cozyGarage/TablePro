@@ -162,10 +162,25 @@ enum MCPToolTestHarness {
         )
     }
 
+    struct PermittingExecutionGate: ExecutionGate {
+        func authorize(_ request: OperationRequest) async -> OperationDecision {
+            .authorized(
+                OperationReceipt(
+                    connectionId: request.connectionId,
+                    kind: request.kind,
+                    effectiveWrite: request.kind.declaresWrite,
+                    grantedAt: Date(timeIntervalSince1970: 0),
+                    token: UUID()
+                )
+            )
+        }
+    }
+
     static func authPolicy(connections: [UUID: MCPConnectionAuthSnapshot] = [:]) -> MCPAuthPolicy {
         MCPAuthPolicy(
             connectionResolver: { id in connections[id] },
-            connectionIdsProvider: { Set(connections.keys) }
+            connectionIdsProvider: { Set(connections.keys) },
+            executionGate: PermittingExecutionGate()
         )
     }
 

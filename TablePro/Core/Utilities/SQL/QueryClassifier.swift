@@ -32,6 +32,8 @@ struct QueryClassification: Sendable, Equatable {
         )
     }
 
+    var requiresWriteCapability: Bool { tier != .safe }
+
     static func worse(_ lhs: QueryTier, _ rhs: QueryTier) -> QueryTier {
         if lhs == .destructive || rhs == .destructive { return .destructive }
         if lhs == .write || rhs == .write { return .write }
@@ -48,8 +50,12 @@ enum QueryClassifier {
         return sqlClassification(trimmed)
     }
 
+    static func statementRequiresWriteCapability(_ sql: String, databaseType: DatabaseType) -> Bool {
+        classify(sql, databaseType: databaseType).requiresWriteCapability
+    }
+
     static func isWriteQuery(_ sql: String, databaseType: DatabaseType) -> Bool {
-        classify(sql, databaseType: databaseType).tier != .safe
+        statementRequiresWriteCapability(sql, databaseType: databaseType)
     }
 
     static func isDangerousQuery(_ sql: String, databaseType: DatabaseType) -> Bool {

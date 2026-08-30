@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import os
 
 typealias MCPToolName = String
 
@@ -27,12 +26,11 @@ typealias MCPConnectionSnapshotResolver = @Sendable (UUID) async -> MCPConnectio
 typealias MCPConnectionIdsProvider = @Sendable () async -> Set<UUID>
 
 public actor MCPAuthPolicy {
-    private static let logger = Logger(subsystem: "com.TablePro", category: "MCPAuthPolicy")
-
     private let connectionResolver: MCPConnectionSnapshotResolver
     private let connectionIdsProvider: MCPConnectionIdsProvider
     private let approvalLedger: MCPApprovalLedger
     private let historyRecorder: QueryHistoryRecording
+    private let executionGate: any ExecutionGate
     private let approvalDedup = OnceTask<ApprovalKey, Bool>()
 
     public init() {
@@ -43,12 +41,14 @@ public actor MCPAuthPolicy {
         connectionResolver: @escaping MCPConnectionSnapshotResolver,
         connectionIdsProvider: @escaping MCPConnectionIdsProvider = MCPAuthPolicy.defaultConnectionIdsProvider,
         approvalLedger: MCPApprovalLedger = MCPApprovalLedger(),
-        historyRecorder: QueryHistoryRecording = QueryHistoryManager.shared
+        historyRecorder: QueryHistoryRecording = QueryHistoryManager.shared,
+        executionGate: any ExecutionGate = ExecutionGateProvider.shared
     ) {
         self.connectionResolver = connectionResolver
         self.connectionIdsProvider = connectionIdsProvider
         self.approvalLedger = approvalLedger
         self.historyRecorder = historyRecorder
+        self.executionGate = executionGate
     }
 
     private struct ApprovalKey: Hashable, Sendable {
@@ -245,12 +245,12 @@ public actor MCPAuthPolicy {
         capabilities: CallerCapabilities,
         callerLabel: String?
     ) async throws {
-        let decision = await ExecutionGateProvider.shared.authorize(
+        let decision = await executionGate.authorize(
             OperationRequest(
                 connectionId: connectionId,
                 databaseType: databaseType,
                 sql: sql,
-                kind: OperationKind.from(QueryClassifier.classifyTier(sql, databaseType: databaseType)),
+                kind: OperationKind.fromStatement(sql, databaseType: databaseType),
                 caller: .mcpClient(label: callerLabel),
                 capabilities: capabilities,
                 operationDescription: String(localized: "MCP query execution")
@@ -308,7 +308,10 @@ public actor MCPAuthPolicy {
         databaseType: String
     ) -> AuthDecision? {
         guard MCPToolName.writeQueryTools.contains(tool), let sql, !sql.isEmpty else { return nil }
-        guard QueryClassifier.isWriteQuery(sql, databaseType: DatabaseType(rawValue: databaseType)) else {
+        guard QueryClassifier.statementRequiresWriteCapability(
+            sql,
+            databaseType: DatabaseType(rawValue: databaseType)
+        ) else {
             return nil
         }
         guard !principal.has(.toolsWrite) || principal.isAnonymous else { return nil }
@@ -371,7 +374,7 @@ public actor MCPAuthPolicy {
         }
 
         let dbType = DatabaseType(rawValue: databaseType)
-        guard QueryClassifier.isWriteQuery(sql, databaseType: dbType) else {
+        guard QueryClassifier.statementRequiresWriteCapability(sql, databaseType: dbType) else {
             return nil
         }
         if externalAccess != .readWrite {

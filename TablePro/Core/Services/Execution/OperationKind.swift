@@ -42,6 +42,10 @@ internal extension OperationKind {
         }
     }
 
+    static func fromStatement(_ sql: String, databaseType: DatabaseType) -> OperationKind {
+        from(QueryClassifier.classifyTier(sql, databaseType: databaseType))
+    }
+
     static func worst(of statements: [String], databaseType: DatabaseType) -> OperationKind {
         var result: OperationKind = .readQuery
         for statement in statements {

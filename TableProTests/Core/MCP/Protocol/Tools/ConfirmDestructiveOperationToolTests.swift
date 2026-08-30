@@ -19,10 +19,10 @@ struct ConfirmDestructiveOperationToolTests {
         )
     }
 
-    @Test("The tool needs the write scope and declares itself destructive")
+    @Test("The tool needs admin and write, and declares itself destructive")
     func metadata() {
         #expect(ConfirmDestructiveOperationTool.name == "confirm_destructive_operation")
-        #expect(ConfirmDestructiveOperationTool.requiredScopes == [.toolsWrite])
+        #expect(ConfirmDestructiveOperationTool.requiredScopes == [.toolsWrite, .admin])
         #expect(ConfirmDestructiveOperationTool.annotations.destructiveHint == true)
         #expect(ConfirmDestructiveOperationTool.annotations.readOnlyHint == false)
         let required = ConfirmDestructiveOperationTool.inputSchema["required"]?

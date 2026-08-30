@@ -92,6 +92,7 @@ struct MCPTokenStoreTests {
     @Test("Full access is the only tier carrying the admin scope")
     func fullAccessScopes() {
         #expect(TokenPermissions.fullAccess.scopes == MCPScope.fullAccessSet)
+        #expect(TokenPermissions.fullAccess.scopes.contains(.toolsWrite))
         #expect(TokenPermissions.allCases.filter({ $0.scopes.contains(.admin) }) == [.fullAccess])
     }
 

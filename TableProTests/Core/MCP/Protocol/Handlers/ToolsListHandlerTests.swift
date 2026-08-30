@@ -31,8 +31,15 @@ struct ToolsListHandlerTests {
         #expect(readOnly.contains("list_connections"))
         #expect(readOnly.contains("connect") == false)
         #expect(readWrite.contains("connect"))
+        #expect(readWrite.contains("confirm_destructive_operation") == false)
         #expect(readOnly.count < readWrite.count)
         #expect(Set(readOnly).isSubset(of: Set(readWrite)))
+    }
+
+    @Test("A full-access principal sees confirm_destructive_operation")
+    func fullAccessPrincipalSeesTheAdminTool() async throws {
+        let fullAccess = try await names(for: MCPScope.fullAccessSet)
+        #expect(fullAccess.contains("confirm_destructive_operation"))
     }
 
     @Test("A principal with no scopes sees no tools at all")

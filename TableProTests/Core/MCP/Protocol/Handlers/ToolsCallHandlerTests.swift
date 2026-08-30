@@ -43,6 +43,24 @@ struct ToolsCallHandlerTests {
         #expect(error.message.contains("nonexistent_tool"))
     }
 
+    @Test("A read-write token is refused confirm_destructive_operation before the tool runs")
+    func readWriteTokenIsRefusedTheAdminToolAtTheHandler() async throws {
+        let error = try await failure(
+            params: .object([
+                "name": .string("confirm_destructive_operation"),
+                "arguments": .object([
+                    "connection_id": .string(UUID().uuidString),
+                    "query": .string("DROP TABLE users")
+                ])
+            ]),
+            scopes: MCPScope.readWriteSet
+        )
+        #expect(error.code == JsonRpcErrorCode.forbidden)
+        let required = Set(error.data?["requiredScopes"]?.arrayValue?.compactMap(\.stringValue) ?? [])
+        #expect(required.contains("admin"))
+        #expect(required.contains("tools:write"))
+    }
+
     @Test("A tool the principal lacks the scope for is refused with a scope challenge")
     func insufficientScopeChallenge() async throws {
         let error = try await failure(

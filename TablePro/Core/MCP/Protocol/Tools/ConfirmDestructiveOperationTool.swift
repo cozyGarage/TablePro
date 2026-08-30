@@ -8,11 +8,11 @@ public struct ConfirmDestructiveOperationTool: MCPToolImplementation {
         localized: """
         Run one destructive statement (DROP, TRUNCATE, ALTER ... DROP). The user approves it before it \
         runs: through your elicitation prompt when your client supports elicitation, otherwise through \
-        TablePro's own confirmation dialog on the user's Mac. Needs tools:write and a connection the \
-        user left writable for external clients.
+        TablePro's own confirmation dialog on the user's Mac. Needs a Full Access token (admin and \
+        tools:write) and a connection the user left writable for external clients.
         """
     )
-    public static let requiredScopes: Set<MCPScope> = [.toolsWrite]
+    public static let requiredScopes: Set<MCPScope> = [.toolsWrite, .admin]
     public static let annotations = MCPToolAnnotations(
         title: String(localized: "Confirm Destructive Operation"),
         readOnlyHint: false,

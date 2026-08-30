@@ -32,7 +32,7 @@ enum MCPStatementGate {
             )
         }
 
-        if classification.tier != .safe, meta.externalAccess != .readWrite {
+        if classification.requiresWriteCapability, meta.externalAccess != .readWrite {
             throw MCPToolExecutionError.denied(
                 String(localized: "This connection is read only for external clients.")
             )
@@ -48,7 +48,7 @@ enum MCPStatementGate {
             )
         }
 
-        if classification.tier != .safe {
+        if classification.requiresWriteCapability {
             try MCPToolAuthorization.requireScope(
                 .toolsWrite,
                 context: context,
@@ -89,7 +89,7 @@ enum MCPStatementGate {
         if classification.tier == .destructive { return true }
         if QueryClassifier.isDangerousQuery(sql, databaseType: meta.databaseType) { return true }
         guard meta.safeModeLevel.requiresConfirmation else { return false }
-        return classification.tier != .safe || meta.safeModeLevel.appliesToAllQueries
+        return classification.requiresWriteCapability || meta.safeModeLevel.appliesToAllQueries
     }
 
     private static func consentOutcome(

@@ -128,6 +128,29 @@ struct MCPStatementGateRefusalTests {
             )
         }
     }
+
+    @Test("An unparseable statement needs the write scope")
+    func unparseableNeedsWriteScope() async throws {
+        let context = MCPToolTestHarness.context(
+            principal: MCPToolTestHarness.principal(scopes: [.toolsRead])
+        )
+        do {
+            _ = try await MCPStatementGate.authorize(
+                sql: "this is not sql at all",
+                meta: MCPToolTestHarness.metadata(),
+                allowsDestructive: false,
+                operationLabel: "a query",
+                context: context,
+                services: MCPToolTestHarness.services()
+            )
+            Issue.record("Expected the unparseable statement to be refused for a read-only token")
+        } catch let error as MCPProtocolError {
+            #expect(error.code == JsonRpcErrorCode.forbidden)
+            #expect(
+                error.data?["requiredScopes"]?.arrayValue?.compactMap(\.stringValue) == ["tools:write"]
+            )
+        }
+    }
 }
 
 @Suite("MCPStatementGate consent policy")
