@@ -28,6 +28,12 @@ run_full() {
   echo "==> file size guardrail"
   "$ROOT/scripts/check-file-size.sh"
 
+  echo "==> bounded database operations in the GUI"
+  "$ROOT/scripts/check-bounded-operations.sh"
+
+  echo "==> panic sites in production code"
+  "$ROOT/scripts/check-panic-sites.sh"
+
   echo "==> cargo fmt --check"
   cargo fmt --all -- --check
 
@@ -39,6 +45,9 @@ run_full() {
   # beforehand doubles wall time for little signal.
   # DuckDB is optional (--features duckdb) and expensive to compile.
   cargo test --workspace --exclude tablepro-driver-duckdb --lib --bins
+
+  echo "==> sandbox integration tier"
+  "$ROOT/scripts/test-sandbox.sh"
 
   echo "Full fast checks passed."
   echo "Driver integration: ./scripts/ci-local.sh integration"

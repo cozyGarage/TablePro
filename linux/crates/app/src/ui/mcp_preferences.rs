@@ -51,7 +51,7 @@ pub fn build_page() -> adw::PreferencesPage {
     name_row.set_text("Cursor");
 
     let scope_combo = adw::ComboRow::builder().title(tr!("Scope")).build();
-    let scope_model = gtk::StringList::new(&["Read only", "Read and write", "Admin"]);
+    let scope_model = gtk::StringList::new(&["Read only", "Read and write"]);
     scope_combo.set_model(Some(&scope_model));
     scope_combo.set_selected(0);
 
@@ -81,7 +81,6 @@ pub fn build_page() -> adw::PreferencesPage {
         }
         let permissions = match scope_for_issue.selected() {
             1 => TokenPermissions::ReadWrite,
-            2 => TokenPermissions::FullAccess,
             _ => TokenPermissions::ReadOnly,
         };
         let tokens_group = tokens_for_issue.clone();
@@ -190,7 +189,6 @@ fn permissions_label(p: TokenPermissions) -> &'static str {
     match p {
         TokenPermissions::ReadOnly => "read-only",
         TokenPermissions::ReadWrite => "read-write",
-        TokenPermissions::FullAccess => "admin",
     }
 }
 

@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use tablepro_core::sql_dialect::quote_ident;
 use tablepro_core::{
-    ColumnInfo, Connection, ExecResult, ForeignKeyInfo, IndexInfo, OperationControl, QueryResult, TableInfo, Value,
+    ColumnInfo, Connection, ForeignKeyInfo, IndexInfo, OperationControl, QueryResult, TableInfo, Value,
     check_pre_dispatch,
 };
 use tablepro_policy::Principal;
@@ -170,7 +170,7 @@ impl McpBridge {
     pub async fn execute_query(&self, token: &McpToken, connection_id: Uuid, sql: &str) -> Result<QueryResult, String> {
         authorize_scopes(token.permissions, McpScope::ToolsRead)?;
         let driver_id = self.driver_id_for(token, connection_id).await?;
-        if sql_looks_like_write(sql, &driver_id) {
+        if tablepro_policy::statement_requires_write_capability(sql, &driver_id) {
             authorize_scopes(token.permissions, McpScope::ToolsWrite)?;
         }
         let max_rows = self.max_rows;
@@ -320,18 +320,6 @@ impl McpBridge {
         })
         .await
     }
-
-    pub async fn execute_write_commit(
-        &self,
-        token: &McpToken,
-        connection_id: Uuid,
-        sql: &str,
-    ) -> Result<ExecResult, String> {
-        match self.execute_write(token, connection_id, sql, false).await? {
-            WriteOutcome::Committed { rows_affected } => Ok(ExecResult { rows_affected }),
-            WriteOutcome::Preview { .. } => Err("unexpected preview outcome".into()),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -388,14 +376,9 @@ fn operation_control(timeout_secs: u64) -> OperationControl {
     )
 }
 
-fn sql_looks_like_write(sql: &str, driver_id: &str) -> bool {
-    let facts = tablepro_policy::classify(sql, driver_id);
-    facts.writes
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{McpLimits, count_from_value, count_statement, sql_looks_like_write, validated_identifier};
+    use super::{McpLimits, count_from_value, count_statement, validated_identifier};
     use tablepro_core::Value;
 
     #[test]
@@ -443,22 +426,5 @@ mod tests {
         assert_eq!(limits.requests_per_minute, 120);
         assert_eq!(limits.max_rows, 500);
         assert_eq!(limits.query_timeout_secs, 30);
-    }
-
-    #[test]
-    fn only_a_provable_read_skips_the_write_scope_check() {
-        for sql in ["SELECT 1", "SELECT id FROM t WHERE id = 1"] {
-            assert!(!sql_looks_like_write(sql, "postgres"), "{sql}");
-        }
-        for sql in [
-            "DELETE FROM t WHERE id = 1",
-            "CREATE TABLE t (id int)",
-            "SELECT pg_read_file('/etc/passwd')",
-            "COPY t TO PROGRAM 'sh'",
-            "this is not sql at all",
-            "",
-        ] {
-            assert!(sql_looks_like_write(sql, "postgres"), "{sql}");
-        }
     }
 }

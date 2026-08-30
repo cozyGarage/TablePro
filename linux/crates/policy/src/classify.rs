@@ -62,6 +62,10 @@ impl StatementFacts {
     }
 }
 
+pub fn statement_requires_write_capability(sql: &str, driver_id: &str) -> bool {
+    classify(sql, driver_id).writes
+}
+
 pub fn classify(sql: &str, driver_id: &str) -> StatementFacts {
     let dialect = dialect_for(driver_id);
     let trimmed = sql.trim();
@@ -1047,5 +1051,22 @@ mod tests {
         let facts = classify("DESCRIBE users", "mysql");
         assert_eq!(facts.class, StatementClass::Select);
         assert!(!facts.writes);
+    }
+
+    #[test]
+    fn only_a_provable_read_skips_the_write_capability_check() {
+        for sql in ["SELECT 1", "SELECT id FROM t WHERE id = 1"] {
+            assert!(!statement_requires_write_capability(sql, "postgres"), "{sql}");
+        }
+        for sql in [
+            "DELETE FROM t WHERE id = 1",
+            "CREATE TABLE t (id int)",
+            "SELECT pg_read_file('/etc/passwd')",
+            "COPY t TO PROGRAM 'sh'",
+            "this is not sql at all",
+            "",
+        ] {
+            assert!(statement_requires_write_capability(sql, "postgres"), "{sql}");
+        }
     }
 }

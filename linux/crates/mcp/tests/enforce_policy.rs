@@ -100,6 +100,32 @@ async fn read_only_token_cannot_call_administrative_function() {
 }
 
 #[tokio::test]
+async fn a_read_only_token_is_refused_a_delete_before_a_connection_opens() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(TokenStore::open(dir.path().join("tokens.json")).unwrap());
+    let connection_id = Uuid::nil();
+    let (_metadata, plaintext) = store
+        .issue(
+            "read-only".into(),
+            TokenPermissions::ReadOnly,
+            vec![connection_id],
+            None,
+        )
+        .unwrap();
+    let provider = Arc::new(RecordingProvider::default());
+    let bridge = McpBridge::new(provider.clone(), store);
+    let token = bridge.authenticate(&plaintext).unwrap();
+
+    let error = bridge
+        .execute_query(&token, connection_id, "DELETE FROM t WHERE id = 1")
+        .await
+        .unwrap_err();
+
+    assert!(error.contains("scope"), "DELETE is a write: {error}");
+    assert_eq!(provider.connection_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn guarded_tool_path_journals_policy_decision() {
     use tablepro_core::Environment;
     use tablepro_policy::{AuditSink, AuditState, AutoApproveSink, GuardContext, PolicyConfig, PolicyGuard, Principal};
