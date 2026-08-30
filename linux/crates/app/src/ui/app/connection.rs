@@ -48,7 +48,12 @@ impl App {
         activated: connection_service::ActivatedConnection,
         sender: ComponentSender<Self>,
     ) {
-        let connection_service::ActivatedConnection { id, tables, driver_id } = activated;
+        let connection_service::ActivatedConnection {
+            id,
+            tables,
+            views,
+            driver_id,
+        } = activated;
         self.dismiss_loading_page();
         self.dialog = None;
         self.connected = true;
@@ -64,8 +69,14 @@ impl App {
         // a tab via sidebar click or Ctrl+T.
         self.ensure_workspace_root(sender.clone());
         self.content_holder.set_content(Some(&self.workspace_outer_stack));
-        self.table_names = tables.iter().map(|t| t.name.clone()).collect();
-        tracing::info!(driver = %driver_id, table_count = tables.len(), "workspace ready");
+        self.table_names = tables.iter().chain(views.iter()).map(|t| t.name.clone()).collect();
+        tracing::info!(
+            driver = %driver_id,
+            table_count = tables.len(),
+            view_count = views.len(),
+            "workspace ready"
+        );
+        self.sidebar_views = views;
         self.repopulate_sidebar(&tables);
         self.rebuild_schema_buffer();
         self.refresh_window_title();
@@ -164,6 +175,8 @@ impl App {
         self.refresh_window_title();
         self.table_search.set_text("");
         self.sidebar_schemas.borrow_mut().clear();
+        self.sidebar_kinds.borrow_mut().clear();
+        self.sidebar_views.clear();
         self.sidebar_factory.guard().clear();
         self.show_welcome_page(sender);
         tracing::info!("disconnected");
@@ -518,11 +531,33 @@ impl App {
             let mut schemas = self.sidebar_schemas.borrow_mut();
             schemas.clear();
             schemas.extend(tables.iter().map(|t| t.schema.clone()));
+            schemas.extend(self.sidebar_views.iter().map(|t| t.schema.clone()));
+        }
+        {
+            let mut kinds = self.sidebar_kinds.borrow_mut();
+            kinds.clear();
+            kinds.extend(std::iter::repeat_n(
+                crate::ui::sidebar_row::SidebarObjectKind::Table,
+                tables.len(),
+            ));
+            kinds.extend(std::iter::repeat_n(
+                crate::ui::sidebar_row::SidebarObjectKind::View,
+                self.sidebar_views.len(),
+            ));
         }
         let mut guard = self.sidebar_factory.guard();
         guard.clear();
         for table in tables {
-            guard.push_back(table.clone());
+            guard.push_back(crate::ui::sidebar_row::SidebarRowInit {
+                info: table.clone(),
+                kind: crate::ui::sidebar_row::SidebarObjectKind::Table,
+            });
+        }
+        for view in &self.sidebar_views {
+            guard.push_back(crate::ui::sidebar_row::SidebarRowInit {
+                info: view.clone(),
+                kind: crate::ui::sidebar_row::SidebarObjectKind::View,
+            });
         }
         drop(guard);
         self.sidebar_factory.widget().invalidate_headers();

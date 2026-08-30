@@ -77,6 +77,10 @@ pub trait DatabaseDriver: Send + Sync {
         false
     }
 
+    fn supports_view_metadata(&self) -> bool {
+        false
+    }
+
     fn supports_integrated_auth(&self) -> bool {
         false
     }
@@ -126,5 +130,6 @@ mod tests {
         let driver = BareDriver;
         assert!(!driver.supports_index_metadata());
         assert!(!driver.supports_foreign_key_metadata());
+        assert!(!driver.supports_view_metadata());
     }
 }

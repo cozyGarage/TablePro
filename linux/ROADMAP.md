@@ -156,7 +156,7 @@ The repository extraction completed on 2026-08-17. Product planning now follows 
 - [ ] A typed sessions and locks console with capability-declared driver support and governed session termination
 - [ ] A PostgreSQL server health panel that degrades cleanly when a statistics extension is absent
 - [ ] Configurable pool size and timeouts per saved connection, honoured by the driver
-- [ ] Read-only review of views, routines, triggers, sequences, extensions, roles, and grants
+- [ ] Read-only review of views, routines, triggers, sequences, extensions, roles, and grants (PostgreSQL views are listing)
 - [ ] A decision record, design, and measured prototype for an out-of-process Python runner
 
 Phase 10 is in progress. Slice 10.2 added connection organisation: groups, tags, favourites, search across name/group/tag/driver, and URL import whose password reaches the keyring and never the saved file. Its first slice retired the one-active-connection limit: activation is additive and every window owns and releases its own connection, proven by two windows writing to two databases in the installed suite. Every connection it exposes stays policy-guarded, and no slice ships DDL or server configuration writes.
@@ -164,3 +164,5 @@ Phase 10 is in progress. Slice 10.2 added connection organisation: groups, tags,
 ## Next implementation target
 
 The immediate target is the internal Arch RC. The exact-commit hosted jobs first ran fully green on 2026-08-21 at `c8f91f06`, so the Phase 4 soak ledger has started and needs 30 consecutive retry-free attempts across at least six runs. What remains is accumulating that ledger and verifying install/upgrade/rollback on Wayland. Those gates are mostly waiting, so Phase 10 feature work runs in parallel on `linux` while the candidate stays frozen on a release branch. Phase 10 comes before full-table snapshot export and Phase 6 object administration; new drivers come after both.
+
+Which macOS features we take, skip, and in what order is in [docs/upstream-adoption.md](docs/upstream-adoption.md). The next product slice after views is the typed activity console (10.3), then the rest of 10.6.

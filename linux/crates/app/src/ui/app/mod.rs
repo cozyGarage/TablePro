@@ -73,6 +73,8 @@ pub struct App {
     disconnect_action: gio::SimpleAction,
     sidebar_factory: FactoryVecDeque<SidebarRow>,
     sidebar_schemas: std::rc::Rc<std::cell::RefCell<Vec<Option<String>>>>,
+    sidebar_kinds: std::rc::Rc<std::cell::RefCell<Vec<crate::ui::sidebar_row::SidebarObjectKind>>>,
+    sidebar_views: Vec<tablepro_core::TableInfo>,
     content_holder: adw::ToolbarView,
     toast_overlay: adw::ToastOverlay,
     /// Persistent "Connecting…" toast handle. Held so we can dismiss it
@@ -411,6 +413,8 @@ impl SimpleComponent for App {
             disconnect_action,
             sidebar_factory: sidebar.factory,
             sidebar_schemas: sidebar.schemas,
+            sidebar_kinds: sidebar.kinds,
+            sidebar_views: Vec::new(),
             content_holder: widgets.content_holder.clone(),
             toast_overlay: widgets.toast_overlay.clone(),
             connect_progress_toast: None,

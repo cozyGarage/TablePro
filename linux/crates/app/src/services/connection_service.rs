@@ -14,6 +14,7 @@ use super::database_service::{self, ConnectionMetadata, ReconnectParams};
 /// the existing workspace and connection untouched.
 pub struct PreparedConnection {
     pub tables: Vec<tablepro_core::TableInfo>,
+    pub views: Vec<tablepro_core::TableInfo>,
     pub driver_id: String,
     id: uuid::Uuid,
     metadata: ConnectionMetadata,
@@ -29,6 +30,7 @@ impl std::fmt::Debug for PreparedConnection {
             .field("id", &self.id)
             .field("driver_id", &self.driver_id)
             .field("table_count", &self.tables.len())
+            .field("view_count", &self.views.len())
             .finish_non_exhaustive()
     }
 }
@@ -36,12 +38,14 @@ impl std::fmt::Debug for PreparedConnection {
 pub struct ActivatedConnection {
     pub id: Uuid,
     pub tables: Vec<tablepro_core::TableInfo>,
+    pub views: Vec<tablepro_core::TableInfo>,
     pub driver_id: String,
 }
 
 impl PreparedConnection {
     pub(crate) fn new(
         tables: Vec<tablepro_core::TableInfo>,
+        views: Vec<tablepro_core::TableInfo>,
         driver_id: String,
         metadata: ConnectionMetadata,
         connection: Box<dyn Connection>,
@@ -50,6 +54,7 @@ impl PreparedConnection {
     ) -> Self {
         Self {
             tables,
+            views,
             driver_id,
             id: metadata.id,
             read_only: metadata.read_only,
@@ -73,6 +78,7 @@ impl PreparedConnection {
         ActivatedConnection {
             id,
             tables: self.tables,
+            views: self.views,
             driver_id: self.driver_id,
         }
     }
@@ -100,6 +106,10 @@ pub async fn open_saved(
         .list_tables_controlled(&control)
         .await
         .map_err(|e| format!("list_tables: {e}"))?;
+    let views = conn
+        .list_views_controlled(&control)
+        .await
+        .map_err(|e| format!("list_views: {e}"))?;
     let metadata = ConnectionMetadata {
         id,
         name: saved.name.clone(),
@@ -115,6 +125,7 @@ pub async fn open_saved(
     };
     Ok(PreparedConnection::new(
         tables,
+        views,
         saved.driver_id,
         metadata,
         conn,

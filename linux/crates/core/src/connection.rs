@@ -109,6 +109,12 @@ pub trait Connection: Send + Sync {
     async fn list_tables_controlled(&self, control: &OperationControl) -> Result<Vec<TableInfo>, DriverError> {
         run_controlled(self.list_tables(), control).await
     }
+    async fn list_views(&self) -> Result<Vec<TableInfo>, DriverError> {
+        Ok(Vec::new())
+    }
+    async fn list_views_controlled(&self, control: &OperationControl) -> Result<Vec<TableInfo>, DriverError> {
+        run_controlled(self.list_views(), control).await
+    }
     async fn fetch_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<ColumnInfo>, DriverError>;
     async fn fetch_columns_controlled(
         &self,
@@ -273,6 +279,10 @@ mod controlled_default_tests {
             self.stall().await
         }
 
+        async fn list_views(&self) -> Result<Vec<TableInfo>, DriverError> {
+            self.stall().await
+        }
+
         async fn fetch_columns(&self, _schema: Option<&str>, _table: &str) -> Result<Vec<ColumnInfo>, DriverError> {
             self.stall().await
         }
@@ -354,6 +364,10 @@ mod controlled_default_tests {
 
         assert!(matches!(
             connection.list_tables_controlled(&control).await,
+            Err(DriverError::Cancelled)
+        ));
+        assert!(matches!(
+            connection.list_views_controlled(&control).await,
             Err(DriverError::Cancelled)
         ));
         assert!(matches!(

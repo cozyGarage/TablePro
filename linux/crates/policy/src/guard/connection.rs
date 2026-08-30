@@ -21,6 +21,16 @@ impl Connection for PolicyGuard {
         result
     }
 
+    async fn list_views(&self) -> Result<Vec<TableInfo>, DriverError> {
+        let operation = self.metadata_operation("LIST VIEWS", Vec::new());
+        self.prepare_governed_read(&operation).await?;
+        let start = Instant::now();
+        let result = self.inner.list_views().await;
+        let rows = result.as_ref().ok().map(|views| views.len() as u64);
+        self.audit_read_result(&operation, start, &result, rows).await?;
+        result
+    }
+
     async fn fetch_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<ColumnInfo>, DriverError> {
         let target = schema.map_or_else(|| table.to_string(), |schema| format!("{schema}.{table}"));
         let operation = self.metadata_operation("FETCH COLUMNS", vec![target]);

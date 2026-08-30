@@ -7,17 +7,19 @@ use relm4::prelude::*;
 use relm4::{adw, gtk};
 
 use super::{App, AppMsg, AppWidgets, OpenMode};
-use crate::ui::sidebar_row::{SidebarRow, SidebarRowOutput};
+use crate::ui::sidebar_row::{SidebarObjectKind, SidebarRow, SidebarRowOutput};
 
 /// The sidebar's factory plus the parallel schema list its filter,
 /// header and selection code index by row position.
 pub(super) struct SidebarParts {
     pub(super) factory: FactoryVecDeque<SidebarRow>,
     pub(super) schemas: Rc<RefCell<Vec<Option<String>>>>,
+    pub(super) kinds: Rc<RefCell<Vec<SidebarObjectKind>>>,
 }
 
 pub(super) fn build_sidebar(widgets: &AppWidgets, sender: &ComponentSender<App>) -> SidebarParts {
     let sidebar_schemas: Rc<RefCell<Vec<Option<String>>>> = Rc::new(RefCell::new(Vec::new()));
+    let sidebar_kinds: Rc<RefCell<Vec<SidebarObjectKind>>> = Rc::new(RefCell::new(Vec::new()));
 
     let sidebar_factory: FactoryVecDeque<SidebarRow> = FactoryVecDeque::builder()
         .launch(
@@ -133,9 +135,32 @@ pub(super) fn build_sidebar(widgets: &AppWidgets, sender: &ComponentSender<App>)
         .build();
 
     let schemas_for_header = sidebar_schemas.clone();
+    let kinds_for_header = sidebar_kinds.clone();
     let sender_for_header = sender.clone();
     sidebar_listbox.set_header_func(move |row, before| {
         let schemas = schemas_for_header.borrow();
+        let kinds = kinds_for_header.borrow();
+        let idx = row.index() as usize;
+        let current_kind = kinds.get(idx).copied();
+        let prev_kind = before.and_then(|b| kinds.get(b.index() as usize).copied());
+        if current_kind == Some(SidebarObjectKind::View) && prev_kind != Some(SidebarObjectKind::View) {
+            let header = gtk::Label::builder()
+                .label(crate::tr!("Views"))
+                .xalign(0.0)
+                .margin_top(12)
+                .margin_bottom(6)
+                .margin_start(12)
+                .margin_end(12)
+                .build();
+            header.add_css_class("caption-heading");
+            header.add_css_class("dim-label");
+            row.set_header(Some(&header));
+            return;
+        }
+        if current_kind == Some(SidebarObjectKind::View) {
+            row.set_header(gtk::Widget::NONE);
+            return;
+        }
         let total_distinct: std::collections::BTreeSet<&str> = schemas.iter().filter_map(|s| s.as_deref()).collect();
         // Postgres-style multi-schema connections render a header
         // per schema with a "+" button for "New Table…". Single-
@@ -214,5 +239,6 @@ pub(super) fn build_sidebar(widgets: &AppWidgets, sender: &ComponentSender<App>)
     SidebarParts {
         factory: sidebar_factory,
         schemas: sidebar_schemas,
+        kinds: sidebar_kinds,
     }
 }

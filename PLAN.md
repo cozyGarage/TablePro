@@ -541,7 +541,14 @@ environment colour on each saved-connection row. Slice 10.3 has a
 capability-declared TSV activity dialog whose in-flight query is cancelled when
 the dialog closes. The typed sessions console and blocking trees are not
 started. Structure edit tabs now restore with the rest of the workspace.
-Slices 10.4 through 10.7 are not started.
+Slice 10.6 has started: PostgreSQL views list through the guard and appear
+in the sidebar as read-only objects. Materialized views, routines, triggers,
+sequences, extensions, roles, and grants are not started. Slices 10.4, 10.5,
+and 10.7 are not started.
+
+Which macOS 0.68–0.69 behavior we reimplement, and in what order, is recorded
+in `linux/docs/upstream-adoption.md`. Review their behavior; do not merge
+their source.
 
 The product is strong on safety and thin on operations. A DBA who manages many
 servers gets one active connection per process, an activity dialog that renders
@@ -660,6 +667,11 @@ Read-only introspection for views, materialized views, routines, triggers,
 sequences, extensions, roles, and grants. The connection trait gains methods
 whose defaults return nothing, matching the existing index and foreign-key
 pattern, so drivers opt in without breaking. PostgreSQL implements all of them.
+
+`list_views` is the first method. PostgreSQL reads `pg_views` through the
+guard. The sidebar shows those rows under Views and offers Open only. A
+failed list does not look like an empty catalog. The remaining object kinds
+follow the same shape.
 
 Database metadata is untrusted input. Identifiers are dialect-quoted and never
 joined into SQL as text.

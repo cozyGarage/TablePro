@@ -7,9 +7,29 @@ use relm4::gtk::prelude::*;
 
 use tablepro_core::TableInfo;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarObjectKind {
+    Table,
+    View,
+}
+
+#[derive(Debug, Clone)]
+pub struct SidebarRowInit {
+    pub info: TableInfo,
+    pub kind: SidebarObjectKind,
+}
+
+fn sidebar_icon(kind: SidebarObjectKind) -> &'static str {
+    match kind {
+        SidebarObjectKind::Table => "view-list-symbolic",
+        SidebarObjectKind::View => "view-paged-symbolic",
+    }
+}
+
 #[derive(Debug)]
 pub struct SidebarRow {
     pub info: TableInfo,
+    kind: SidebarObjectKind,
     open_button: gtk::Button,
     /// The eagerly-parented context-menu popover. Held on the model
     /// so `shutdown` can `unparent()` it before the row's root widget
@@ -68,7 +88,7 @@ pub enum SidebarRowOutput {
 
 #[relm4::factory(pub)]
 impl FactoryComponent for SidebarRow {
-    type Init = TableInfo;
+    type Init = SidebarRowInit;
     type Input = SidebarRowMsg;
     type Output = SidebarRowOutput;
     type CommandOutput = ();
@@ -106,7 +126,7 @@ impl FactoryComponent for SidebarRow {
                 set_margin_bottom: 6,
 
                 gtk::Image {
-                    set_icon_name: Some("view-list-symbolic"),
+                    set_icon_name: Some(sidebar_icon(self.kind)),
                     set_pixel_size: 16,
                 },
 
@@ -122,8 +142,8 @@ impl FactoryComponent for SidebarRow {
         }
     }
 
-    fn init_model(info: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
-        let open_label = crate::tr!("Open {name}").replace("{name}", &info.name);
+    fn init_model(init: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
+        let open_label = crate::tr!("Open {name}").replace("{name}", &init.info.name);
         let open_button = gtk::Button::builder()
             .icon_name("go-next-symbolic")
             .tooltip_text(&open_label)
@@ -132,7 +152,8 @@ impl FactoryComponent for SidebarRow {
             .build();
         open_button.update_property(&[gtk::accessible::Property::Label(&open_label)]);
         Self {
-            info,
+            info: init.info,
+            kind: init.kind,
             open_button,
             popover: None,
         }
@@ -210,16 +231,18 @@ impl FactoryComponent for SidebarRow {
             Some("sidebar-row.open-in-new-tab"),
         );
         menu.append_section(None, &open_section);
-        let structure_section = gtk::gio::Menu::new();
-        structure_section.append(Some(&crate::tr!("Edit Structure")), Some("sidebar-row.edit-structure"));
-        structure_section.append(
-            Some(&crate::tr!("Show CREATE TABLE")),
-            Some("sidebar-row.show-create-table"),
-        );
-        menu.append_section(None, &structure_section);
-        let mutate_section = gtk::gio::Menu::new();
-        mutate_section.append(Some(&crate::tr!("Drop Table\u{2026}")), Some("sidebar-row.drop-table"));
-        menu.append_section(None, &mutate_section);
+        if self.kind == SidebarObjectKind::Table {
+            let structure_section = gtk::gio::Menu::new();
+            structure_section.append(Some(&crate::tr!("Edit Structure")), Some("sidebar-row.edit-structure"));
+            structure_section.append(
+                Some(&crate::tr!("Show CREATE TABLE")),
+                Some("sidebar-row.show-create-table"),
+            );
+            menu.append_section(None, &structure_section);
+            let mutate_section = gtk::gio::Menu::new();
+            mutate_section.append(Some(&crate::tr!("Drop Table\u{2026}")), Some("sidebar-row.drop-table"));
+            menu.append_section(None, &mutate_section);
+        }
 
         let popover = gtk::PopoverMenu::from_model(Some(&menu));
         popover.set_has_arrow(true);
