@@ -6,6 +6,8 @@ use uuid::Uuid;
 
 use super::{App, AppMsg};
 
+static ORGANIZATION_FILE_MUTATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 impl App {
     pub(super) fn load_connection_organization(&self, sender: ComponentSender<Self>) {
         let sender_clone = sender.clone();
@@ -36,14 +38,7 @@ impl App {
     }
 
     pub(super) fn on_toggle_connection_favorite(&mut self, id: Uuid, sender: ComponentSender<Self>) {
-        let favorite = !self.connection_organization.is_favorite(id);
-        if let Err(error) = self.connection_organization.set_favorite(id, favorite) {
-            self.show_toast(&crate::tr!("This connection could not be updated."));
-            tracing::warn!(error = %error, "set favorite failed");
-            return;
-        }
-        self.publish_connection_organization();
-        self.persist_connection_organization(sender);
+        persist_connection_organization(OrganizationMutation::ToggleFavorite(id), sender);
     }
 
     pub(super) fn on_set_connection_organization(
@@ -52,39 +47,14 @@ impl App {
         organization: ConnectionOrganization,
         sender: ComponentSender<Self>,
     ) {
-        if let Err(error) = self.connection_organization.set(id, organization) {
-            self.show_toast(&crate::tr!("This connection could not be updated."));
-            tracing::warn!(error = %error, "set connection organization failed");
-            return;
-        }
-        self.publish_connection_organization();
-        self.persist_connection_organization(sender);
+        persist_connection_organization(OrganizationMutation::Set(id, organization), sender);
     }
 
     /// Prune entries for connections that no longer exist, then write.
     /// Runs after a reload so a delete performed in another window does
     /// not leave the sidecar growing forever.
     pub(super) fn prune_connection_organization(&mut self, sender: ComponentSender<Self>) {
-        let before = self.connection_organization.clone();
-        self.connection_organization.retain_known(&self.saved_connections);
-        if self.connection_organization == before {
-            return;
-        }
-        self.publish_connection_organization();
-        self.persist_connection_organization(sender);
-    }
-
-    fn persist_connection_organization(&self, sender: ComponentSender<Self>) {
-        let index = self.connection_organization.clone();
-        sender.command(move |_, shutdown| {
-            shutdown
-                .register(async move {
-                    if let Err(error) = tablepro_storage::save_organization(&index).await {
-                        tracing::warn!(error = %error, "save connection organization failed");
-                    }
-                })
-                .drop_on_shutdown()
-        });
+        persist_connection_organization(OrganizationMutation::RetainKnown, sender);
     }
 
     pub(super) fn on_organize_connection(&self, saved: SavedConnection, sender: ComponentSender<Self>) {
@@ -187,33 +157,31 @@ impl App {
                 return;
             }
         };
-        let existing = self.saved_connections.clone();
         let sender_clone = sender.clone();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
                     let connection = parsed.connection;
+                    let connection_id = connection.id;
                     let label = connection.name.clone();
-                    if let Some(password) = parsed.password
-                        && let Err(error) =
-                            tablepro_storage::store_password(connection.id, secret(&password), &label).await
-                    {
-                        tracing::warn!(error = %error, "storing the imported password failed");
+                    if let Err(error) = tablepro_storage::save_connections(std::slice::from_ref(&connection)).await {
+                        tracing::warn!(error = %error, "saving the imported connection failed");
                         sender_clone.input(AppMsg::ImportConnectionUrlFailed);
                         return;
                     }
-                    let mut connections = existing;
-                    connections.push(connection);
-                    match tablepro_storage::save_connections(&connections).await {
-                        Ok(()) => {
-                            sender_clone.input(AppMsg::ImportConnectionUrlSucceeded(label));
-                            sender_clone.input(AppMsg::ReloadConnections);
+                    if let Some(password) = parsed.password
+                        && let Err(error) =
+                            tablepro_storage::store_password(connection_id, secret(&password), &label).await
+                    {
+                        tracing::warn!(error = %error, "storing the imported password failed");
+                        if let Err(rollback_error) = tablepro_storage::delete_connection(connection_id).await {
+                            tracing::warn!(error = %rollback_error, "rolling back imported connection failed");
                         }
-                        Err(error) => {
-                            tracing::warn!(error = %error, "saving the imported connection failed");
-                            sender_clone.input(AppMsg::ImportConnectionUrlFailed);
-                        }
+                        sender_clone.input(AppMsg::ImportConnectionUrlFailed);
+                        return;
                     }
+                    sender_clone.input(AppMsg::ImportConnectionUrlSucceeded(label));
+                    sender_clone.input(AppMsg::ReloadConnections);
                 })
                 .drop_on_shutdown()
         });
@@ -226,6 +194,46 @@ impl App {
     pub(super) fn on_import_connection_url_failed(&self) {
         self.show_toast(&crate::tr!("The imported connection could not be saved."));
     }
+}
+
+enum OrganizationMutation {
+    ToggleFavorite(Uuid),
+    Set(Uuid, ConnectionOrganization),
+    RetainKnown,
+}
+
+fn persist_connection_organization(mutation: OrganizationMutation, sender: ComponentSender<App>) {
+    let sender_clone = sender.clone();
+    sender.command(move |_, shutdown| {
+        shutdown
+            .register(async move {
+                let result = async {
+                    let _guard = ORGANIZATION_FILE_MUTATION.lock().await;
+                    let mut index = tablepro_storage::load_organization().await?;
+                    match mutation {
+                        OrganizationMutation::ToggleFavorite(id) => {
+                            index.set_favorite(id, !index.is_favorite(id))?;
+                        }
+                        OrganizationMutation::Set(id, organization) => index.set(id, organization)?,
+                        OrganizationMutation::RetainKnown => {
+                            let connections = tablepro_storage::load_connections().await?;
+                            index.retain_known(&connections);
+                        }
+                    }
+                    tablepro_storage::save_organization(&index).await?;
+                    Ok::<_, tablepro_storage::StorageError>(index)
+                }
+                .await;
+                match result {
+                    Ok(index) => sender_clone.input(AppMsg::ConnectionOrganizationLoaded(index)),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "connection organization mutation failed");
+                        sender_clone.input(AppMsg::ShowToast(crate::tr!("This connection could not be updated.")));
+                    }
+                }
+            })
+            .drop_on_shutdown()
+    });
 }
 
 fn secret(password: &secrecy::SecretString) -> &str {

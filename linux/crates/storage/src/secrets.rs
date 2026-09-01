@@ -71,16 +71,7 @@ async fn store_secret(id: Uuid, kind: &str, value: &str, label: &str) -> Result<
 }
 
 async fn load_secret(id: Uuid, kind: &str) -> Result<Option<SecretString>, StorageError> {
-    let keyring = match open().await {
-        Ok(k) => k,
-        Err(e) => {
-            // Don't fail outright — a missing Secret Service shouldn't crash
-            // the app — but the user will hit a misleading "auth failed"
-            // downstream if we stay silent.
-            tracing::warn!(connection_id = %id, kind, error = %e, "keyring unavailable, secret cannot be loaded");
-            return Ok(None);
-        }
-    };
+    let keyring = open().await?;
     let items = keyring.search_items(&attrs_for(id, kind)).await.map_err(map_err)?;
     let Some(item) = items.into_iter().next() else {
         return Ok(None);

@@ -5,9 +5,24 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::StorageError;
+use crate::file_access::{lock_path, read_bounded, write_atomically};
 
 const CURRENT_VERSION: u32 = 1;
 const MAX_FAVORITES: usize = 500;
+const MAX_FAVORITES_FILE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_FAVORITE_NAME_BYTES: usize = 512;
+const MAX_FAVORITE_SQL_BYTES: usize = 1024 * 1024;
+const MAX_DRIVER_ID_BYTES: usize = 128;
+const KNOWN_FILE_FIELDS: &[&str] = &["version", "favorites"];
+const KNOWN_FAVORITE_FIELDS: &[&str] = &[
+    "id",
+    "name",
+    "sql",
+    "driver_id",
+    "connection_id",
+    "created_at",
+    "last_used_at",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedQuery {
@@ -49,38 +64,46 @@ pub async fn load_favorites() -> Result<Vec<SavedQuery>, StorageError> {
 }
 
 pub async fn save_favorite(favorite: SavedQuery) -> Result<Vec<SavedQuery>, StorageError> {
-    let path = favorites_path()?;
-    let mut existing = load_from(&path).await.unwrap_or_default();
-    upsert(&mut existing, favorite)?;
-    save_to(&path, &existing).await?;
-    Ok(existing)
+    save_favorite_to(&favorites_path()?, favorite).await
 }
 
 pub async fn delete_favorite(id: Uuid) -> Result<Vec<SavedQuery>, StorageError> {
-    let path = favorites_path()?;
-    let mut existing = load_from(&path).await.unwrap_or_default();
-    existing.retain(|favorite| favorite.id != id);
-    save_to(&path, &existing).await?;
-    Ok(existing)
+    delete_favorite_from(&favorites_path()?, id).await
 }
 
 pub async fn touch_favorite(id: Uuid) -> Result<(), StorageError> {
-    let path = favorites_path()?;
-    let mut existing = load_from(&path).await.unwrap_or_default();
+    touch_favorite_from(&favorites_path()?, id).await
+}
+
+async fn save_favorite_to(path: &Path, favorite: SavedQuery) -> Result<Vec<SavedQuery>, StorageError> {
+    validate_favorite(&favorite)?;
+    let _guard = lock_path(path).await?;
+    let (mut existing, stored) = load_document(path).await?;
+    upsert(&mut existing, favorite)?;
+    save_to_unlocked(path, &existing, stored.as_ref()).await?;
+    Ok(existing)
+}
+
+async fn delete_favorite_from(path: &Path, id: Uuid) -> Result<Vec<SavedQuery>, StorageError> {
+    let _guard = lock_path(path).await?;
+    let (mut existing, stored) = load_document(path).await?;
+    existing.retain(|favorite| favorite.id != id);
+    save_to_unlocked(path, &existing, stored.as_ref()).await?;
+    Ok(existing)
+}
+
+async fn touch_favorite_from(path: &Path, id: Uuid) -> Result<(), StorageError> {
+    let _guard = lock_path(path).await?;
+    let (mut existing, stored) = load_document(path).await?;
     let Some(favorite) = existing.iter_mut().find(|favorite| favorite.id == id) else {
         return Ok(());
     };
     favorite.last_used_at = Some(Utc::now());
-    save_to(&path, &existing).await
+    save_to_unlocked(path, &existing, stored.as_ref()).await
 }
 
 pub(crate) fn upsert(existing: &mut Vec<SavedQuery>, favorite: SavedQuery) -> Result<(), StorageError> {
-    if favorite.name.trim().is_empty() {
-        return Err(StorageError::Schema("a favorite needs a name".into()));
-    }
-    if favorite.sql.trim().is_empty() {
-        return Err(StorageError::Schema("a favorite needs a statement".into()));
-    }
+    validate_favorite(&favorite)?;
     if let Some(slot) = existing.iter_mut().find(|candidate| candidate.id == favorite.id) {
         *slot = favorite;
         return Ok(());
@@ -99,6 +122,40 @@ pub(crate) fn upsert(existing: &mut Vec<SavedQuery>, favorite: SavedQuery) -> Re
         )));
     }
     existing.push(favorite);
+    Ok(())
+}
+
+fn validate_favorite(favorite: &SavedQuery) -> Result<(), StorageError> {
+    validate_required_text(
+        &favorite.name,
+        MAX_FAVORITE_NAME_BYTES,
+        "a favorite needs a name",
+        "favorite name",
+    )?;
+    validate_required_text(
+        &favorite.sql,
+        MAX_FAVORITE_SQL_BYTES,
+        "a favorite needs a statement",
+        "favorite statement",
+    )?;
+    if let Some(driver_id) = favorite.driver_id.as_deref()
+        && driver_id.len() > MAX_DRIVER_ID_BYTES
+    {
+        return Err(StorageError::TooLarge {
+            got: driver_id.len(),
+            limit: MAX_DRIVER_ID_BYTES,
+        });
+    }
+    Ok(())
+}
+
+fn validate_required_text(value: &str, limit: usize, empty_error: &str, field: &str) -> Result<(), StorageError> {
+    if value.trim().is_empty() {
+        return Err(StorageError::Schema(empty_error.into()));
+    }
+    if value.len() > limit {
+        return Err(StorageError::Schema(format!("{field} exceeds {limit} bytes")));
+    }
     Ok(())
 }
 
@@ -122,33 +179,111 @@ pub fn matches_filter(favorite: &SavedQuery, filter: &str) -> bool {
 }
 
 pub(crate) async fn load_from(path: &Path) -> Result<Vec<SavedQuery>, StorageError> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let bytes = tokio::fs::read(path).await?;
-    let file: FavoritesFile = serde_json::from_slice(&bytes)?;
+    load_document(path).await.map(|(favorites, _)| favorites)
+}
+
+async fn load_document(
+    path: &Path,
+) -> Result<(Vec<SavedQuery>, Option<serde_json::Map<String, serde_json::Value>>), StorageError> {
+    let Some(bytes) = read_bounded(path, MAX_FAVORITES_FILE_BYTES).await? else {
+        return Ok((Vec::new(), None));
+    };
+    let stored: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let stored = stored
+        .as_object()
+        .cloned()
+        .ok_or_else(|| StorageError::Schema("favorites.json must contain an object".into()))?;
+    let file: FavoritesFile = serde_json::from_value(serde_json::Value::Object(stored.clone()))?;
     if file.version != CURRENT_VERSION {
         return Err(StorageError::Schema(format!(
             "favorites.json version {} not supported (expected {})",
             file.version, CURRENT_VERSION,
         )));
     }
-    Ok(file.favorites)
+    if file.favorites.len() > MAX_FAVORITES {
+        return Err(StorageError::Schema(format!(
+            "favorites are limited to {MAX_FAVORITES} entries"
+        )));
+    }
+    for favorite in &file.favorites {
+        validate_favorite(favorite)?;
+    }
+    Ok((file.favorites, Some(stored)))
 }
 
+#[cfg(test)]
 pub(crate) async fn save_to(path: &Path, favorites: &[SavedQuery]) -> Result<(), StorageError> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+    for favorite in favorites {
+        validate_favorite(favorite)?;
     }
+    if favorites.len() > MAX_FAVORITES {
+        return Err(StorageError::Schema(format!(
+            "favorites are limited to {MAX_FAVORITES} entries"
+        )));
+    }
+    let _guard = lock_path(path).await?;
+    let (_, stored) = load_document(path).await?;
+    save_to_unlocked(path, favorites, stored.as_ref()).await
+}
+
+async fn save_to_unlocked(
+    path: &Path,
+    favorites: &[SavedQuery],
+    stored: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<(), StorageError> {
     let file = FavoritesFile {
         version: CURRENT_VERSION,
         favorites: favorites.to_vec(),
     };
-    let json = serde_json::to_vec_pretty(&file)?;
-    let tmp = path.with_extension("json.tmp");
-    tokio::fs::write(&tmp, &json).await?;
-    tokio::fs::rename(&tmp, path).await?;
-    Ok(())
+    let mut document = serde_json::to_value(file)?;
+    if let Some(stored) = stored {
+        carry_unknown_fields(&mut document, stored);
+    }
+    let json = serde_json::to_vec_pretty(&document)?;
+    if json.len() > MAX_FAVORITES_FILE_BYTES {
+        return Err(StorageError::TooLarge {
+            got: json.len(),
+            limit: MAX_FAVORITES_FILE_BYTES,
+        });
+    }
+    write_atomically(path, &json).await
+}
+
+fn carry_unknown_fields(document: &mut serde_json::Value, stored: &serde_json::Map<String, serde_json::Value>) {
+    let Some(fresh) = document.as_object_mut() else {
+        return;
+    };
+    for (key, value) in stored {
+        if !KNOWN_FILE_FIELDS.contains(&key.as_str()) {
+            fresh.insert(key.clone(), value.clone());
+        }
+    }
+    let Some(stored_entries) = stored.get("favorites").and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    let Some(fresh_entries) = fresh.get_mut("favorites").and_then(serde_json::Value::as_array_mut) else {
+        return;
+    };
+    for entry in fresh_entries {
+        let Some(id) = entry.get("id").and_then(serde_json::Value::as_str).map(str::to_owned) else {
+            continue;
+        };
+        let Some(previous) = stored_entries
+            .iter()
+            .filter_map(serde_json::Value::as_object)
+            .find(|candidate| candidate.get("id").and_then(serde_json::Value::as_str) == Some(id.as_str()))
+        else {
+            continue;
+        };
+        let Some(target) = entry.as_object_mut() else {
+            continue;
+        };
+        for (key, value) in previous {
+            if !KNOWN_FAVORITE_FIELDS.contains(&key.as_str()) {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+    }
 }
 
 fn favorites_path() -> Result<PathBuf, StorageError> {
@@ -267,5 +402,42 @@ mod tests {
             .expect("write");
 
         assert!(load_from(&path).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_malformed_file_is_preserved_and_blocks_a_save() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("favorites.json");
+        let malformed = b"{not valid json";
+        tokio::fs::write(&path, malformed).await.expect("write");
+
+        assert!(save_favorite_to(&path, favorite("Daily", "SELECT 1")).await.is_err());
+        assert_eq!(tokio::fs::read(&path).await.expect("read"), malformed);
+    }
+
+    #[tokio::test]
+    async fn unknown_file_and_favorite_fields_survive_an_update() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("favorites.json");
+        let mut entry = favorite("Daily", "SELECT 1");
+        save_to(&path, std::slice::from_ref(&entry))
+            .await
+            .expect("initial save");
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(&path).await.expect("read")).expect("json");
+        document["future_section"] = serde_json::json!({ "keep": true });
+        document["favorites"][0]["display_color"] = serde_json::json!("teal");
+        tokio::fs::write(&path, serde_json::to_vec_pretty(&document).expect("serialize"))
+            .await
+            .expect("write");
+        entry.sql = "SELECT 2".into();
+
+        save_favorite_to(&path, entry).await.expect("update");
+
+        let rewritten: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(&path).await.expect("read")).expect("json");
+        assert_eq!(rewritten["future_section"]["keep"], true);
+        assert_eq!(rewritten["favorites"][0]["display_color"], "teal");
+        assert_eq!(rewritten["favorites"][0]["sql"], "SELECT 2");
     }
 }

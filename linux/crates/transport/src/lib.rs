@@ -1,11 +1,14 @@
 use secrecy::SecretString;
 use std::os::unix::fs::FileTypeExt;
+use std::time::Duration;
 use tablepro_core::{AuthMode, ConnectOptions, Connection, DatabaseDriver, DriverError, TlsConfig, TlsMode};
 use tablepro_ssh::{SshAuth, SshConfig, SshTunnel};
 use tablepro_storage::{
     SavedConnection, SavedSshAuth, SavedSshConfig, load_password, load_ssh_passphrase, load_ssh_password,
 };
 use uuid::Uuid;
+
+const DATABASE_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
@@ -23,6 +26,8 @@ pub enum TransportError {
     LocalSocketWithTls,
     #[error("invalid local Unix socket: {0}")]
     InvalidLocalSocket(String),
+    #[error("database connection timed out after {seconds} seconds")]
+    DatabaseTimeout { seconds: u64 },
     #[error(transparent)]
     Driver(#[from] DriverError),
 }
@@ -48,12 +53,11 @@ pub fn tls_config(mode: TlsMode) -> TlsConfig {
 
 pub async fn connect_options_for(saved: &SavedConnection) -> Result<ConnectOptions, TransportError> {
     let password = match saved.auth_mode {
-        AuthMode::Password => load_password(saved.id)
+        AuthMode::Password if !matches!(saved.driver_id.as_str(), "sqlite" | "duckdb") => load_password(saved.id)
             .await
-            .ok()
-            .flatten()
+            .map_err(|error| TransportError::Secret(format!("load database password: {error}")))?
             .unwrap_or_else(|| SecretString::new(String::new().into())),
-        AuthMode::Kerberos => SecretString::new(String::new().into()),
+        AuthMode::Password | AuthMode::Kerberos => SecretString::new(String::new().into()),
     };
     Ok(ConnectOptions {
         host: saved.host.clone(),
@@ -108,8 +112,21 @@ pub async fn establish(
     } else {
         None
     };
-    let raw = driver.connect(opts).await?;
+    let raw = connect_with_timeout(driver, opts, DATABASE_CONNECT_TIMEOUT).await?;
     Ok((raw, tunnel))
+}
+
+async fn connect_with_timeout(
+    driver: &dyn DatabaseDriver,
+    opts: ConnectOptions,
+    timeout: Duration,
+) -> Result<Box<dyn Connection>, TransportError> {
+    tokio::time::timeout(timeout, driver.connect(opts))
+        .await
+        .map_err(|_| TransportError::DatabaseTimeout {
+            seconds: timeout.as_secs(),
+        })?
+        .map_err(TransportError::Driver)
 }
 
 fn validate_local_socket(
@@ -260,6 +277,27 @@ async fn resolve_saved_ssh_hop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct HangingDriver;
+
+    #[async_trait::async_trait]
+    impl DatabaseDriver for HangingDriver {
+        fn id(&self) -> &'static str {
+            "hanging"
+        }
+
+        fn display_name(&self) -> &'static str {
+            "Hanging"
+        }
+
+        fn default_port(&self) -> u16 {
+            1
+        }
+
+        async fn connect(&self, _opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
+            std::future::pending().await
+        }
+    }
 
     #[test]
     fn tunnel_uses_local_dial_endpoint_and_keeps_service_identity() {
@@ -442,6 +480,16 @@ mod tests {
             .expect("test driver refuses to connect");
 
         assert!(error.to_string().contains("test driver"), "unexpected error: {error}");
+    }
+
+    #[tokio::test]
+    async fn database_connection_attempt_is_bounded() {
+        let error = connect_with_timeout(&HangingDriver, ConnectOptions::default(), Duration::from_millis(1))
+            .await
+            .err()
+            .expect("hanging connection must time out");
+
+        assert!(matches!(error, TransportError::DatabaseTimeout { .. }));
     }
 
     #[test]

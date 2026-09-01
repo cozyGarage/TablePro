@@ -1,6 +1,6 @@
 # Production readiness audit
 
-**Updated**: 2026-08-30
+**Updated**: 2026-09-02
 
 **State**: useful for development and personal database work, not yet approved for trusted production writes or unattended agents
 
@@ -43,6 +43,27 @@ PostgreSQL server-side cancellation is implemented and real-driver verified. Con
 
 Cancellation is no longer a release blocker by itself. Release testing must still prove the installed GTK cancel flow and audit outcome behavior in the PostgreSQL release fixture.
 
+## Linux sync hardening review
+
+The `linux` branch review started from synced base `16ef534c` and was rebased onto `67d3b8f0` on 2026-09-02. It covered application lifecycle and async ordering, saved-state concurrency, Secret Service failure handling, MCP deadlines and token storage, policy audit terminal states, agent session reuse, SSH tunnel lifetime, and transport timeouts.
+
+The review closed these defects:
+
+- Pending edits and connection organization changes are isolated between windows.
+- Query, schema, browse, row-count, and dropped-file generations reject stale results.
+- Workspace writes are bounded, coalesced, performed off the GTK thread, and flushed before the final window closes. Failed writes do not receive a successful acknowledgement.
+- Connection, favorite, organization, and token mutations use atomic replacement and cross-process serialization. Malformed and oversized state is refused without replacing the previous file.
+- Token files reject unsafe permissions, symlinks, non-regular files, oversized input, and concurrent mutation sequences that could restore a revoked token.
+- Secret Service failures propagate for network database credentials. SQLite and DuckDB do not require Secret Service.
+- MCP applies one deadline across saved-connection lookup, connection acquisition, metadata work, query execution, preview execution, and controlled rollback cleanup.
+- Timed-out or uncertain metadata and rollback operations write terminal audit outcomes and disable governed writes when the outcome is unknown.
+- Agent sessions are keyed by saved transport settings, opened with per-connection single-flight locking, health-checked within five seconds, and retained only while issued connections still need their tunnel.
+- Database connection establishment has a 30-second outer timeout.
+
+Validation for the final rebased tree uses the file-size, formatting, workspace Clippy, workspace unit and binary, sandbox, focused MCP, dependency policy, and diff checks documented in this repository.
+
+The Docker driver suites, PostgreSQL release fixture, installed GTK safety suite, PostgreSQL socket fixture, and Secret Service fixture were not run in this local review. They still require their documented container, display, D-Bus, or keyring environments.
+
 ## Closed release blockers
 
 ### PostgreSQL TLS through SSH and reconnect fixture
@@ -79,6 +100,9 @@ Flatpak files exist, but Flatpak publication is later and is not the first relea
 - gettext infrastructure exists, but translation coverage is incomplete.
 - Accessibility work needs full keyboard and screen-reader validation.
 - Stable driver labels cover common connection, browse, query, and write paths. They do not mean every TLS, reconnect, transaction, large-result, and packaging case has passed a release fixture.
+- MCP driver operations, authorization, and controlled rollback are deadline-bound, but durable audit filesystem work can outlive the request deadline. It is not externally cancelled because abandoning an audit append could leave an unconfirmed terminal state. Policy remains fail closed while the request waits.
+- A healthy cached agent session is invalidated when saved endpoint, TLS, authentication mode, or SSH metadata changes. Rotating a Secret Service value or replacing key or certificate contents at the same path does not invalidate that session until it fails a health check or another keyed setting changes.
+- SQL Server still cannot use a saved custom certificate authority. MongoDB and Redis treat Verify Ca as the stricter Verify Full behavior because their current Rust TLS backends do not expose CA-only verification.
 
 ## Current decision
 

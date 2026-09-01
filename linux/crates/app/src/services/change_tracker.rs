@@ -770,6 +770,11 @@ impl ChangeTrackerRegistry {
         self.trackers.remove(&tab_id);
     }
 
+    #[cfg(test)]
+    pub fn any_pending(&self) -> bool {
+        self.trackers.values().any(|t| t.has_pending())
+    }
+
     pub fn any_pending_in(&self, ids: impl IntoIterator<Item = Uuid>) -> bool {
         ids.into_iter()
             .any(|id| self.trackers.get(&id).is_some_and(|tracker| tracker.has_pending()))
@@ -778,6 +783,13 @@ impl ChangeTrackerRegistry {
     pub fn pending_among(&self, ids: impl IntoIterator<Item = Uuid>) -> Vec<Uuid> {
         ids.into_iter()
             .filter(|id| self.trackers.get(id).is_some_and(|tracker| tracker.has_pending()))
+            .collect()
+    }
+
+    pub fn pending_tabs_for(&self, tab_ids: &std::collections::HashSet<Uuid>) -> Vec<Uuid> {
+        self.trackers
+            .iter()
+            .filter_map(|(id, tracker)| (tab_ids.contains(id) && tracker.has_pending()).then_some(*id))
             .collect()
     }
 }
@@ -820,6 +832,10 @@ pub fn any_pending_in(ids: impl IntoIterator<Item = Uuid>) -> bool {
 
 pub fn pending_among(ids: impl IntoIterator<Item = Uuid>) -> Vec<Uuid> {
     REGISTRY.with(|reg| reg.borrow().pending_among(ids))
+}
+
+pub fn pending_tabs_for(tab_ids: &std::collections::HashSet<Uuid>) -> Vec<Uuid> {
+    REGISTRY.with(|reg| reg.borrow().pending_tabs_for(tab_ids))
 }
 
 #[cfg(test)]
@@ -1045,18 +1061,37 @@ mod tests {
         let mut reg = ChangeTrackerRegistry::new();
         let id = Uuid::new_v4();
         reg.open_tab(id);
-        assert!(!reg.any_pending_in([id]));
+        assert!(!reg.any_pending());
         let key = rk(&[Value::Int(1)]);
         reg.trackers
             .get_mut(&id)
             .unwrap()
             .track_cell_edit(key, 0, Value::Int(1), Value::Int(2));
-        assert!(reg.any_pending_in([id]));
-        let foreign = Uuid::new_v4();
-        assert!(!reg.any_pending_in([foreign]));
-        assert!(reg.any_pending_in([id, foreign]));
-        assert_eq!(reg.pending_among([foreign, id]), vec![id]);
-        assert!(reg.pending_among([foreign]).is_empty());
+        assert!(reg.any_pending());
+        assert_eq!(reg.pending_tabs_for(&std::collections::HashSet::from([id])), vec![id]);
+    }
+
+    #[test]
+    fn registry_pending_tabs_for_does_not_include_another_window() {
+        let mut reg = ChangeTrackerRegistry::new();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        reg.open_tab(first);
+        reg.open_tab(second);
+        reg.trackers
+            .get_mut(&first)
+            .unwrap()
+            .track_cell_edit(rk(&[Value::Int(1)]), 0, Value::Int(1), Value::Int(2));
+        reg.trackers
+            .get_mut(&second)
+            .unwrap()
+            .track_cell_edit(rk(&[Value::Int(2)]), 0, Value::Int(2), Value::Int(3));
+
+        let first_window = std::collections::HashSet::from([first]);
+        let second_window = std::collections::HashSet::from([second]);
+
+        assert_eq!(reg.pending_tabs_for(&first_window), vec![first]);
+        assert_eq!(reg.pending_tabs_for(&second_window), vec![second]);
     }
 
     #[test]

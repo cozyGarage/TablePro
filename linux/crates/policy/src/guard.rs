@@ -6,7 +6,7 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use tablepro_core::{
     ColumnInfo, Connection, DriverError, Environment, ExecResult, ForeignKeyInfo, IndexInfo, OperationControl,
-    QueryResult, TableInfo, Transaction, Value,
+    QueryResult, TableInfo, Transaction, Value, check_pre_dispatch,
 };
 use uuid::Uuid;
 

@@ -4,19 +4,23 @@ use super::{App, AppMsg};
 
 impl App {
     pub(super) fn on_editor_needs_columns(&self, tables: Vec<String>, sender: ComponentSender<Self>) {
-        let pending: Vec<String> = {
-            let index = self.schema_index.borrow();
+        let Some(conn) = self.window_connection() else {
+            return;
+        };
+        let pending: Vec<crate::ui::editor::SchemaRequest> = {
+            let mut index = self.schema_index.borrow_mut();
+            if index.sync_connection(&conn) {
+                self.requested_columns.borrow_mut().clear();
+            }
             let mut requested = self.requested_columns.borrow_mut();
             tables
                 .into_iter()
                 .filter(|table| !index.knows_columns(table))
                 .filter(|table| requested.insert(crate::ui::editor::table_key(table)))
+                .map(|table| index.request(table))
                 .collect()
         };
         if pending.is_empty() {
-            return;
-        }
-        let Some(conn) = self.window_connection() else {
             return;
         };
         let timeout_secs = crate::services::operation_control::configured_timeout_secs();
@@ -24,24 +28,45 @@ impl App {
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    for reference in pending {
-                        let (schema, table) = split_table_reference(&reference);
+                    for request in pending {
+                        let (schema, table) = split_table_reference(&request.table);
                         let control = crate::services::operation_control::bounded(timeout_secs);
-                        if let Ok(columns) = conn.fetch_columns_controlled(schema.as_deref(), &table, &control).await {
-                            let names = columns.into_iter().map(|column| column.name).collect();
-                            sender_clone.input(AppMsg::SchemaColumnsFetched(reference, names));
-                        }
+                        let result = conn
+                            .fetch_columns_controlled(schema.as_deref(), &table, &control)
+                            .await
+                            .map(|columns| columns.into_iter().map(|column| column.name).collect())
+                            .map_err(|_| ());
+                        sender_clone.input(AppMsg::SchemaColumnsFetched(request, result));
                     }
                 })
                 .drop_on_shutdown()
         });
     }
 
-    pub(super) fn on_schema_columns_fetched(&self, table: String, columns: Vec<String>) {
-        self.schema_index.borrow_mut().set_columns(&table, columns);
+    pub(super) fn on_schema_columns_fetched(
+        &self,
+        request: crate::ui::editor::SchemaRequest,
+        columns: Result<Vec<String>, ()>,
+    ) {
+        let key = crate::ui::editor::table_key(&request.table);
+        let mut index = self.schema_index.borrow_mut();
+        if !index.accepts(&request) {
+            return;
+        }
+        match columns {
+            Ok(columns) => index.set_columns(&request.table, columns),
+            Err(()) => {
+                self.requested_columns.borrow_mut().remove(&key);
+            }
+        }
     }
 
     pub(super) fn rebuild_schema_buffer(&self) {
+        if let Some(connection) = self.window_connection()
+            && self.schema_index.borrow_mut().sync_connection(&connection)
+        {
+            self.requested_columns.borrow_mut().clear();
+        }
         let mut words: Vec<String> = self.table_names.clone();
         let tabs = self.workspace_tabs.borrow();
         for tab in tabs.values() {

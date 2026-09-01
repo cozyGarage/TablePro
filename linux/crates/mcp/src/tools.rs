@@ -15,7 +15,7 @@ pub const TOOL_NAMES: &[&str] = &[
 
 use serde_json::{Value as JsonValue, json};
 use tablepro_core::export::{write_csv_header, write_csv_row};
-use tablepro_core::sql_dialect::explain_statement;
+
 use uuid::Uuid;
 
 use crate::bridge::{McpBridge, TableSchema, WriteOutcome};
@@ -49,16 +49,21 @@ pub async fn dispatch(bridge: &McpBridge, token: &McpToken, name: &str, args: Js
         }
         "describe_table" => {
             let id = parse_uuid(&args, "connection_id")?;
-            let table = required_str(&args, "table")?;
-            let schema = optional_str(&args, "schema");
-            let cols = bridge.describe_table(token, id, schema, table).await?;
+            let table = args
+                .get("table")
+                .and_then(|v| v.as_str())
+                .ok_or("missing table")?
+                .to_string();
+            let schema = args.get("schema").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let columns = bridge.describe_table(token, id, schema, table).await?;
             Ok(json!(
-                cols.into_iter()
-                    .map(|c| json!({
-                        "name": c.name,
-                        "data_type": c.data_type,
-                        "nullable": c.nullable,
-                        "primary_key": c.primary_key,
+                columns
+                    .into_iter()
+                    .map(|column| json!({
+                        "name": column.name,
+                        "data_type": column.data_type,
+                        "nullable": column.nullable,
+                        "primary_key": column.primary_key,
                     }))
                     .collect::<Vec<_>>()
             ))
@@ -112,10 +117,7 @@ pub async fn dispatch(bridge: &McpBridge, token: &McpToken, name: &str, args: Js
                 .and_then(|v| v.as_str())
                 .ok_or("missing sql")?
                 .to_string();
-            let driver_id = bridge.driver_id_for(token, id).await?;
-            let explain = explain_statement(&driver_id, &sql)
-                .ok_or_else(|| format!("explain is not supported for the {driver_id} driver"))?;
-            let result = bridge.execute_query(token, id, &explain).await?;
+            let result = bridge.explain_query(token, id, &sql).await?;
             Ok(json!({
                 "plan_rows": result.rows.iter().map(|r| {
                     r.iter().map(value_to_json).collect::<Vec<_>>()
@@ -130,24 +132,36 @@ pub async fn dispatch(bridge: &McpBridge, token: &McpToken, name: &str, args: Js
                 .ok_or("missing sql")?
                 .to_string();
             let format = args.get("format").and_then(|v| v.as_str()).unwrap_or("json");
-            let result = bridge.execute_query(token, id, &sql).await?;
+            let control = bridge.start_connection_operation(token, id)?;
+            let result = bridge
+                .execute_query_controlled(token, id, &sql, None, control.clone())
+                .await?;
+            bridge.ensure_operation_active(&control)?;
             match format {
                 "csv" => {
                     let mut out: Vec<u8> = Vec::new();
-                    write_csv_header(&mut out, &result.columns).map_err(|e| e.to_string())?;
+                    write_csv_header(&mut out, &result.columns).map_err(|error| error.to_string())?;
                     for row in &result.rows {
-                        write_csv_row(&mut out, row).map_err(|e| e.to_string())?;
+                        bridge.ensure_operation_active(&control)?;
+                        write_csv_row(&mut out, row).map_err(|error| error.to_string())?;
                     }
-                    let content = String::from_utf8(out).map_err(|e| e.to_string())?;
+                    bridge.ensure_operation_active(&control)?;
+                    let content = String::from_utf8(out).map_err(|error| error.to_string())?;
                     Ok(json!({"format": "csv", "content": content}))
                 }
-                _ => Ok(json!({
-                    "format": "json",
-                    "columns": result.columns.iter().map(|c| &c.name).collect::<Vec<_>>(),
-                    "rows": result.rows.iter().map(|r| {
-                        r.iter().map(value_to_json).collect::<Vec<_>>()
-                    }).collect::<Vec<_>>(),
-                })),
+                _ => {
+                    let mut rows = Vec::with_capacity(result.rows.len());
+                    for row in &result.rows {
+                        bridge.ensure_operation_active(&control)?;
+                        rows.push(row.iter().map(value_to_json).collect::<Vec<_>>());
+                    }
+                    bridge.ensure_operation_active(&control)?;
+                    Ok(json!({
+                        "format": "json",
+                        "columns": result.columns.iter().map(|c| &c.name).collect::<Vec<_>>(),
+                        "rows": rows,
+                    }))
+                }
             }
         }
         "table_schema" => {

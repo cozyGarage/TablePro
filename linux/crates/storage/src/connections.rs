@@ -1,6 +1,3 @@
-use std::fs::{File, OpenOptions};
-use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -8,9 +5,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::StorageError;
+use crate::file_access::{lock_path, read_bounded, write_atomically};
 use tablepro_core::{AuthMode, Environment, TlsMode};
 
 const CURRENT_VERSION: u32 = 1;
+const MAX_CONNECTIONS_FILE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_CONNECTIONS: usize = 1_000;
+const MAX_CONNECTION_VALUE_BYTES: usize = 64 * 1024;
 
 /// Every JSON key `SavedConnection` owns. A key outside this list came
 /// from a newer TablePro (or a hand edit) and is carried through a
@@ -137,13 +138,18 @@ pub async fn load_connections() -> Result<Vec<SavedConnection>, StorageError> {
 }
 
 pub async fn save_connections(connections: &[SavedConnection]) -> Result<(), StorageError> {
-    save_to(&connections_path()?, connections).await
+    upsert_to(&connections_path()?, connections).await
 }
 
 pub async fn delete_connection(id: Uuid) -> Result<(), StorageError> {
-    let mut existing = load_connections().await.unwrap_or_default();
-    existing.retain(|c| c.id != id);
-    save_connections(&existing).await
+    delete_from(&connections_path()?, id).await
+}
+
+async fn delete_from(path: &Path, id: Uuid) -> Result<(), StorageError> {
+    let _guard = lock_path(path).await?;
+    let mut existing = load_from(path).await?;
+    existing.retain(|connection| connection.id != id);
+    save_to_unlocked(path, &existing).await
 }
 
 /// Stamp `last_opened_at = now()` on the matching connection. Called
@@ -152,41 +158,48 @@ pub async fn delete_connection(id: Uuid) -> Result<(), StorageError> {
 /// opened from the dialog without ticking "Save"); the missing-id case
 /// is silent because there is nothing to update.
 pub async fn touch_last_opened(id: Uuid) -> Result<(), StorageError> {
-    let mut existing = load_connections().await.unwrap_or_default();
-    let mut hit = false;
-    for c in existing.iter_mut() {
-        if c.id == id {
-            c.last_opened_at = Some(Utc::now());
-            hit = true;
-            break;
-        }
-    }
-    if !hit {
+    touch_last_opened_from(&connections_path()?, id).await
+}
+
+async fn touch_last_opened_from(path: &Path, id: Uuid) -> Result<(), StorageError> {
+    let _guard = lock_path(path).await?;
+    let mut existing = load_from(path).await?;
+    let Some(connection) = existing.iter_mut().find(|connection| connection.id == id) else {
         return Ok(());
-    }
-    save_connections(&existing).await
+    };
+    connection.last_opened_at = Some(Utc::now());
+    save_to_unlocked(path, &existing).await
 }
 
 pub(crate) async fn load_from(path: &Path) -> Result<Vec<SavedConnection>, StorageError> {
-    if !path.exists() {
+    let Some(bytes) = read_bounded(path, MAX_CONNECTIONS_FILE_BYTES).await? else {
         return Ok(Vec::new());
-    }
-    let bytes = tokio::fs::read(path).await?;
+    };
     let file: ConnectionsFile = serde_json::from_slice(&bytes)?;
-    if file.version != CURRENT_VERSION {
-        return Err(StorageError::Schema(format!(
-            "connections.json version {} not supported (expected {})",
-            file.version, CURRENT_VERSION,
-        )));
-    }
+    validate_file(&file)?;
     Ok(file.connections)
 }
 
+#[cfg(test)]
 pub(crate) async fn save_to(path: &Path, connections: &[SavedConnection]) -> Result<(), StorageError> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+    let _guard = lock_path(path).await?;
+    save_to_unlocked(path, connections).await
+}
+
+async fn upsert_to(path: &Path, connections: &[SavedConnection]) -> Result<(), StorageError> {
+    validate_connections(connections)?;
+    let _guard = lock_path(path).await?;
+    let mut existing = load_from(path).await?;
+    for connection in connections {
+        existing.retain(|saved| saved.id != connection.id);
+        existing.push(connection.clone());
     }
-    let stored = read_raw_file(path).await;
+    save_to_unlocked(path, &existing).await
+}
+
+async fn save_to_unlocked(path: &Path, connections: &[SavedConnection]) -> Result<(), StorageError> {
+    validate_connections(connections)?;
+    let stored = read_raw_file(path).await?;
     let file = ConnectionsFile {
         version: CURRENT_VERSION,
         connections: connections.to_vec(),
@@ -196,21 +209,87 @@ pub(crate) async fn save_to(path: &Path, connections: &[SavedConnection]) -> Res
         carry_unknown_fields(&mut document, stored);
     }
     let json = serde_json::to_vec_pretty(&document)?;
-    let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || write_atomically(&path, &json))
-        .await
-        .map_err(|error| StorageError::Schema(format!("saved connection task failed: {error}")))?
+    if json.len() > MAX_CONNECTIONS_FILE_BYTES {
+        return Err(StorageError::TooLarge {
+            got: json.len(),
+            limit: MAX_CONNECTIONS_FILE_BYTES,
+        });
+    }
+    write_atomically(path, &json).await
 }
 
-/// The file exactly as it sits on disk, or `None` when it is absent or
-/// not a JSON object. A malformed file is not an error here: the caller
-/// is about to overwrite it and simply has nothing to preserve.
-async fn read_raw_file(path: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
-    let bytes = tokio::fs::read(path).await.ok()?;
-    match serde_json::from_slice::<serde_json::Value>(&bytes) {
-        Ok(serde_json::Value::Object(object)) => Some(object),
-        _ => None,
+async fn read_raw_file(path: &Path) -> Result<Option<serde_json::Map<String, serde_json::Value>>, StorageError> {
+    let Some(bytes) = read_bounded(path, MAX_CONNECTIONS_FILE_BYTES).await? else {
+        return Ok(None);
+    };
+    let stored: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let object = stored
+        .as_object()
+        .cloned()
+        .ok_or_else(|| StorageError::Schema("connections.json must contain an object".into()))?;
+    let file: ConnectionsFile = serde_json::from_value(serde_json::Value::Object(object.clone()))?;
+    validate_file(&file)?;
+    Ok(Some(object))
+}
+
+fn validate_file(file: &ConnectionsFile) -> Result<(), StorageError> {
+    if file.version != CURRENT_VERSION {
+        return Err(StorageError::Schema(format!(
+            "connections.json version {} not supported (expected {})",
+            file.version, CURRENT_VERSION,
+        )));
     }
+    validate_connections(&file.connections)
+}
+
+fn validate_connections(connections: &[SavedConnection]) -> Result<(), StorageError> {
+    if connections.len() > MAX_CONNECTIONS {
+        return Err(StorageError::Schema(format!(
+            "connections are limited to {MAX_CONNECTIONS} entries"
+        )));
+    }
+    for connection in connections {
+        validate_connection(connection)?;
+    }
+    Ok(())
+}
+
+fn validate_connection(connection: &SavedConnection) -> Result<(), StorageError> {
+    for value in [
+        connection.name.as_str(),
+        connection.driver_id.as_str(),
+        connection.host.as_str(),
+        connection.database.as_str(),
+        connection.username.as_str(),
+    ] {
+        validate_value_size(value.len())?;
+    }
+    for path in [connection.socket_dir.as_deref(), connection.tls_root_cert.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        validate_value_size(path.as_os_str().as_encoded_bytes().len())?;
+    }
+    let mut ssh = connection.ssh.as_ref();
+    while let Some(hop) = ssh {
+        validate_value_size(hop.host.len())?;
+        validate_value_size(hop.username.len())?;
+        if let SavedSshAuth::PrivateKey { path, .. } = &hop.auth {
+            validate_value_size(path.as_os_str().as_encoded_bytes().len())?;
+        }
+        ssh = hop.jump.as_deref();
+    }
+    Ok(())
+}
+
+fn validate_value_size(size: usize) -> Result<(), StorageError> {
+    if size > MAX_CONNECTION_VALUE_BYTES {
+        return Err(StorageError::TooLarge {
+            got: size,
+            limit: MAX_CONNECTION_VALUE_BYTES,
+        });
+    }
+    Ok(())
 }
 
 fn carry_unknown_fields(document: &mut serde_json::Value, stored: &serde_json::Map<String, serde_json::Value>) {
@@ -251,29 +330,6 @@ fn carry_unknown_fields(document: &mut serde_json::Value, stored: &serde_json::M
             target.entry(key.clone()).or_insert_with(|| value.clone());
         }
     }
-}
-
-fn write_atomically(path: &Path, json: &[u8]) -> Result<(), StorageError> {
-    let tmp = path.with_extension("json.tmp");
-    let mut handle = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)?;
-    handle.write_all(json)?;
-    handle.sync_all()?;
-    drop(handle);
-    std::fs::rename(&tmp, path)?;
-    sync_parent(path)
-}
-
-fn sync_parent(path: &Path) -> Result<(), StorageError> {
-    let Some(parent) = path.parent() else {
-        return Ok(());
-    };
-    File::open(parent)?.sync_all()?;
-    Ok(())
 }
 
 fn connections_path() -> Result<PathBuf, StorageError> {
@@ -378,20 +434,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_save_leaves_the_previous_file_intact() {
+    async fn a_shared_temporary_path_does_not_block_a_save() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("connections.json");
+        let shared_tmp = path.with_extension("json.tmp");
+        std::fs::create_dir(&shared_tmp).unwrap();
         let original = vec![sample_connection()];
-        save_to(&path, &original).await.unwrap();
 
-        let tmp = path.with_extension("json.tmp");
-        std::fs::create_dir(&tmp).unwrap();
-        let failure = save_to(&path, &[]).await;
-        assert!(
-            failure.is_err(),
-            "a save that cannot write its temporary file must fail"
-        );
-        std::fs::remove_dir(&tmp).unwrap();
+        save_to(&path, &original).await.unwrap();
 
         assert_eq!(load_from(&path).await.unwrap(), original);
     }
@@ -404,6 +454,112 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
         assert!(load_from(&path).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn load_rejects_a_file_over_the_size_limit() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(u64::try_from(MAX_CONNECTIONS_FILE_BYTES + 1).unwrap())
+            .unwrap();
+
+        let error = load_from(&path).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            StorageError::TooLarge {
+                limit: MAX_CONNECTIONS_FILE_BYTES,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn load_rejects_excessive_connection_entries() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let file = ConnectionsFile {
+            version: CURRENT_VERSION,
+            connections: vec![sample_connection(); MAX_CONNECTIONS + 1],
+        };
+        std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+
+        let error = load_from(&path).await.unwrap_err();
+
+        assert!(matches!(error, StorageError::Schema(message) if message.contains("limited")));
+    }
+
+    #[tokio::test]
+    async fn oversized_serialization_does_not_replace_the_existing_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let prefix = br#"{"version":1,"connections":[],"future":""#;
+        let suffix = br#""}"#;
+        let filler_len = MAX_CONNECTIONS_FILE_BYTES - prefix.len() - suffix.len() - 1;
+        let mut original = Vec::with_capacity(MAX_CONNECTIONS_FILE_BYTES - 1);
+        original.extend_from_slice(prefix);
+        original.resize(original.len() + filler_len, b'x');
+        original.extend_from_slice(suffix);
+        std::fs::write(&path, &original).unwrap();
+
+        let error = save_to(&path, &[sample_connection()]).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            StorageError::TooLarge {
+                limit: MAX_CONNECTIONS_FILE_BYTES,
+                ..
+            }
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn load_rejects_oversized_connection_values() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let mut connection = sample_connection();
+        connection.name = "x".repeat(MAX_CONNECTION_VALUE_BYTES + 1);
+        let file = ConnectionsFile {
+            version: CURRENT_VERSION,
+            connections: vec![connection],
+        };
+        std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+
+        let error = load_from(&path).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            StorageError::TooLarge {
+                limit: MAX_CONNECTION_VALUE_BYTES,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn local_sqlite_and_duckdb_records_do_not_store_password_fields() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let mut connections = Vec::new();
+        for driver_id in ["sqlite", "duckdb"] {
+            let mut connection = sample_connection();
+            connection.driver_id = driver_id.into();
+            connection.host.clear();
+            connection.port = 0;
+            connection.database = format!("/tmp/{driver_id}.db");
+            connection.username.clear();
+            connections.push(connection);
+        }
+
+        save_to(&path, &connections).await.unwrap();
+
+        let document: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for record in document["connections"].as_array().unwrap() {
+            assert!(record.get("password").is_none());
+        }
+        assert_eq!(load_from(&path).await.unwrap(), connections);
     }
 
     #[tokio::test]
@@ -663,12 +819,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unreadable_previous_file_does_not_block_a_save() {
+    async fn a_malformed_previous_file_is_preserved_and_blocks_a_save() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("connections.json");
-        std::fs::write(&path, b"{ not json").unwrap();
-        let original = vec![sample_connection()];
-        save_to(&path, &original).await.unwrap();
-        assert_eq!(load_from(&path).await.unwrap(), original);
+        let malformed = b"{ not json";
+        std::fs::write(&path, malformed).unwrap();
+
+        assert!(save_to(&path, &[sample_connection()]).await.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), malformed);
+    }
+
+    #[tokio::test]
+    async fn concurrent_deletions_do_not_restore_another_deleted_connection() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("connections.json");
+        let first = sample_connection();
+        let second = sample_connection();
+        save_to(&path, &[first.clone(), second.clone()]).await.unwrap();
+        let first_path = path.clone();
+        let second_path = path.clone();
+
+        let (first_result, second_result) =
+            tokio::join!(delete_from(&first_path, first.id), delete_from(&second_path, second.id),);
+
+        first_result.unwrap();
+        second_result.unwrap();
+        assert!(load_from(&path).await.unwrap().is_empty());
     }
 }

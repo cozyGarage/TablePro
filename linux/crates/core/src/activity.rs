@@ -69,7 +69,7 @@ pub fn activity_sql(
     if !kinds.contains(&kind) {
         return Err(ActivityUnsupported::Query);
     }
-    if kind == ActivityQuery::KillSession && session_id.filter(|id| *id > 0).is_none() {
+    if kind == ActivityQuery::KillSession && session_id.is_none_or(|id| id == 0) {
         return Err(ActivityUnsupported::MissingSessionId);
     }
     activity_template(driver_id, kind, session_id).ok_or(ActivityUnsupported::Query)

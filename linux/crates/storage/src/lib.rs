@@ -4,6 +4,7 @@ mod connection_url;
 mod connections;
 mod error;
 mod favorites;
+mod file_access;
 pub mod query_history;
 mod secrets;
 

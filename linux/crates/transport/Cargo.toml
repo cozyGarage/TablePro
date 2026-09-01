@@ -17,6 +17,7 @@ tablepro-storage = { path = "../storage" }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std"] }
 secrecy.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

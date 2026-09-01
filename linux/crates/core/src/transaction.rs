@@ -62,4 +62,8 @@ pub trait Transaction: Send {
 
     async fn commit(self: Box<Self>) -> Result<(), DriverError>;
     async fn rollback(self: Box<Self>) -> Result<(), DriverError>;
+
+    async fn rollback_controlled(self: Box<Self>, control: &OperationControl) -> Result<(), DriverError> {
+        run_controlled(self.rollback(), control).await
+    }
 }

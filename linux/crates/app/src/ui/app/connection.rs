@@ -92,8 +92,12 @@ impl App {
             // the previous ordering until the next reload.
             let sender_for_touch = sender.clone();
             relm4::spawn(async move {
-                if let Err(e) = tablepro_storage::touch_last_opened(connection_id).await {
-                    tracing::warn!(error = %e, "touch_last_opened failed");
+                let result = tablepro_storage::touch_last_opened(connection_id).await;
+                if let Err(error) = result {
+                    tracing::warn!(error = %error, "touch_last_opened failed");
+                    sender_for_touch.input(AppMsg::ShowToast(crate::tr!(
+                        "The connection opened, but its recent-use time could not be saved."
+                    )));
                 }
                 sender_for_touch.input(AppMsg::ReloadConnections);
             });
@@ -188,6 +192,8 @@ impl App {
             shutdown
                 .register(async move {
                     if let Ok(connections) = tablepro_storage::load_connections().await {
+                        let ids = connections.iter().map(|connection| connection.id).collect::<Vec<_>>();
+                        crate::services::workspace_state::prefetch_connections(&ids);
                         sender_clone.input(AppMsg::ConnectionsLoaded(connections));
                     }
                 })
@@ -589,10 +595,29 @@ fn execute_delete_connection(id: Uuid, sender: ComponentSender<App>) {
     sender.command(move |_, shutdown| {
         shutdown
             .register(async move {
-                let _ = tablepro_storage::delete_connection(id).await;
-                let _ = tablepro_storage::delete_password(id).await;
-                let _ = tablepro_storage::delete_ssh_password(id).await;
-                let _ = tablepro_storage::delete_ssh_passphrase(id).await;
+                let result = tablepro_storage::delete_connection(id).await;
+                if let Err(error) = result {
+                    tracing::warn!(error = %error, "deleting the connection file entry failed");
+                    sender_clone.input(AppMsg::ShowToast(crate::tr!("The connection could not be deleted.")));
+                    return;
+                }
+
+                let password = tablepro_storage::delete_password(id).await;
+                let ssh_password = tablepro_storage::delete_ssh_password(id).await;
+                let ssh_passphrase = tablepro_storage::delete_ssh_passphrase(id).await;
+                let mut credential_failure = false;
+                for error in [password.err(), ssh_password.err(), ssh_passphrase.err()]
+                    .into_iter()
+                    .flatten()
+                {
+                    credential_failure = true;
+                    tracing::warn!(error = %error, "deleting connection credentials failed");
+                }
+                if credential_failure {
+                    sender_clone.input(AppMsg::ShowToast(crate::tr!(
+                        "The connection was deleted, but some stored credentials could not be removed."
+                    )));
+                }
                 if crate::services::window_state::load().last_connection_id == Some(id) {
                     crate::services::window_state::set_last_connection_id(None);
                 }

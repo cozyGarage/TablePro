@@ -3,6 +3,7 @@ mod outcomes;
 mod schema;
 mod sql_text;
 
+use std::io::Read;
 use std::time::SystemTime;
 
 use relm4::adw::prelude::*;
@@ -18,7 +19,7 @@ use tablepro_storage::query_history::{self, NewEntry, Outcome};
 
 use crate::services::database_service::{self, ConnectionMetadata};
 
-pub use completion::{SchemaIndex, candidate_words, referenced_tables, table_key};
+pub use completion::{SchemaIndex, SchemaRequest, candidate_words, referenced_tables, table_key};
 pub use schema::{SQL_KEYWORDS, build_schema_buffer, derive_tab_label, update_schema_buffer};
 
 use outcomes::{ScriptRunResult, clear_box, render_outcomes, run_statements, summary_label};
@@ -34,11 +35,10 @@ pub struct SqlEditor {
     results_holder: gtk::Box,
     status: gtk::Label,
     cancel_token: Option<CancellationToken>,
-    run_generation: u64,
-    executing_sql: Option<String>,
-    executing_metadata: Option<ConnectionMetadata>,
-    executing_started_at: Option<SystemTime>,
+    executions: std::collections::HashMap<u64, ExecutionContext>,
     connection_id: Option<Uuid>,
+    run_generation: RunGeneration,
+    drop_generation: std::rc::Rc<DropGeneration>,
 }
 
 pub struct SqlEditorInit {
@@ -66,13 +66,28 @@ pub enum StatementOutcomeKind {
 pub enum SqlEditorInput {
     Run,
     RunWithParameters {
+        generation: u64,
         sql: String,
         values: std::collections::HashMap<String, tablepro_core::Value>,
     },
     Cancel,
-    ShowOutcomes(u64, Vec<StatementOutcome>),
+    ShowOutcomes {
+        generation: u64,
+        outcomes: Vec<StatementOutcome>,
+    },
     ShowCancelled(u64),
-    ShowTimedOut(u64, u32),
+    ShowTimedOut {
+        generation: u64,
+        secs: u32,
+    },
+    InsertDroppedSql {
+        request: DropRequest,
+        text: String,
+    },
+    DroppedSqlFailed {
+        request: DropRequest,
+        message: String,
+    },
     ReplaceQuery(String),
     Format,
     RunAtCursor,
@@ -85,6 +100,85 @@ pub enum SqlEditorOutput {
     RunStateChanged(bool),
     QueryChanged(String),
     NeedColumns(Vec<String>),
+}
+
+const MAX_DROPPED_SQL_BYTES: u64 = 8 * 1024 * 1024;
+
+#[derive(Debug)]
+struct ExecutionContext {
+    sql: String,
+    metadata: ConnectionMetadata,
+    started_at: SystemTime,
+}
+
+#[derive(Debug, Default)]
+struct RunGeneration {
+    next: u64,
+    current: Option<u64>,
+    active: std::collections::HashSet<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RunTerminal {
+    replace_ui: bool,
+    became_idle: bool,
+}
+
+impl RunGeneration {
+    fn begin(&mut self) -> u64 {
+        self.next = self.next.wrapping_add(1);
+        self.current = Some(self.next);
+        self.next
+    }
+
+    fn accepts(&self, generation: u64) -> bool {
+        self.current == Some(generation)
+    }
+
+    fn start(&mut self, generation: u64) -> bool {
+        self.accepts(generation) && self.active.insert(generation)
+    }
+
+    fn finish(&mut self, generation: u64) -> Option<RunTerminal> {
+        if !self.active.remove(&generation) {
+            return None;
+        }
+        Some(RunTerminal {
+            replace_ui: self.accepts(generation),
+            became_idle: self.active.is_empty(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct DropRequest {
+    generation: u64,
+    revision: u64,
+}
+
+#[derive(Debug, Default)]
+struct DropGeneration {
+    generation: std::cell::Cell<u64>,
+    revision: std::cell::Cell<u64>,
+}
+
+impl DropGeneration {
+    fn changed(&self) {
+        self.revision.set(self.revision.get().wrapping_add(1));
+    }
+
+    fn begin(&self) -> DropRequest {
+        let generation = self.generation.get().wrapping_add(1);
+        self.generation.set(generation);
+        DropRequest {
+            generation,
+            revision: self.revision.get(),
+        }
+    }
+
+    fn accepts(&self, request: DropRequest) -> bool {
+        self.generation.get() == request.generation && self.revision.get() == request.revision
+    }
 }
 
 #[relm4::component(pub)]
@@ -247,10 +341,13 @@ impl SimpleComponent for SqlEditor {
             .buffer()
             .connect_cursor_position_notify(move |_| refresh_on_cursor());
 
+        let drop_generation = std::rc::Rc::new(DropGeneration::default());
         let view_for_change = widgets.source_view.clone();
         let sender_for_change = sender.clone();
         let refresh_on_change = refresh_completion.clone();
+        let drop_generation_for_change = drop_generation.clone();
         widgets.source_view.buffer().connect_changed(move |_| {
+            drop_generation_for_change.changed();
             let buffer = view_for_change.buffer();
             let (start, end) = buffer.bounds();
             let text = buffer.text(&start, &end, false).to_string();
@@ -317,23 +414,25 @@ impl SimpleComponent for SqlEditor {
         widgets.source_view.add_controller(controller);
 
         let drop_target = gtk::DropTarget::new(gtk::gio::File::static_type(), gtk::gdk::DragAction::COPY);
-        let view_for_drop = widgets.source_view.clone();
+        let sender_for_drop = sender.clone();
+        let drop_generation_for_drop = drop_generation.clone();
         drop_target.connect_drop(move |_, value, _, _| {
-            if let Ok(file) = value.get::<gtk::gio::File>()
-                && let Some(path) = file.path()
-                && let Ok(text) = std::fs::read_to_string(&path)
-            {
-                let buffer = view_for_drop.buffer();
-                let (start, end) = buffer.bounds();
-                let existing_empty = buffer.text(&start, &end, false).trim().is_empty();
-                if existing_empty {
-                    buffer.set_text(&text);
-                } else {
-                    buffer.insert_at_cursor(&text);
-                }
-                return true;
-            }
-            false
+            let Ok(file) = value.get::<gtk::gio::File>() else {
+                return false;
+            };
+            let Some(path) = file.path() else {
+                return false;
+            };
+            let sender = sender_for_drop.clone();
+            let request = drop_generation_for_drop.begin();
+            std::thread::spawn(move || {
+                let message = match read_dropped_sql(&path, MAX_DROPPED_SQL_BYTES) {
+                    Ok(text) => SqlEditorInput::InsertDroppedSql { request, text },
+                    Err(message) => SqlEditorInput::DroppedSqlFailed { request, message },
+                };
+                sender.input(message);
+            });
+            true
         });
         widgets.source_view.add_controller(drop_target);
 
@@ -345,11 +444,10 @@ impl SimpleComponent for SqlEditor {
             results_holder: widgets.results_holder.clone(),
             status: widgets.status.clone(),
             cancel_token: None,
-            run_generation: 0,
-            executing_sql: None,
-            executing_metadata: None,
-            executing_started_at: None,
+            executions: std::collections::HashMap::new(),
             connection_id: init.connection_id,
+            run_generation: RunGeneration::default(),
+            drop_generation,
         };
         ComponentParts { model, widgets }
     }
@@ -368,8 +466,12 @@ impl SimpleComponent for SqlEditor {
                 self.begin_run(trimmed, sender);
             }
 
-            SqlEditorInput::RunWithParameters { sql, values } => {
-                self.execute_sql(sql, values, sender);
+            SqlEditorInput::RunWithParameters {
+                generation,
+                sql,
+                values,
+            } => {
+                self.execute_sql(generation, sql, values, sender);
             }
 
             SqlEditorInput::ToggleLineComment => {
@@ -409,16 +511,13 @@ impl SimpleComponent for SqlEditor {
                 }
             }
 
-            SqlEditorInput::ShowOutcomes(generation, outcomes) => {
-                if !crate::services::request_generation::is_current(generation, self.run_generation) {
+            SqlEditorInput::ShowOutcomes { generation, outcomes } => {
+                let Some((terminal, context)) = self.finish_run(generation, &sender) else {
                     return;
+                };
+                if terminal.replace_ui {
+                    self.cancel_token = None;
                 }
-                self.cancel_token = None;
-                self.run_button.set_sensitive(true);
-                self.cancel_button.set_visible(false);
-                self.running_spinner.set_visible(false);
-                let _ = sender.output(SqlEditorOutput::RunStateChanged(false));
-
                 let total_ms: u128 = outcomes.iter().map(|o| o.elapsed_ms).sum();
                 let n_total = outcomes.len();
                 let n_ok = outcomes
@@ -442,7 +541,10 @@ impl SimpleComponent for SqlEditor {
                     None => Outcome::Success,
                 };
                 let rows_for_history = if total_rows > 0 { Some(total_rows) } else { None };
-                self.record_history(total_ms as i64, rows_for_history, history_outcome);
+                Self::record_history(context, total_ms as i64, rows_for_history, history_outcome);
+                if !terminal.replace_ui {
+                    return;
+                }
 
                 self.status
                     .set_label(&summary_label(n_total, n_ok, total_ms, first_error.is_some()));
@@ -451,20 +553,18 @@ impl SimpleComponent for SqlEditor {
             }
 
             SqlEditorInput::ShowCancelled(generation) => {
-                if !crate::services::request_generation::is_current(generation, self.run_generation) {
+                let Some((terminal, context)) = self.finish_run(generation, &sender) else {
+                    return;
+                };
+                let elapsed = SystemTime::now()
+                    .duration_since(context.started_at)
+                    .map(|duration| duration.as_millis() as i64)
+                    .unwrap_or(0);
+                Self::record_history(context, elapsed, None, Outcome::Cancelled);
+                if !terminal.replace_ui {
                     return;
                 }
                 self.cancel_token = None;
-                self.run_button.set_sensitive(true);
-                self.cancel_button.set_visible(false);
-                self.running_spinner.set_visible(false);
-                let _ = sender.output(SqlEditorOutput::RunStateChanged(false));
-                let elapsed = self
-                    .executing_started_at
-                    .and_then(|t| SystemTime::now().duration_since(t).ok())
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
-                self.record_history(elapsed, None, Outcome::Cancelled);
                 self.status.set_label(&crate::tr!("cancelled"));
                 clear_box(&self.results_holder);
                 let cancelled_page = adw::StatusPage::builder()
@@ -476,24 +576,22 @@ impl SimpleComponent for SqlEditor {
                 self.results_holder.append(&cancelled_page);
             }
 
-            SqlEditorInput::ShowTimedOut(generation, secs) => {
-                if !crate::services::request_generation::is_current(generation, self.run_generation) {
+            SqlEditorInput::ShowTimedOut { generation, secs } => {
+                let Some((terminal, context)) = self.finish_run(generation, &sender) else {
                     return;
-                }
-                self.cancel_token = None;
-                self.run_button.set_sensitive(true);
-                self.cancel_button.set_visible(false);
-                self.running_spinner.set_visible(false);
-                let _ = sender.output(SqlEditorOutput::RunStateChanged(false));
-                let elapsed = self
-                    .executing_started_at
-                    .and_then(|t| SystemTime::now().duration_since(t).ok())
-                    .map(|d| d.as_millis() as i64)
+                };
+                let elapsed = SystemTime::now()
+                    .duration_since(context.started_at)
+                    .map(|duration| duration.as_millis() as i64)
                     .unwrap_or(0);
                 let secs_str = secs.to_string();
                 let reason =
                     crate::tr!("Query exceeded the {n}s timeout configured in Preferences.").replace("{n}", &secs_str);
-                self.record_history(elapsed, None, Outcome::Error(reason.clone()));
+                Self::record_history(context, elapsed, None, Outcome::Error(reason.clone()));
+                if !terminal.replace_ui {
+                    return;
+                }
+                self.cancel_token = None;
                 self.status.set_label(&crate::tr!("timed out"));
                 clear_box(&self.results_holder);
                 let page = adw::StatusPage::builder()
@@ -503,6 +601,25 @@ impl SimpleComponent for SqlEditor {
                     .vexpand(true)
                     .build();
                 self.results_holder.append(&page);
+            }
+
+            SqlEditorInput::InsertDroppedSql { request, text } => {
+                if !self.drop_generation.accepts(request) {
+                    return;
+                }
+                let buffer = self.source_view.buffer();
+                let (start, end) = buffer.bounds();
+                if buffer.text(&start, &end, false).trim().is_empty() {
+                    buffer.set_text(&text);
+                } else {
+                    buffer.insert_at_cursor(&text);
+                }
+            }
+
+            SqlEditorInput::DroppedSqlFailed { request, message } => {
+                if self.drop_generation.accepts(request) {
+                    self.status.set_label(&message);
+                }
             }
 
             SqlEditorInput::ReplaceQuery(text) => {
@@ -542,10 +659,14 @@ impl SqlEditor {
     }
 
     fn begin_run(&mut self, sql: String, sender: ComponentSender<Self>) {
+        if let Some(token) = self.cancel_token.take() {
+            token.cancel();
+        }
+        let generation = self.run_generation.begin();
         let driver_id = self.metadata().map(|metadata| metadata.driver_id).unwrap_or_default();
         let names = crate::services::query_parameters::statement_names(&sql, &driver_id);
         if names.is_empty() {
-            self.execute_sql(sql, std::collections::HashMap::new(), sender);
+            self.execute_sql(generation, sql, std::collections::HashMap::new(), sender);
             return;
         }
         let Some(window) = self
@@ -559,6 +680,7 @@ impl SqlEditor {
         };
         crate::ui::parameters_dialog::present(&window, &names, move |values| {
             sender.input(SqlEditorInput::RunWithParameters {
+                generation,
                 sql: sql.clone(),
                 values,
             });
@@ -567,10 +689,14 @@ impl SqlEditor {
 
     fn execute_sql(
         &mut self,
+        generation: u64,
         trimmed: String,
         parameter_values: std::collections::HashMap<String, tablepro_core::Value>,
         sender: ComponentSender<Self>,
     ) {
+        if !self.run_generation.accepts(generation) {
+            return;
+        }
         let conn = match self.connection() {
             Some(c) => c,
             None => {
@@ -578,31 +704,38 @@ impl SqlEditor {
                 return;
             }
         };
+        let Some(metadata) = self.metadata() else {
+            self.status.set_label(&crate::tr!("no active connection"));
+            return;
+        };
+        if !self.run_generation.start(generation) {
+            return;
+        };
 
         if let Some(prev) = self.cancel_token.take() {
             prev.cancel();
         }
-        self.run_generation = self.run_generation.wrapping_add(1);
-        let generation = self.run_generation;
         let token = CancellationToken::new();
         self.cancel_token = Some(token.clone());
 
-        self.run_button.set_sensitive(false);
-        self.cancel_button.set_visible(true);
-        self.running_spinner.set_visible(true);
+        self.set_running(true, &sender);
         self.status.set_label(&crate::tr!("Running…"));
         clear_box(&self.results_holder);
-        let _ = sender.output(SqlEditorOutput::RunStateChanged(true));
 
-        self.executing_sql = Some(trimmed.clone());
-        self.executing_metadata = self.metadata();
-        self.executing_started_at = Some(SystemTime::now());
+        self.executions.insert(
+            generation,
+            ExecutionContext {
+                sql: trimmed.clone(),
+                metadata,
+                started_at: SystemTime::now(),
+            },
+        );
 
         let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         let driver_id = self
-            .executing_metadata
-            .as_ref()
-            .map(|metadata| metadata.driver_id.clone())
+            .executions
+            .get(&generation)
+            .map(|context| context.metadata.driver_id.clone())
             .unwrap_or_default();
         let sender_clone = sender.clone();
         sender.command(move |_, shutdown| {
@@ -612,7 +745,10 @@ impl SqlEditor {
                     let control = crate::services::operation_control::bounded_with(timeout_secs, token);
                     let msg = match run_statements(conn, statements, &driver_id, &parameter_values, &control).await {
                         ScriptRunResult::Cancelled => SqlEditorInput::ShowCancelled(generation),
-                        ScriptRunResult::TimedOut => SqlEditorInput::ShowTimedOut(generation, timeout_secs),
+                        ScriptRunResult::TimedOut => SqlEditorInput::ShowTimedOut {
+                            generation,
+                            secs: timeout_secs,
+                        },
                         ScriptRunResult::Completed(outcomes) => {
                             let total_ms: u128 = outcomes.iter().map(|o| o.elapsed_ms).sum();
                             let n_ok = outcomes
@@ -624,7 +760,7 @@ impl SqlEditor {
                                 .filter(|o| matches!(o.kind, StatementOutcomeKind::Error(_)))
                                 .count();
                             tracing::info!(n_ok, n_err, total_ms, "script run complete");
-                            SqlEditorInput::ShowOutcomes(generation, outcomes)
+                            SqlEditorInput::ShowOutcomes { generation, outcomes }
                         }
                     };
                     sender_clone.input(msg);
@@ -633,20 +769,33 @@ impl SqlEditor {
         });
     }
 
-    fn record_history(&mut self, duration_ms: i64, rows_affected: Option<i64>, outcome: Outcome) {
-        let (Some(query), Some(metadata), Some(started_at)) = (
-            self.executing_sql.take(),
-            self.executing_metadata.take(),
-            self.executing_started_at.take(),
-        ) else {
-            return;
-        };
+    fn set_running(&self, running: bool, sender: &ComponentSender<Self>) {
+        self.run_button.set_sensitive(!running);
+        self.cancel_button.set_visible(running);
+        self.running_spinner.set_visible(running);
+        let _ = sender.output(SqlEditorOutput::RunStateChanged(running));
+    }
+
+    fn finish_run(
+        &mut self,
+        generation: u64,
+        sender: &ComponentSender<Self>,
+    ) -> Option<(RunTerminal, ExecutionContext)> {
+        let terminal = self.run_generation.finish(generation)?;
+        let context = self.executions.remove(&generation)?;
+        if terminal.became_idle {
+            self.set_running(false, sender);
+        }
+        Some((terminal, context))
+    }
+
+    fn record_history(context: ExecutionContext, duration_ms: i64, rows_affected: Option<i64>, outcome: Outcome) {
         let entry = NewEntry {
-            query,
-            driver_id: metadata.driver_id,
-            connection_id: metadata.id,
-            connection_name: metadata.name,
-            executed_at: started_at,
+            query: context.sql,
+            driver_id: context.metadata.driver_id,
+            connection_id: context.metadata.id,
+            connection_name: context.metadata.name,
+            executed_at: context.started_at,
             duration_ms: Some(duration_ms),
             rows_affected,
             outcome,
@@ -657,6 +806,18 @@ impl SqlEditor {
             }
         });
     }
+}
+
+fn read_dropped_sql(path: &std::path::Path, max_bytes: u64) -> Result<String, String> {
+    let file = std::fs::File::open(path).map_err(|_| crate::tr!("Couldn't read the dropped SQL file"))?;
+    let mut bytes = Vec::new();
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| crate::tr!("Couldn't read the dropped SQL file"))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(crate::tr!("The dropped SQL file is too large"));
+    }
+    String::from_utf8(bytes).map_err(|_| crate::tr!("The dropped SQL file is not valid UTF-8"))
 }
 
 fn build_completion_refresh(
@@ -685,4 +846,67 @@ fn build_completion_refresh(
             let _ = sender.output(SqlEditorOutput::NeedColumns(missing));
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DropGeneration, RunGeneration, read_dropped_sql};
+    use std::io::Write;
+
+    #[test]
+    fn stale_run_generations_cannot_finish_newer_runs() {
+        let mut generations = RunGeneration::default();
+        let first = generations.begin();
+        assert!(generations.start(first));
+        let second = generations.begin();
+        assert!(generations.start(second));
+
+        let first_terminal = generations.finish(first).unwrap();
+        assert!(!first_terminal.replace_ui);
+        assert!(!first_terminal.became_idle);
+        assert!(generations.accepts(second));
+        let second_terminal = generations.finish(second).unwrap();
+        assert!(second_terminal.replace_ui);
+        assert!(second_terminal.became_idle);
+    }
+
+    #[test]
+    fn newer_run_can_finish_ui_without_reporting_idle_before_superseded_run() {
+        let mut generations = RunGeneration::default();
+        let first = generations.begin();
+        assert!(generations.start(first));
+        let second = generations.begin();
+        assert!(generations.start(second));
+
+        let second_terminal = generations.finish(second).unwrap();
+        assert!(second_terminal.replace_ui);
+        assert!(!second_terminal.became_idle);
+        let first_terminal = generations.finish(first).unwrap();
+        assert!(!first_terminal.replace_ui);
+        assert!(first_terminal.became_idle);
+    }
+
+    #[test]
+    fn dropped_sql_completion_requires_latest_drop_and_unchanged_editor() {
+        let generations = DropGeneration::default();
+        let first = generations.begin();
+        let second = generations.begin();
+        assert!(!generations.accepts(first));
+        assert!(generations.accepts(second));
+
+        generations.changed();
+        assert!(!generations.accepts(second));
+    }
+
+    #[test]
+    fn dropped_sql_reader_enforces_the_exact_byte_limit() {
+        let path = std::env::temp_dir().join(format!("tablepro-drop-{}.sql", uuid::Uuid::new_v4()));
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(b"SELECT 1;").unwrap();
+        drop(file);
+
+        assert_eq!(read_dropped_sql(&path, 9).unwrap(), "SELECT 1;");
+        assert!(read_dropped_sql(&path, 8).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
 }

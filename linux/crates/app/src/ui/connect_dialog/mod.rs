@@ -891,10 +891,7 @@ async fn run_connect(request: ConnectRequest) -> Result<connection_service::Prep
 }
 
 async fn save_one(connection: &SavedConnection) -> Result<(), tablepro_storage::StorageError> {
-    let mut existing = tablepro_storage::load_connections().await?;
-    existing.retain(|c| c.id != connection.id);
-    existing.push(connection.clone());
-    save_connections(&existing).await
+    save_connections(std::slice::from_ref(connection)).await
 }
 
 async fn rollback_saved_connection(

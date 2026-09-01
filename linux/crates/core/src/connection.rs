@@ -387,6 +387,14 @@ mod controlled_default_tests {
             Err(DriverError::Cancelled)
         ));
         assert!(matches!(
+            connection.fetch_indexes_controlled(None, "t", &control).await,
+            Err(DriverError::Cancelled)
+        ));
+        assert!(matches!(
+            connection.fetch_foreign_keys_controlled(None, "t", &control).await,
+            Err(DriverError::Cancelled)
+        ));
+        assert!(matches!(
             connection.execute_in_transaction_controlled(&[], &control).await,
             Err(DriverError::Cancelled)
         ));
@@ -423,6 +431,14 @@ mod controlled_default_tests {
         ));
         assert!(matches!(
             connection.fetch_rows_controlled(None, "t", 0, 10, &control).await,
+            Err(DriverError::TimedOut)
+        ));
+        assert!(matches!(
+            connection.fetch_indexes_controlled(None, "t", &control).await,
+            Err(DriverError::TimedOut)
+        ));
+        assert!(matches!(
+            connection.fetch_foreign_keys_controlled(None, "t", &control).await,
             Err(DriverError::TimedOut)
         ));
         assert!(matches!(

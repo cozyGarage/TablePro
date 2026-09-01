@@ -6,8 +6,10 @@ use uuid::Uuid;
 
 use crate::connections::SavedConnection;
 use crate::error::StorageError;
+use crate::file_access::{lock_path, read_bounded, write_atomically};
 
 const CURRENT_VERSION: u32 = 1;
+const MAX_ORGANIZATION_FILE_BYTES: usize = 4 * 1024 * 1024;
 
 /// Bounds on the organisation index. The file is untrusted input, so
 /// every collection a caller can grow has a ceiling and the loader
@@ -108,9 +110,10 @@ impl ConnectionOrganization {
 
 /// Organisation records keyed by saved-connection id. An id with no
 /// entry reads as the default (no group, no tags, not a favourite).
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct ConnectionOrganizationIndex {
     entries: BTreeMap<Uuid, ConnectionOrganization>,
+    baseline: BTreeMap<Uuid, ConnectionOrganization>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -120,6 +123,12 @@ struct OrganizationFile {
     connections: BTreeMap<Uuid, ConnectionOrganization>,
     #[serde(flatten)]
     extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl PartialEq for ConnectionOrganizationIndex {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
 }
 
 impl ConnectionOrganizationIndex {
@@ -188,10 +197,20 @@ pub async fn save_organization(index: &ConnectionOrganizationIndex) -> Result<()
 }
 
 pub(crate) async fn load_from(path: &Path) -> Result<ConnectionOrganizationIndex, StorageError> {
-    if !path.exists() {
+    let Some(file) = load_file(path).await? else {
         return Ok(ConnectionOrganizationIndex::default());
-    }
-    let bytes = tokio::fs::read(path).await?;
+    };
+    let entries = sanitized_entries(file.connections)?;
+    Ok(ConnectionOrganizationIndex {
+        baseline: entries.clone(),
+        entries,
+    })
+}
+
+async fn load_file(path: &Path) -> Result<Option<OrganizationFile>, StorageError> {
+    let Some(bytes) = read_bounded(path, MAX_ORGANIZATION_FILE_BYTES).await? else {
+        return Ok(None);
+    };
     let file: OrganizationFile = serde_json::from_slice(&bytes)?;
     if file.version != CURRENT_VERSION {
         return Err(StorageError::Schema(format!(
@@ -204,35 +223,75 @@ pub(crate) async fn load_from(path: &Path) -> Result<ConnectionOrganizationIndex
             "connection organisation is limited to {MAX_ORGANIZED_CONNECTIONS} connections"
         )));
     }
-    let entries = file
-        .connections
+    Ok(Some(file))
+}
+
+fn sanitized_entries(
+    entries: BTreeMap<Uuid, ConnectionOrganization>,
+) -> Result<BTreeMap<Uuid, ConnectionOrganization>, StorageError> {
+    if entries.len() > MAX_ORGANIZED_CONNECTIONS {
+        return Err(StorageError::Schema(format!(
+            "connection organisation is limited to {MAX_ORGANIZED_CONNECTIONS} connections"
+        )));
+    }
+    Ok(entries
         .into_iter()
         .map(|(id, entry)| (id, entry.sanitized()))
         .filter(|(_, entry)| !entry.is_empty())
-        .collect();
-    Ok(ConnectionOrganizationIndex { entries })
+        .collect())
 }
 
 pub(crate) async fn save_to(path: &Path, index: &ConnectionOrganizationIndex) -> Result<(), StorageError> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    let extra = match tokio::fs::read(path).await {
-        Ok(bytes) => serde_json::from_slice::<OrganizationFile>(&bytes)
-            .map(|file| file.extra)
-            .unwrap_or_default(),
-        Err(_) => serde_json::Map::new(),
+    let _guard = lock_path(path).await?;
+    let latest = load_file(path).await?;
+    let (mut entries, extra) = match latest {
+        Some(file) => (sanitized_entries(file.connections)?, file.extra),
+        None => (BTreeMap::new(), serde_json::Map::new()),
     };
+    for id in index.baseline.keys() {
+        if !index.entries.contains_key(id) {
+            entries.remove(id);
+        }
+    }
+    for (id, desired) in &index.entries {
+        let baseline = index.baseline.get(id);
+        if baseline == Some(desired) {
+            continue;
+        }
+        let mut merged = entries.get(id).cloned().unwrap_or_else(|| desired.clone());
+        if baseline.is_none_or(|entry| entry.group != desired.group) {
+            merged.group.clone_from(&desired.group);
+        }
+        if baseline.is_none_or(|entry| entry.tags != desired.tags) {
+            merged.tags.clone_from(&desired.tags);
+        }
+        if baseline.is_none_or(|entry| entry.favorite != desired.favorite) {
+            merged.favorite = desired.favorite;
+        }
+        if merged.is_empty() {
+            entries.remove(id);
+        } else {
+            entries.insert(*id, merged);
+        }
+    }
+    if entries.len() > MAX_ORGANIZED_CONNECTIONS {
+        return Err(StorageError::Schema(format!(
+            "connection organisation is limited to {MAX_ORGANIZED_CONNECTIONS} connections"
+        )));
+    }
     let file = OrganizationFile {
         version: CURRENT_VERSION,
-        connections: index.entries.clone(),
+        connections: entries,
         extra,
     };
     let json = serde_json::to_vec_pretty(&file)?;
-    let tmp = path.with_extension("json.tmp");
-    tokio::fs::write(&tmp, &json).await?;
-    tokio::fs::rename(&tmp, path).await?;
-    Ok(())
+    if json.len() > MAX_ORGANIZATION_FILE_BYTES {
+        return Err(StorageError::TooLarge {
+            got: json.len(),
+            limit: MAX_ORGANIZATION_FILE_BYTES,
+        });
+    }
+    write_atomically(path, &json).await
 }
 
 fn organization_path() -> Result<PathBuf, StorageError> {

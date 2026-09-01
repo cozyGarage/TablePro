@@ -5,25 +5,11 @@ use relm4::{ComponentController, ComponentSender, adw, gtk};
 use tablepro_core::{ColumnInfo, KEYSET_OFFSET_THRESHOLD, QueryResult, keyset_order_by, keyset_where_clause};
 use uuid::Uuid;
 
-use crate::services::request_generation;
-use crate::ui::browse_tab::BrowseTabInput;
+use crate::ui::browse_tab::{BrowseLoadFailure, BrowsePageRequest, BrowseRowCountRequest, BrowseTabInput};
 
 use super::{App, AppMsg, ExportFormat, OpenMode, render_json};
 
 impl App {
-    fn browse_load_generation(&self, tab_id: Uuid) -> u64 {
-        self.workspace_tabs
-            .borrow()
-            .get(&tab_id)
-            .and_then(|tab| tab.browse_controller())
-            .map(|controller| controller.model().load_generation())
-            .unwrap_or(0)
-    }
-
-    fn browse_load_is_current(&self, tab_id: Uuid, generation: u64) -> bool {
-        request_generation::is_current(generation, self.browse_load_generation(tab_id))
-    }
-
     /// Sidebar click — routes via OpenMode (smart switch / new tab).
     pub(super) fn on_select_table(
         &mut self,
@@ -43,7 +29,7 @@ impl App {
     /// dialect-specific. Past `KEYSET_OFFSET_THRESHOLD`, sequential Next
     /// uses a primary-key seek when PKs and a cursor are available.
     pub(super) fn fetch_browse_page(&self, tab_id: Uuid, sender: ComponentSender<Self>) {
-        let (schema, table, offset, limit, sort, filter, columns, driver_id, keyset_cursor, generation, cancel) = {
+        let (schema, table, request, limit, sort, filter, columns, driver_id, keyset_cursor) = {
             let tabs = self.workspace_tabs.borrow();
             let Some(controller) = tabs.get(&tab_id).and_then(|t| t.browse_controller()) else {
                 return;
@@ -52,23 +38,24 @@ impl App {
             (
                 model.schema().map(str::to_owned),
                 model.table().to_string(),
-                model.current_offset(),
+                model.begin_page_request(),
                 model.page_size(),
                 model.current_sort(),
                 model.current_filter().clone(),
                 model.columns().to_vec(),
                 model.driver_id().to_string(),
                 model.keyset_cursor().map(|v| v.to_vec()),
-                model.load_generation(),
-                model.page_cancel_token(),
             )
         };
 
+        let offset = request.offset;
         let Some(conn) = self.window_connection() else {
             sender.input(AppMsg::LoadFailed(
                 Some(tab_id),
-                "no active connection".into(),
-                Some(generation),
+                BrowseLoadFailure {
+                    request: Some(request),
+                    message: "no active connection".into(),
+                },
             ));
             return;
         };
@@ -99,7 +86,7 @@ impl App {
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    let control = crate::services::operation_control::bounded_with(timeout_secs, cancel);
+                    let control = crate::services::operation_control::bounded(timeout_secs);
                     let result = if let Some(cursor) = keyset_cursor.filter(|_| use_keyset) {
                         let qualified = match &schema {
                             Some(s) => format!(
@@ -121,7 +108,13 @@ impl App {
                                 params.extend(ks_params);
                             }
                             Err(e) => {
-                                sender_clone.input(AppMsg::LoadFailed(Some(tab_id), e.to_string(), Some(generation)));
+                                sender_clone.input(AppMsg::LoadFailed(
+                                    Some(tab_id),
+                                    BrowseLoadFailure {
+                                        request: Some(request),
+                                        message: e.to_string(),
+                                    },
+                                ));
                                 return;
                             }
                         }
@@ -168,13 +161,13 @@ impl App {
                         conn.query_params_controlled(&sql, &params, &control).await
                     };
                     match result {
-                        Ok(query_result) => {
-                            sender_clone.input(AppMsg::RowsLoaded(tab_id, offset, query_result, generation))
-                        }
+                        Ok(query_result) => sender_clone.input(AppMsg::RowsLoaded(tab_id, request, query_result)),
                         Err(e) => sender_clone.input(AppMsg::LoadFailed(
                             Some(tab_id),
-                            crate::ui::error_text::driver_message(&e),
-                            Some(generation),
+                            BrowseLoadFailure {
+                                request: Some(request),
+                                message: crate::ui::error_text::driver_message(&e),
+                            },
                         )),
                     }
                 })
@@ -183,18 +176,13 @@ impl App {
     }
 
     pub(super) fn fetch_browse_columns(&self, tab_id: Uuid, sender: ComponentSender<Self>) {
-        let (schema, table, generation, cancel) = {
+        let (schema, table) = {
             let tabs = self.workspace_tabs.borrow();
             let Some(controller) = tabs.get(&tab_id).and_then(|t| t.browse_controller()) else {
                 return;
             };
             let model = controller.model();
-            (
-                model.schema().map(str::to_owned),
-                model.table().to_string(),
-                model.load_generation(),
-                model.page_cancel_token(),
-            )
+            (model.schema().map(str::to_owned), model.table().to_string())
         };
 
         let Some(conn) = self.window_connection() else {
@@ -205,13 +193,15 @@ impl App {
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    let control = crate::services::operation_control::bounded_with(timeout_secs, cancel);
+                    let control = crate::services::operation_control::bounded(timeout_secs);
                     match conn.fetch_columns_controlled(schema.as_deref(), &table, &control).await {
-                        Ok(columns) => sender_clone.input(AppMsg::ColumnsLoaded(tab_id, columns, generation)),
+                        Ok(columns) => sender_clone.input(AppMsg::ColumnsLoaded(tab_id, columns)),
                         Err(error) => sender_clone.input(AppMsg::LoadFailed(
                             Some(tab_id),
-                            crate::ui::error_text::driver_message(&error),
-                            Some(generation),
+                            BrowseLoadFailure {
+                                request: None,
+                                message: crate::ui::error_text::driver_message(&error),
+                            },
                         )),
                     }
                 })
@@ -220,7 +210,7 @@ impl App {
     }
 
     pub(super) fn fetch_browse_row_count(&self, tab_id: Uuid, sender: ComponentSender<Self>) {
-        let (schema, table, filter, columns, driver_id, generation, cancel) = {
+        let (schema, table, request, filter, columns, driver_id) = {
             let tabs = self.workspace_tabs.borrow();
             let Some(controller) = tabs.get(&tab_id).and_then(|t| t.browse_controller()) else {
                 return;
@@ -229,11 +219,10 @@ impl App {
             (
                 model.schema().map(str::to_owned),
                 model.table().to_string(),
+                model.begin_row_count_request(),
                 model.current_filter().clone(),
                 model.columns().to_vec(),
                 model.driver_id().to_string(),
-                model.load_generation(),
-                model.page_cancel_token(),
             )
         };
 
@@ -251,7 +240,7 @@ impl App {
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    let control = crate::services::operation_control::bounded_with(timeout_secs, cancel);
+                    let control = crate::services::operation_control::bounded(timeout_secs);
                     let qualified = match schema {
                         Some(s) => format!(
                             "{}.{}",
@@ -281,7 +270,7 @@ impl App {
                             _ => None,
                         };
                         if let Some(count) = count {
-                            sender_clone.input(AppMsg::RowCountLoaded(tab_id, count, generation));
+                            sender_clone.input(AppMsg::RowCountLoaded(tab_id, request, count));
                         }
                     }
                 })
@@ -293,45 +282,44 @@ impl App {
         &self,
         tab_id: Uuid,
         columns: Vec<ColumnInfo>,
-        generation: u64,
         sender: ComponentSender<Self>,
     ) {
-        if !self.browse_load_is_current(tab_id, generation) {
-            return;
-        }
-        self.dispatch_to_tab(tab_id, BrowseTabInput::ColumnsLoaded { columns, generation });
+        self.dispatch_to_tab(tab_id, BrowseTabInput::ColumnsLoaded(columns));
+        // Page order depends on the primary-key metadata, and filters depend
+        // on column types. Start both queries only after ColumnsLoaded has
+        // updated the tab model.
         sender.input(AppMsg::FetchBrowseRowCount(tab_id));
         sender.input(AppMsg::FetchBrowsePage(tab_id));
     }
 
-    pub(super) fn on_browse_rows_loaded(&self, tab_id: Uuid, offset: u64, result: QueryResult, generation: u64) {
-        self.dispatch_to_tab(
-            tab_id,
-            BrowseTabInput::RowsLoaded {
-                offset,
-                result,
-                generation,
-            },
-        );
+    pub(super) fn on_browse_rows_loaded(&self, tab_id: Uuid, request: BrowsePageRequest, result: QueryResult) {
+        self.dispatch_to_tab(tab_id, BrowseTabInput::RowsLoaded { request, result });
     }
 
-    pub(super) fn on_browse_row_count_loaded(&self, tab_id: Uuid, count: u64, generation: u64) {
-        self.dispatch_to_tab(tab_id, BrowseTabInput::RowCountLoaded { count, generation });
+    pub(super) fn on_browse_row_count_loaded(&self, tab_id: Uuid, request: BrowseRowCountRequest, count: u64) {
+        self.dispatch_to_tab(tab_id, BrowseTabInput::RowCountLoaded { request, count });
     }
 
-    pub(super) fn on_browse_load_failed(&mut self, tab_id: Option<Uuid>, msg: String, generation: Option<u64>) {
+    pub(super) fn on_browse_load_failed(&mut self, tab_id: Option<Uuid>, failure: BrowseLoadFailure) {
         match tab_id {
-            Some(id) => self.dispatch_to_tab(
-                id,
-                BrowseTabInput::ShowError {
-                    message: msg,
-                    generation: generation.unwrap_or_else(|| self.browse_load_generation(id)),
-                },
-            ),
+            Some(id) => {
+                if let Some(request) = failure.request {
+                    let accepts = self
+                        .workspace_tabs
+                        .borrow()
+                        .get(&id)
+                        .and_then(|tab| tab.browse_controller())
+                        .is_some_and(|controller| controller.model().accepts_page_request(request));
+                    if !accepts {
+                        return;
+                    }
+                }
+                self.dispatch_to_tab(id, BrowseTabInput::ShowError(failure.message));
+            }
             None => {
-                tracing::warn!(error = %msg, "app-level load failed");
+                tracing::warn!(error = %failure.message, "app-level load failed");
                 self.dismiss_loading_page();
-                self.set_status_page(super::StatusKind::Error, &crate::tr!("Failed"), &msg);
+                self.set_status_page(super::StatusKind::Error, &crate::tr!("Failed"), &failure.message);
             }
         }
     }

@@ -1,12 +1,58 @@
 use std::collections::HashMap;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Default)]
 pub struct SchemaIndex {
     pub tables: Vec<String>,
     pub columns: HashMap<String, Vec<String>>,
+    connection: Option<std::sync::Weak<dyn tablepro_core::Connection>>,
+    generation: u64,
+}
+
+impl std::fmt::Debug for SchemaIndex {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SchemaIndex")
+            .field("tables", &self.tables)
+            .field("columns", &self.columns)
+            .field("generation", &self.generation)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+pub struct SchemaRequest {
+    pub generation: u64,
+    pub table: String,
 }
 
 impl SchemaIndex {
+    pub fn sync_connection(&mut self, connection: &std::sync::Arc<dyn tablepro_core::Connection>) -> bool {
+        let unchanged = self
+            .connection
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .is_some_and(|current| std::sync::Arc::ptr_eq(&current, connection));
+        if unchanged {
+            return false;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.connection = Some(std::sync::Arc::downgrade(connection));
+        self.tables.clear();
+        self.columns.clear();
+        true
+    }
+
+    pub fn request(&self, table: String) -> SchemaRequest {
+        SchemaRequest {
+            generation: self.generation,
+            table,
+        }
+    }
+
+    pub fn accepts(&self, request: &SchemaRequest) -> bool {
+        request.generation == self.generation
+    }
+
     pub fn columns_for(&self, table: &str) -> Option<&Vec<String>> {
         let key = table_key(table);
         self.columns.get(&key)
@@ -287,11 +333,21 @@ mod tests {
     fn index() -> SchemaIndex {
         let mut index = SchemaIndex {
             tables: vec!["public.users".into(), "public.orders".into()],
-            columns: HashMap::new(),
+            ..SchemaIndex::default()
         };
         index.set_columns("public.users", vec!["id".into(), "email".into(), "created_at".into()]);
         index.set_columns("public.orders", vec!["id".into(), "user_id".into(), "total".into()]);
         index
+    }
+
+    #[test]
+    fn schema_requests_are_accepted_only_by_their_generation() {
+        let mut index = SchemaIndex::default();
+        let current = index.request("users".into());
+        index.generation = index.generation.wrapping_add(1);
+
+        assert!(!index.accepts(&current));
+        assert!(index.accepts(&index.request("users".into())));
     }
 
     fn candidates(sql: &str) -> Vec<String> {

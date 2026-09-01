@@ -1,10 +1,10 @@
-use std::{sync::Arc, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use tablepro_core::sql_dialect::quote_ident;
+use tablepro_core::sql_dialect::{explain_statement, quote_ident};
 use tablepro_core::{
-    ColumnInfo, Connection, ForeignKeyInfo, IndexInfo, OperationControl, QueryResult, TableInfo, Value,
-    check_pre_dispatch,
+    ColumnInfo, Connection, DriverError, ExecResult, ForeignKeyInfo, IndexInfo, OperationControl, QueryResult,
+    TableInfo, Value, check_pre_dispatch,
 };
 use tablepro_policy::Principal;
 use tablepro_storage::SavedConnection;
@@ -25,6 +25,7 @@ pub trait ConnectionProvider: Send + Sync {
 }
 
 const MAX_IDENTIFIER_BYTES: usize = 256;
+const PREVIEW_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct McpBridge {
     provider: Arc<dyn ConnectionProvider>,
@@ -91,13 +92,17 @@ impl McpBridge {
     }
 
     pub async fn list_connections(&self, token: &McpToken) -> Result<Vec<SavedConnection>, String> {
+        let control = operation_control(self.query_timeout_secs);
         authorize_scopes(token.permissions, McpScope::ToolsRead)?;
         self.check_rate(token)?;
         if token.connection_allowlist.is_empty() {
             return Ok(Vec::new());
         }
-        let mut list = self.provider.list_saved_connections().await?;
-        list.retain(|c| token.connection_allowlist.contains(&c.id));
+        let mut list = run_bounded(self.provider.list_saved_connections(), &control)
+            .await
+            .map_err(|error| error.to_string())??;
+        list.retain(|connection| token.connection_allowlist.contains(&connection.id));
+        self.ensure_operation_active(&control)?;
         Ok(list)
     }
 
@@ -105,39 +110,77 @@ impl McpBridge {
     where
         F: FnOnce(
                 Arc<dyn Connection>,
+                OperationControl,
             ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, String>> + Send>>
             + Send,
         T: Send,
     {
+        let control = self.start_connection_operation(token, connection_id)?;
+        self.with_connection_controlled(token, connection_id, control, f).await
+    }
+
+    pub(crate) fn ensure_operation_active(&self, control: &OperationControl) -> Result<(), String> {
+        check_pre_dispatch(control).map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn start_connection_operation(
+        &self,
+        token: &McpToken,
+        connection_id: Uuid,
+    ) -> Result<OperationControl, String> {
+        let control = operation_control(self.query_timeout_secs);
         authorize_scopes(token.permissions, McpScope::ToolsRead)?;
         self.check_rate(token)?;
         self.ensure_connection_allowed(token, connection_id)?;
+        Ok(control)
+    }
+
+    async fn with_connection_controlled<F, T>(
+        &self,
+        token: &McpToken,
+        connection_id: Uuid,
+        control: OperationControl,
+        f: F,
+    ) -> Result<T, String>
+    where
+        F: FnOnce(
+                Arc<dyn Connection>,
+                OperationControl,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, String>> + Send>>
+            + Send,
+        T: Send,
+    {
         let principal = Principal::Agent {
             token: token.id.to_string(),
             client: Some(token.name.clone()),
             model: None,
         };
-        let conn = self.provider.connection(connection_id, principal).await?;
-        f(conn).await
+        let conn = run_bounded(self.provider.connection(connection_id, principal), &control)
+            .await
+            .map_err(|error| error.to_string())??;
+        f(conn, control).await
     }
 
-    pub(crate) async fn driver_id_for(&self, token: &McpToken, connection_id: Uuid) -> Result<String, String> {
-        self.ensure_connection_allowed(token, connection_id)?;
-        self.provider
-            .list_saved_connections()
-            .await?
+    async fn driver_id_for_controlled(
+        &self,
+        connection_id: Uuid,
+        control: &OperationControl,
+    ) -> Result<String, String> {
+        run_bounded(self.provider.list_saved_connections(), control)
+            .await
+            .map_err(|error| error.to_string())??
             .into_iter()
-            .find(|c| c.id == connection_id)
-            .map(|c| c.driver_id)
+            .find(|connection| connection.id == connection_id)
+            .map(|connection| connection.driver_id)
             .ok_or_else(|| format!("connection {connection_id} not found"))
     }
 
     pub async fn list_tables(&self, token: &McpToken, connection_id: Uuid) -> Result<Vec<TableInfo>, String> {
-        let timeout = self.query_timeout_secs;
-        self.with_connection(token, connection_id, move |conn| {
+        self.with_connection(token, connection_id, |conn, control| {
             Box::pin(async move {
-                let control = operation_control(timeout);
-                conn.list_tables_controlled(&control).await.map_err(|e| e.to_string())
+                conn.list_tables_controlled(&control)
+                    .await
+                    .map_err(|error| error.to_string())
             })
         })
         .await
@@ -155,40 +198,64 @@ impl McpBridge {
             Some(schema) => Some(validated_identifier(&schema)?),
             None => None,
         };
-        let timeout = self.query_timeout_secs;
-        self.with_connection(token, connection_id, move |conn| {
+        self.with_connection(token, connection_id, move |conn, control| {
             Box::pin(async move {
-                let control = operation_control(timeout);
                 conn.fetch_columns_controlled(schema.as_deref(), &table, &control)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(|error| error.to_string())
             })
         })
         .await
     }
 
     pub async fn execute_query(&self, token: &McpToken, connection_id: Uuid, sql: &str) -> Result<QueryResult, String> {
-        authorize_scopes(token.permissions, McpScope::ToolsRead)?;
-        let driver_id = self.driver_id_for(token, connection_id).await?;
-        if tablepro_policy::statement_requires_write_capability(sql, &driver_id) {
+        let control = self.start_connection_operation(token, connection_id)?;
+        self.execute_query_controlled(token, connection_id, sql, None, control)
+            .await
+    }
+
+    pub(crate) async fn execute_query_controlled(
+        &self,
+        token: &McpToken,
+        connection_id: Uuid,
+        sql: &str,
+        driver_id: Option<String>,
+        control: OperationControl,
+    ) -> Result<QueryResult, String> {
+        let driver_id = match driver_id {
+            Some(driver_id) => driver_id,
+            None => self.driver_id_for_controlled(connection_id, &control).await?,
+        };
+        if sql_looks_like_write(sql, &driver_id) {
             authorize_scopes(token.permissions, McpScope::ToolsWrite)?;
         }
         let max_rows = self.max_rows;
-        let timeout = self.query_timeout_secs;
         let sql = sql.to_string();
-        self.with_connection(token, connection_id, move |conn| {
+        self.with_connection_controlled(token, connection_id, control, move |conn, control| {
             Box::pin(async move {
-                let control = operation_control(timeout);
-                let result = conn.query_controlled(&sql, &control).await.map_err(|e| e.to_string())?;
-                let mut result = result;
+                let mut result = conn
+                    .query_controlled(&sql, &control)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                check_pre_dispatch(&control).map_err(|error| error.to_string())?;
                 if result.rows.len() as u64 > max_rows {
                     result.rows.truncate(max_rows as usize);
                     result.truncated = true;
                 }
+                check_pre_dispatch(&control).map_err(|error| error.to_string())?;
                 Ok(result)
             })
         })
         .await
+    }
+
+    pub async fn explain_query(&self, token: &McpToken, connection_id: Uuid, sql: &str) -> Result<QueryResult, String> {
+        let control = self.start_connection_operation(token, connection_id)?;
+        let driver_id = self.driver_id_for_controlled(connection_id, &control).await?;
+        let explain = explain_statement(&driver_id, sql)
+            .ok_or_else(|| format!("explain is not supported for the {driver_id} driver"))?;
+        self.execute_query_controlled(token, connection_id, &explain, Some(driver_id), control)
+            .await
     }
 
     pub async fn table_schema(
@@ -203,24 +270,20 @@ impl McpBridge {
             Some(schema) => Some(validated_identifier(&schema)?),
             None => None,
         };
-        let timeout = self.query_timeout_secs;
-        self.with_connection(token, connection_id, move |conn| {
+        self.with_connection(token, connection_id, move |conn, control| {
             Box::pin(async move {
-                let control = operation_control(timeout);
                 let columns = conn
                     .fetch_columns_controlled(schema.as_deref(), &table, &control)
                     .await
                     .map_err(|e| e.to_string())?;
-                check_pre_dispatch(&control).map_err(|e| e.to_string())?;
                 let indexes = conn
                     .fetch_indexes_controlled(schema.as_deref(), &table, &control)
                     .await
-                    .map_err(|e| e.to_string())?;
-                check_pre_dispatch(&control).map_err(|e| e.to_string())?;
+                    .map_err(|error| error.to_string())?;
                 let foreign_keys = conn
                     .fetch_foreign_keys_controlled(schema.as_deref(), &table, &control)
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|error| error.to_string())?;
                 Ok(TableSchema {
                     columns,
                     indexes,
@@ -238,15 +301,21 @@ impl McpBridge {
         schema: Option<String>,
         table: String,
     ) -> Result<u64, String> {
-        let driver_id = self.driver_id_for(token, connection_id).await?;
+        let control = self.start_connection_operation(token, connection_id)?;
+        let driver_id = self.driver_id_for_controlled(connection_id, &control).await?;
         let sql = count_statement(&driver_id, schema.as_deref(), &table)?;
-        let result = self.execute_query(token, connection_id, &sql).await?;
+        let result = self
+            .execute_query_controlled(token, connection_id, &sql, Some(driver_id), control.clone())
+            .await?;
+        self.ensure_operation_active(&control)?;
         let value = result
             .rows
             .first()
             .and_then(|row| row.first())
             .ok_or("the engine returned no count row")?;
-        count_from_value(value)
+        let count = count_from_value(value)?;
+        self.ensure_operation_active(&control)?;
+        Ok(count)
     }
 
     pub async fn browse_table(
@@ -264,10 +333,8 @@ impl McpBridge {
             None => None,
         };
         let capped = limit.clamp(1, self.max_rows);
-        let timeout = self.query_timeout_secs;
-        self.with_connection(token, connection_id, move |conn| {
+        self.with_connection(token, connection_id, move |conn, control| {
             Box::pin(async move {
-                let control = operation_control(timeout);
                 let mut result = conn
                     .fetch_rows_controlled(schema.as_deref(), &table, offset, capped, &control)
                     .await
@@ -293,16 +360,20 @@ impl McpBridge {
         preview: bool,
     ) -> Result<WriteOutcome, String> {
         authorize_scopes(token.permissions, McpScope::ToolsWrite)?;
-        let timeout = self.query_timeout_secs;
         let sql = sql.to_string();
-        self.with_connection(token, connection_id, move |conn| {
+        self.with_connection(token, connection_id, move |conn, control| {
             Box::pin(async move {
-                let control = operation_control(timeout);
                 if preview {
-                    let mut tx = conn.begin().await.map_err(|e| e.to_string())?;
+                    let mut tx = run_bounded(conn.begin(), &control)
+                        .await
+                        .map_err(|error| error.to_string())?
+                        .map_err(|error| error.to_string())?;
                     let result = tx.execute_controlled(&sql, &control).await;
-                    tx.rollback().await.map_err(|e| e.to_string())?;
-                    let result = result.map_err(|e| e.to_string())?;
+                    let cleanup_control = operation_control_for(PREVIEW_CLEANUP_TIMEOUT);
+                    tx.rollback_controlled(&cleanup_control)
+                        .await
+                        .map_err(|error| format!("preview rollback could not be confirmed: {error}"))?;
+                    let result = result.map_err(|error| error.to_string())?;
                     Ok(WriteOutcome::Preview {
                         rows_affected: result.rows_affected,
                         rolled_back: true,
@@ -319,6 +390,18 @@ impl McpBridge {
             })
         })
         .await
+    }
+
+    pub async fn execute_write_commit(
+        &self,
+        token: &McpToken,
+        connection_id: Uuid,
+        sql: &str,
+    ) -> Result<ExecResult, String> {
+        match self.execute_write(token, connection_id, sql, false).await? {
+            WriteOutcome::Committed { rows_affected } => Ok(ExecResult { rows_affected }),
+            WriteOutcome::Preview { .. } => Err("unexpected preview outcome".into()),
+        }
     }
 }
 
@@ -369,16 +452,46 @@ fn count_from_value(value: &Value) -> Result<u64, String> {
     }
 }
 
+async fn run_bounded<T, F>(operation: F, control: &OperationControl) -> Result<T, DriverError>
+where
+    F: Future<Output = T>,
+{
+    check_pre_dispatch(control)?;
+    match control.deadline() {
+        Some(deadline) => {
+            tokio::select! {
+                biased;
+                _ = control.cancellation_token().cancelled() => Err(DriverError::Cancelled),
+                _ = tokio::time::sleep_until(deadline) => Err(DriverError::TimedOut),
+                result = operation => Ok(result),
+            }
+        }
+        None => {
+            tokio::select! {
+                biased;
+                _ = control.cancellation_token().cancelled() => Err(DriverError::Cancelled),
+                result = operation => Ok(result),
+            }
+        }
+    }
+}
+
 fn operation_control(timeout_secs: u64) -> OperationControl {
-    OperationControl::new(
-        CancellationToken::new(),
-        Some(Instant::now() + Duration::from_secs(timeout_secs)),
-    )
+    operation_control_for(Duration::from_secs(timeout_secs))
+}
+
+fn operation_control_for(timeout: Duration) -> OperationControl {
+    OperationControl::new(CancellationToken::new(), Some(Instant::now() + timeout))
+}
+
+fn sql_looks_like_write(sql: &str, driver_id: &str) -> bool {
+    let facts = tablepro_policy::classify(sql, driver_id);
+    facts.writes
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{McpLimits, count_from_value, count_statement, validated_identifier};
+    use super::{McpLimits, count_from_value, count_statement, sql_looks_like_write, validated_identifier};
     use tablepro_core::Value;
 
     #[test]
@@ -426,5 +539,22 @@ mod tests {
         assert_eq!(limits.requests_per_minute, 120);
         assert_eq!(limits.max_rows, 500);
         assert_eq!(limits.query_timeout_secs, 30);
+    }
+
+    #[test]
+    fn only_a_provable_read_skips_the_write_scope_check() {
+        for sql in ["SELECT 1", "SELECT id FROM t WHERE id = 1"] {
+            assert!(!sql_looks_like_write(sql, "postgres"), "{sql}");
+        }
+        for sql in [
+            "DELETE FROM t WHERE id = 1",
+            "CREATE TABLE t (id int)",
+            "SELECT pg_read_file('/etc/passwd')",
+            "COPY t TO PROGRAM 'sh'",
+            "this is not sql at all",
+            "",
+        ] {
+            assert!(sql_looks_like_write(sql, "postgres"), "{sql}");
+        }
     }
 }

@@ -94,6 +94,13 @@ impl StructureTrackerRegistry {
             .filter(|id| self.trackers.get(id).is_some_and(|tracker| tracker.has_pending()))
             .collect()
     }
+
+    pub fn pending_tabs_for(&self, tab_ids: &std::collections::HashSet<Uuid>) -> Vec<Uuid> {
+        self.trackers
+            .iter()
+            .filter_map(|(id, tracker)| (tab_ids.contains(id) && tracker.has_pending()).then_some(*id))
+            .collect()
+    }
 }
 
 thread_local! {
@@ -128,6 +135,10 @@ pub fn any_pending_in(ids: impl IntoIterator<Item = Uuid>) -> bool {
 
 pub fn pending_among(ids: impl IntoIterator<Item = Uuid>) -> Vec<Uuid> {
     REGISTRY.with(|r| r.borrow().pending_among(ids))
+}
+
+pub fn pending_tabs_for(tab_ids: &std::collections::HashSet<Uuid>) -> Vec<Uuid> {
+    REGISTRY.with(|r| r.borrow().pending_tabs_for(tab_ids))
 }
 
 #[cfg(test)]
@@ -195,10 +206,30 @@ mod tests {
         });
         assert!(r.with_tab_ref(a, |t| t.has_pending()).unwrap());
         assert!(!r.with_tab_ref(b, |t| t.has_pending()).unwrap_or(false));
-        assert!(!r.any_pending_in([b]));
-        assert!(r.any_pending_in([a, b]));
-        assert_eq!(r.pending_among([b, a]), vec![a]);
+        assert_eq!(r.pending_tabs_for(&std::collections::HashSet::from([a, b])), vec![a]);
         r.close_tab(a);
-        assert!(!r.any_pending_in([a]));
+        assert!(r.pending_tabs_for(&std::collections::HashSet::from([a, b])).is_empty());
+    }
+
+    #[test]
+    fn registry_pending_tabs_for_does_not_include_another_window() {
+        let mut registry = StructureTrackerRegistry::default();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        for id in [first, second] {
+            registry.with_tab(id, |tracker| {
+                tracker.set_ops(vec![StructureOp::AddColumn {
+                    schema: None,
+                    table: "t".into(),
+                    column: dc("a", "int"),
+                }])
+            });
+        }
+
+        let first_window = std::collections::HashSet::from([first]);
+        let second_window = std::collections::HashSet::from([second]);
+
+        assert_eq!(registry.pending_tabs_for(&first_window), vec![first]);
+        assert_eq!(registry.pending_tabs_for(&second_window), vec![second]);
     }
 }

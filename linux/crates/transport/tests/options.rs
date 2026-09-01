@@ -20,7 +20,7 @@ fn saved(tls_mode: Option<TlsMode>, use_tls: bool) -> SavedConnection {
         tls_mode,
         tls_root_cert: None,
         read_only: false,
-        auth_mode: AuthMode::Password,
+        auth_mode: AuthMode::Kerberos,
         environment: Environment::Prod,
         ssh: None,
         last_opened_at: None,
@@ -58,6 +58,19 @@ async fn a_direct_connection_carries_no_tunnel_state() {
         }
     );
     assert!(saved_ssh_chain(&connection).await.expect("no ssh chain").is_none());
+}
+
+#[tokio::test]
+async fn file_connections_do_not_require_secret_service() {
+    let mut connection = saved(None, false);
+    connection.driver_id = "sqlite".into();
+    connection.auth_mode = AuthMode::Password;
+    connection.username.clear();
+    connection.database = "/tmp/tablepro.db".into();
+
+    let opts = connect_options_for(&connection).await.expect("build file options");
+
+    assert_eq!(opts.database, "/tmp/tablepro.db");
 }
 
 #[tokio::test]

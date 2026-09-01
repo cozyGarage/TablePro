@@ -1,17 +1,20 @@
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
 };
 
 use async_trait::async_trait;
 use tablepro_core::{
-    ColumnInfo, Connection, DriverError, Environment, ExecResult, OperationControl, QueryResult, TableInfo, Value,
-    check_pre_dispatch,
+    ColumnInfo, Connection, DriverError, Environment, ExecResult, ForeignKeyInfo, IndexInfo, OperationControl,
+    QueryResult, TableInfo, Transaction, Value, check_pre_dispatch,
 };
 use tablepro_mcp::{ConnectionProvider, McpBridge, TokenPermissions, TokenStore};
 use tablepro_policy::{
-    AuditError, AuditEvent, AuditRecordPhase, AuditSink, AuditState, AuditTerminalStatus, AutoApproveSink,
-    GuardContext, PolicyConfig, PolicyGuard, Principal, WritePolicy,
+    AuditError, AuditEvent, AuditOperationClass, AuditRecordPhase, AuditSink, AuditState, AuditTerminalStatus,
+    AuditTransactionOutcome, AutoApproveSink, GuardContext, PolicyConfig, PolicyGuard, Principal, WritePolicy,
 };
 use tablepro_storage::SavedConnection;
 use uuid::Uuid;
@@ -19,6 +22,7 @@ use uuid::Uuid;
 struct RecordingAuditSink {
     events: Mutex<Vec<AuditEvent>>,
     unavailable: bool,
+    rollback_intent_delay: Option<Duration>,
 }
 
 impl RecordingAuditSink {
@@ -26,6 +30,15 @@ impl RecordingAuditSink {
         Self {
             events: Mutex::new(Vec::new()),
             unavailable: false,
+            rollback_intent_delay: None,
+        }
+    }
+
+    fn delayed_rollback_intent(delay: Duration) -> Self {
+        Self {
+            events: Mutex::new(Vec::new()),
+            unavailable: false,
+            rollback_intent_delay: Some(delay),
         }
     }
 
@@ -33,6 +46,7 @@ impl RecordingAuditSink {
         Self {
             events: Mutex::new(Vec::new()),
             unavailable: true,
+            rollback_intent_delay: None,
         }
     }
 }
@@ -42,6 +56,12 @@ impl AuditSink for RecordingAuditSink {
     async fn record(&self, event: AuditEvent) -> Result<(), AuditError> {
         if self.unavailable {
             return Err(AuditError::Unavailable("audit sink is offline in this test".into()));
+        }
+        if event.phase == AuditRecordPhase::Intent
+            && event.operation_class == AuditOperationClass::TransactionRollback
+            && let Some(delay) = self.rollback_intent_delay
+        {
+            tokio::time::sleep(delay).await;
         }
         self.events.lock().expect("event lock").push(event);
         Ok(())
@@ -53,8 +73,23 @@ enum ControlledWriteBehavior {
     UnknownInterruption,
 }
 
+#[derive(Clone, Copy)]
+enum MetadataBehavior {
+    Complete,
+    HangIndexes,
+    HangForeignKeys,
+}
+
+#[derive(Clone, Copy)]
+enum RollbackBehavior {
+    Succeeds,
+    Hangs,
+}
+
 struct ControlledConnection {
     behavior: ControlledWriteBehavior,
+    metadata_behavior: MetadataBehavior,
+    rollback_behavior: RollbackBehavior,
     attempts: AtomicUsize,
 }
 
@@ -112,12 +147,62 @@ impl Connection for ControlledConnection {
         std::future::pending().await
     }
 
+    async fn fetch_indexes(&self, _: Option<&str>, _: &str) -> Result<Vec<IndexInfo>, DriverError> {
+        if matches!(self.metadata_behavior, MetadataBehavior::HangIndexes) {
+            return std::future::pending().await;
+        }
+        Ok(Vec::new())
+    }
+
+    async fn fetch_foreign_keys(&self, _: Option<&str>, _: &str) -> Result<Vec<ForeignKeyInfo>, DriverError> {
+        if matches!(self.metadata_behavior, MetadataBehavior::HangForeignKeys) {
+            return std::future::pending().await;
+        }
+        Ok(Vec::new())
+    }
+
+    async fn begin(&self) -> Result<Box<dyn Transaction>, DriverError> {
+        Ok(Box::new(ControlledTransaction {
+            rollback_behavior: self.rollback_behavior,
+        }))
+    }
+
     async fn ping(&self) -> Result<(), DriverError> {
         Ok(())
     }
 
     async fn close(self: Box<Self>) -> Result<(), DriverError> {
         Ok(())
+    }
+}
+
+struct ControlledTransaction {
+    rollback_behavior: RollbackBehavior,
+}
+
+#[async_trait]
+impl Transaction for ControlledTransaction {
+    async fn query(&mut self, _: &str) -> Result<QueryResult, DriverError> {
+        Ok(QueryResult {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            truncated: false,
+        })
+    }
+
+    async fn execute(&mut self, _: &str) -> Result<ExecResult, DriverError> {
+        Ok(ExecResult { rows_affected: 1 })
+    }
+
+    async fn commit(self: Box<Self>) -> Result<(), DriverError> {
+        Ok(())
+    }
+
+    async fn rollback(self: Box<Self>) -> Result<(), DriverError> {
+        match self.rollback_behavior {
+            RollbackBehavior::Succeeds => Ok(()),
+            RollbackBehavior::Hangs => std::future::pending().await,
+        }
     }
 }
 
@@ -197,11 +282,12 @@ async fn confirmed_timeout_records_terminal_event_and_allows_later_write() {
         audit_state: audit_state.clone(),
         connection: Arc::new(ControlledConnection {
             behavior: ControlledWriteBehavior::ConfirmedTimeoutThenSuccess,
+            metadata_behavior: MetadataBehavior::Complete,
+            rollback_behavior: RollbackBehavior::Succeeds,
             attempts: AtomicUsize::new(0),
         }),
     });
-    let mut bridge = McpBridge::new(provider, tokens);
-    bridge.query_timeout_secs = 0;
+    let bridge = McpBridge::new(provider, tokens);
 
     let first = bridge
         .execute_write(&token, connection_id, "INSERT INTO jobs(id) VALUES (1)", false)
@@ -245,6 +331,8 @@ async fn unknown_interruption_records_unknown_outcome_and_blocks_later_writes() 
     policy.environments.entry("local".into()).or_default().agent_writes = Some(WritePolicy::Allow);
     let connection = Arc::new(ControlledConnection {
         behavior: ControlledWriteBehavior::UnknownInterruption,
+        metadata_behavior: MetadataBehavior::Complete,
+        rollback_behavior: RollbackBehavior::Succeeds,
         attempts: AtomicUsize::new(0),
     });
     let provider = Arc::new(GuardedProvider {
@@ -254,8 +342,7 @@ async fn unknown_interruption_records_unknown_outcome_and_blocks_later_writes() 
         audit_state: audit_state.clone(),
         connection: connection.clone(),
     });
-    let mut bridge = McpBridge::new(provider, tokens);
-    bridge.query_timeout_secs = 0;
+    let bridge = McpBridge::new(provider, tokens);
 
     let first = bridge
         .execute_write(&token, connection_id, "INSERT INTO jobs(id) VALUES (1)", false)
@@ -278,6 +365,154 @@ async fn unknown_interruption_records_unknown_outcome_and_blocks_later_writes() 
     assert_eq!(events[1].terminal_status, AuditTerminalStatus::Unknown);
 }
 
+fn preview_harness(rollback_behavior: RollbackBehavior) -> MetadataHarness {
+    preview_harness_with_audit(rollback_behavior, Arc::new(RecordingAuditSink::recording()))
+}
+
+fn preview_harness_with_audit(rollback_behavior: RollbackBehavior, audit: Arc<RecordingAuditSink>) -> MetadataHarness {
+    let dir = tempfile::TempDir::new().expect("temporary token directory");
+    let connection_id = Uuid::new_v4();
+    let tokens = Arc::new(TokenStore::open(dir.path().join("tokens.json")).expect("token store"));
+    let (_metadata, plaintext) = tokens
+        .issue(
+            "preview-test".into(),
+            TokenPermissions::ReadWrite,
+            vec![connection_id],
+            None,
+        )
+        .expect("issue a read-write token");
+    let token = tokens.authenticate(&plaintext).expect("authenticate");
+    let audit_state = Arc::new(AuditState::new());
+    let mut policy = PolicyConfig::default();
+    policy.environments.entry("local".into()).or_default().agent_writes = Some(WritePolicy::Allow);
+    let provider = Arc::new(GuardedProvider {
+        connection_id,
+        policy: Arc::new(policy),
+        audit: audit.clone(),
+        audit_state: audit_state.clone(),
+        connection: Arc::new(ControlledConnection {
+            behavior: ControlledWriteBehavior::ConfirmedTimeoutThenSuccess,
+            metadata_behavior: MetadataBehavior::Complete,
+            rollback_behavior,
+            attempts: AtomicUsize::new(0),
+        }),
+    });
+    MetadataHarness {
+        bridge: McpBridge::new(provider, tokens),
+        token,
+        connection_id,
+        audit,
+        audit_state,
+        _token_dir: dir,
+    }
+}
+
+#[tokio::test]
+async fn successful_preview_rollback_records_a_terminal_success() {
+    let harness = preview_harness(RollbackBehavior::Succeeds);
+
+    harness
+        .bridge
+        .execute_write(
+            &harness.token,
+            harness.connection_id,
+            "INSERT INTO jobs(id) VALUES (1)",
+            true,
+        )
+        .await
+        .expect("preview rollback must succeed");
+
+    assert!(!harness.audit_state.governed_writes_disabled());
+    let events = harness.audit.events.lock().expect("event lock");
+    assert_eq!(events.len(), 4);
+    assert_eq!(events[2].phase, AuditRecordPhase::Intent);
+    assert_eq!(events[2].operation_class, AuditOperationClass::TransactionRollback);
+    assert_eq!(events[3].phase, AuditRecordPhase::Outcome);
+    assert_eq!(events[3].terminal_status, AuditTerminalStatus::Succeeded);
+    assert_eq!(events[3].transaction_outcome, AuditTransactionOutcome::RolledBack);
+}
+
+#[tokio::test(start_paused = true)]
+async fn delayed_rollback_intent_records_unknown_and_blocks_later_writes() {
+    let audit = Arc::new(RecordingAuditSink::delayed_rollback_intent(Duration::from_secs(3)));
+    let harness = preview_harness_with_audit(RollbackBehavior::Succeeds, audit);
+
+    let error = harness
+        .bridge
+        .execute_write(
+            &harness.token,
+            harness.connection_id,
+            "INSERT INTO jobs(id) VALUES (1)",
+            true,
+        )
+        .await
+        .expect_err("preview rollback must exceed the cleanup deadline before dispatch");
+
+    assert!(error.contains("rollback could not be confirmed"), "{error}");
+    assert!(error.contains("timed out"), "{error}");
+    assert!(harness.audit_state.governed_writes_disabled());
+
+    let later_error = harness
+        .bridge
+        .execute_write(
+            &harness.token,
+            harness.connection_id,
+            "INSERT INTO jobs(id) VALUES (2)",
+            false,
+        )
+        .await
+        .expect_err("later governed writes must be blocked");
+    assert!(later_error.contains("governed writes are disabled"), "{later_error}");
+
+    let events = harness.audit.events.lock().expect("event lock");
+    assert_eq!(events.len(), 4);
+    assert_eq!(events[2].phase, AuditRecordPhase::Intent);
+    assert_eq!(events[2].operation_class, AuditOperationClass::TransactionRollback);
+    assert_eq!(events[3].phase, AuditRecordPhase::Outcome);
+    assert_eq!(events[3].terminal_status, AuditTerminalStatus::Unknown);
+    assert_eq!(events[3].transaction_outcome, AuditTransactionOutcome::Unknown);
+}
+
+#[tokio::test(start_paused = true)]
+async fn hanging_preview_rollback_records_unknown_and_blocks_later_writes() {
+    let harness = preview_harness(RollbackBehavior::Hangs);
+
+    let error = harness
+        .bridge
+        .execute_write(
+            &harness.token,
+            harness.connection_id,
+            "INSERT INTO jobs(id) VALUES (1)",
+            true,
+        )
+        .await
+        .expect_err("preview rollback must reach the cleanup deadline");
+
+    assert!(error.contains("rollback could not be confirmed"), "{error}");
+    assert!(error.contains("outcome is unknown"), "{error}");
+    assert!(harness.audit_state.governed_writes_disabled());
+
+    let later_error = harness
+        .bridge
+        .execute_write(
+            &harness.token,
+            harness.connection_id,
+            "INSERT INTO jobs(id) VALUES (2)",
+            false,
+        )
+        .await
+        .expect_err("later governed writes must be blocked");
+    assert!(later_error.contains("governed writes are disabled"), "{later_error}");
+
+    let events = harness.audit.events.lock().expect("event lock");
+    assert_eq!(events.len(), 4);
+    assert_eq!(events[2].phase, AuditRecordPhase::Intent);
+    assert_eq!(events[2].operation_class, AuditOperationClass::TransactionRollback);
+    assert_eq!(events[3].phase, AuditRecordPhase::Outcome);
+    assert_eq!(events[3].terminal_status, AuditTerminalStatus::Unknown);
+    assert_eq!(events[3].transaction_outcome, AuditTransactionOutcome::Unknown);
+}
+
 struct MetadataHarness {
     bridge: McpBridge,
     token: tablepro_mcp::McpToken,
@@ -288,6 +523,14 @@ struct MetadataHarness {
 }
 
 fn metadata_harness(timeout_secs: u64, audit: Arc<RecordingAuditSink>) -> MetadataHarness {
+    metadata_harness_with_behavior(timeout_secs, audit, MetadataBehavior::Complete)
+}
+
+fn metadata_harness_with_behavior(
+    timeout_secs: u64,
+    audit: Arc<RecordingAuditSink>,
+    metadata_behavior: MetadataBehavior,
+) -> MetadataHarness {
     let dir = tempfile::TempDir::new().expect("temporary token directory");
     let connection_id = Uuid::new_v4();
     let tokens = Arc::new(TokenStore::open(dir.path().join("tokens.json")).expect("token store"));
@@ -308,6 +551,8 @@ fn metadata_harness(timeout_secs: u64, audit: Arc<RecordingAuditSink>) -> Metada
         audit_state: audit_state.clone(),
         connection: Arc::new(ControlledConnection {
             behavior: ControlledWriteBehavior::ConfirmedTimeoutThenSuccess,
+            metadata_behavior,
+            rollback_behavior: RollbackBehavior::Succeeds,
             attempts: AtomicUsize::new(0),
         }),
     });
@@ -379,6 +624,46 @@ async fn a_read_scoped_agent_may_read_table_metadata_and_a_page() {
             .all(|event| event.terminal_status == AuditTerminalStatus::Succeeded),
         "{terminal:?}"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn hanging_policy_guard_metadata_records_a_terminal_audit_outcome() {
+    for metadata_behavior in [MetadataBehavior::HangIndexes, MetadataBehavior::HangForeignKeys] {
+        let harness = metadata_harness_with_behavior(1, Arc::new(RecordingAuditSink::recording()), metadata_behavior);
+
+        let error = harness
+            .bridge
+            .table_schema(&harness.token, harness.connection_id, None, "jobs".into())
+            .await
+            .expect_err("hanging metadata must reach the operation deadline");
+        assert!(error.contains("timed out"), "{error}");
+
+        let events = harness.audit.events.lock().expect("event lock");
+        let intents = events
+            .iter()
+            .filter(|event| event.phase == AuditRecordPhase::Intent)
+            .count();
+        let outcomes = events
+            .iter()
+            .filter(|event| event.phase == AuditRecordPhase::Outcome)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            intents,
+            outcomes.len(),
+            "no guarded metadata operation may stay open: {events:?}"
+        );
+        assert_eq!(
+            outcomes.last().map(|event| event.terminal_status),
+            Some(AuditTerminalStatus::Unknown),
+            "{outcomes:?}"
+        );
+        assert!(
+            outcomes[..outcomes.len() - 1]
+                .iter()
+                .all(|event| event.terminal_status == AuditTerminalStatus::Succeeded),
+            "{outcomes:?}"
+        );
+    }
 }
 
 #[tokio::test]

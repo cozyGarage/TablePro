@@ -8,7 +8,6 @@ use uuid::Uuid;
 
 use tablepro_core::{ColumnInfo, QueryResult, Value};
 
-use crate::services::request_generation;
 use crate::ui::grid::{GridMsg, TabGridContext, build_column_view};
 
 const PAGE_SIZE_OPTIONS: &[u64] = &[100, 500, 1_000, 5_000, 10_000];
@@ -20,6 +19,58 @@ const DEFAULT_PAGE_SIZE: u64 = 1_000;
 /// a glance that an explicit confirmation matches GNOME Files'
 /// "Delete N items?" pattern.
 const BULK_DELETE_CONFIRM_THRESHOLD: usize = 10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrowsePageRequest {
+    pub id: Uuid,
+    pub offset: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrowseRowCountRequest(Uuid);
+
+#[derive(Debug)]
+pub struct BrowseLoadFailure {
+    pub request: Option<BrowsePageRequest>,
+    pub message: String,
+}
+
+#[derive(Debug, Default)]
+struct PageRequestTracker {
+    latest: std::cell::Cell<Option<Uuid>>,
+}
+
+#[derive(Debug, Default)]
+struct RowCountRequestTracker {
+    latest: std::cell::Cell<Option<Uuid>>,
+}
+
+impl RowCountRequestTracker {
+    fn begin(&self) -> BrowseRowCountRequest {
+        let request = BrowseRowCountRequest(Uuid::new_v4());
+        self.latest.set(Some(request.0));
+        request
+    }
+
+    fn accepts(&self, request: BrowseRowCountRequest) -> bool {
+        self.latest.get() == Some(request.0)
+    }
+}
+
+impl PageRequestTracker {
+    fn begin(&self, offset: u64) -> BrowsePageRequest {
+        let request = BrowsePageRequest {
+            id: Uuid::new_v4(),
+            offset,
+        };
+        self.latest.set(Some(request.id));
+        request
+    }
+
+    fn accepts(&self, request: BrowsePageRequest, current_offset: u64) -> bool {
+        self.latest.get() == Some(request.id) && request.offset == current_offset
+    }
+}
 
 pub struct BrowseTabInit {
     pub tab_id: Uuid,
@@ -56,6 +107,8 @@ pub struct BrowseTab {
     keyset_cursor: Option<Vec<tablepro_core::Value>>,
     current_selection: Option<gtk::MultiSelection>,
     current_total_rows: Option<u64>,
+    page_requests: PageRequestTracker,
+    row_count_requests: RowCountRequestTracker,
 
     inner_stack: gtk::Stack,
     grid_holder: gtk::Box,
@@ -132,33 +185,24 @@ pub struct BrowseTab {
     /// PageSizeChanged emits don't fire while the combo is being driven by
     /// programmatic state restores.
     suppress_combo_emit: Rc<std::cell::Cell<bool>>,
-    load_generation: u64,
-    page_cancel: Option<tokio_util::sync::CancellationToken>,
 }
 
 #[derive(Debug)]
 pub enum BrowseTabInput {
     /// Replace this tab's grid with the given page of rows.
     RowsLoaded {
-        offset: u64,
+        request: BrowsePageRequest,
         result: QueryResult,
-        generation: u64,
     },
     /// Schema columns for the current table arrived (governs editability).
-    ColumnsLoaded {
-        columns: Vec<ColumnInfo>,
-        generation: u64,
-    },
+    ColumnsLoaded(Vec<ColumnInfo>),
     /// Total row count for paginator label.
     RowCountLoaded {
+        request: BrowseRowCountRequest,
         count: u64,
-        generation: u64,
     },
     /// Show an error status page.
-    ShowError {
-        message: String,
-        generation: u64,
-    },
+    ShowError(String),
     /// Re-issue the fetch for this tab (F5).
     Refresh,
     /// Clear a multi-row selection (Esc when 2+ rows are selected
@@ -367,6 +411,18 @@ impl BrowseTab {
         self.current_offset
     }
 
+    pub fn begin_page_request(&self) -> BrowsePageRequest {
+        self.page_requests.begin(self.current_offset)
+    }
+
+    pub fn accepts_page_request(&self, request: BrowsePageRequest) -> bool {
+        self.page_requests.accepts(request, self.current_offset)
+    }
+
+    pub fn begin_row_count_request(&self) -> BrowseRowCountRequest {
+        self.row_count_requests.begin()
+    }
+
     pub fn page_size(&self) -> u64 {
         self.page_size
     }
@@ -387,29 +443,11 @@ impl BrowseTab {
         &self.driver_id
     }
 
-    pub fn load_generation(&self) -> u64 {
-        self.load_generation
-    }
-
-    pub fn page_cancel_token(&self) -> tokio_util::sync::CancellationToken {
-        self.page_cancel.clone().unwrap_or_default()
-    }
-
-    fn begin_load(&mut self) {
-        if let Some(previous) = self.page_cancel.take() {
-            previous.cancel();
-        }
-        self.load_generation = self.load_generation.wrapping_add(1);
-        self.page_cancel = Some(tokio_util::sync::CancellationToken::new());
-    }
-
-    fn emit_fetch_page(&mut self, sender: &ComponentSender<Self>) {
-        self.begin_load();
+    fn emit_fetch_page(&self, sender: &ComponentSender<Self>) {
         let _ = sender.output(BrowseTabOutput::FetchPage);
     }
 
-    fn emit_fetch_page_and_count(&mut self, sender: &ComponentSender<Self>) {
-        self.begin_load();
+    fn emit_fetch_page_and_count(&self, sender: &ComponentSender<Self>) {
         let _ = sender.output(BrowseTabOutput::FetchPage);
         let _ = sender.output(BrowseTabOutput::FetchRowCount);
     }
@@ -759,7 +797,7 @@ impl SimpleComponent for BrowseTab {
             GridMsg::DuplicateRow { row_position } => BrowseTabInput::DuplicateRow { row_position },
         }));
 
-        let mut model = BrowseTab {
+        let model = BrowseTab {
             tab_id: init.tab_id,
             schema: init.schema,
             table: init.table,
@@ -775,6 +813,8 @@ impl SimpleComponent for BrowseTab {
             keyset_cursor: None,
             current_selection: None,
             current_total_rows: None,
+            page_requests: PageRequestTracker::default(),
+            row_count_requests: RowCountRequestTracker::default(),
             inner_stack,
             grid_holder,
             current_column_view: None,
@@ -799,8 +839,6 @@ impl SimpleComponent for BrowseTab {
             pending_label: pending.pending_label,
             grid_sender,
             suppress_combo_emit,
-            load_generation: 0,
-            page_cancel: None,
         };
         model.refresh_crud_buttons();
         model.refresh_pending_bar(0);
@@ -832,22 +870,16 @@ impl SimpleComponent for BrowseTab {
         // Fetch metadata first. The parent starts count + row queries only
         // after ColumnsLoaded, because deterministic ordering and typed
         // filters depend on this schema information.
-        model.begin_load();
         let _ = sender.output(BrowseTabOutput::FetchColumns);
         ComponentParts { model, widgets: () }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
-            BrowseTabInput::RowsLoaded {
-                offset,
-                result,
-                generation,
-            } => {
-                if !request_generation::is_current(generation, self.load_generation) {
+            BrowseTabInput::RowsLoaded { request, result } => {
+                if !self.page_requests.accepts(request, self.current_offset) {
                     return;
                 }
-                self.current_offset = offset;
                 // Driver fallback: every shipping driver derives the
                 // `QueryResult.columns` list from the FIRST returned
                 // row, so a zero-row page comes back with an empty
@@ -872,10 +904,7 @@ impl SimpleComponent for BrowseTab {
                 // ColumnsLoaded fires next and triggers a re-render.
                 self.render_grid_if_ready(sender);
             }
-            BrowseTabInput::ColumnsLoaded { columns, generation } => {
-                if !request_generation::is_current(generation, self.load_generation) {
-                    return;
-                }
+            BrowseTabInput::ColumnsLoaded(columns) => {
                 let words: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
                 self.current_columns = columns.clone();
                 // Late-arriving columns: if RowsLoaded already cached a
@@ -901,8 +930,8 @@ impl SimpleComponent for BrowseTab {
                 // editability map. Otherwise wait for RowsLoaded.
                 self.render_grid_if_ready(sender);
             }
-            BrowseTabInput::RowCountLoaded { count, generation } => {
-                if !request_generation::is_current(generation, self.load_generation) {
+            BrowseTabInput::RowCountLoaded { request, count } => {
+                if !self.row_count_requests.accepts(request) {
                     return;
                 }
                 self.current_total_rows = Some(count);
@@ -913,16 +942,13 @@ impl SimpleComponent for BrowseTab {
                     let last_page_offset = count.saturating_sub(1) / self.page_size * self.page_size;
                     if last_page_offset != self.current_offset {
                         self.current_offset = last_page_offset;
-                        self.emit_fetch_page(&sender);
+                        let _ = sender.output(BrowseTabOutput::FetchPage);
                         let _ = sender.output(BrowseTabOutput::StateChanged);
                     }
                 }
                 self.update_paginator_label();
             }
-            BrowseTabInput::ShowError { message, generation } => {
-                if !request_generation::is_current(generation, self.load_generation) {
-                    return;
-                }
+            BrowseTabInput::ShowError(message) => {
                 // Clear any cached page state so a follow-up refresh
                 // doesn't render against the stale snapshot before
                 // RowsLoaded arrives. Paginator label is left empty
@@ -943,7 +969,8 @@ impl SimpleComponent for BrowseTab {
                     &crate::tr!("Loading…"),
                     &crate::tr!("Fetching rows from {table}").replace("{table}", &self.table_label()),
                 );
-                self.emit_fetch_page_and_count(&sender);
+                let _ = sender.output(BrowseTabOutput::FetchPage);
+                let _ = sender.output(BrowseTabOutput::FetchRowCount);
             }
             BrowseTabInput::ClearSelection => {
                 let Some(sel) = self.current_selection.as_ref() else {
@@ -984,14 +1011,15 @@ impl SimpleComponent for BrowseTab {
                 if let Some(strip) = self.filter_strip.as_ref() {
                     strip.update_filter(set);
                 }
-                self.emit_fetch_page_and_count(&sender);
+                let _ = sender.output(BrowseTabOutput::FetchPage);
+                let _ = sender.output(BrowseTabOutput::FetchRowCount);
                 let _ = sender.output(BrowseTabOutput::StateChanged);
             }
             BrowseTabInput::FirstPage => {
                 if self.current_offset > 0 {
                     self.current_offset = 0;
                     self.keyset_cursor = None;
-                    self.emit_fetch_page(&sender);
+                    let _ = sender.output(BrowseTabOutput::FetchPage);
                     let _ = sender.output(BrowseTabOutput::StateChanged);
                 }
             }
@@ -1001,13 +1029,13 @@ impl SimpleComponent for BrowseTab {
                     // Reverse keyset is not implemented; clear cursor so
                     // the fetch falls back to OFFSET for this page.
                     self.keyset_cursor = None;
-                    self.emit_fetch_page(&sender);
+                    let _ = sender.output(BrowseTabOutput::FetchPage);
                     let _ = sender.output(BrowseTabOutput::StateChanged);
                 }
             }
             BrowseTabInput::NextPage => {
                 self.current_offset += self.page_size;
-                self.emit_fetch_page(&sender);
+                let _ = sender.output(BrowseTabOutput::FetchPage);
                 let _ = sender.output(BrowseTabOutput::StateChanged);
             }
             BrowseTabInput::LastPage => {
@@ -1024,7 +1052,7 @@ impl SimpleComponent for BrowseTab {
                 if self.current_offset != last_page_offset {
                     self.current_offset = last_page_offset;
                     self.keyset_cursor = None;
-                    self.emit_fetch_page(&sender);
+                    let _ = sender.output(BrowseTabOutput::FetchPage);
                     let _ = sender.output(BrowseTabOutput::StateChanged);
                 }
             }
@@ -1043,7 +1071,7 @@ impl SimpleComponent for BrowseTab {
                 self.current_offset = 0;
                 self.keyset_cursor = None;
                 self.capture_focus_for_restore();
-                self.emit_fetch_page(&sender);
+                let _ = sender.output(BrowseTabOutput::FetchPage);
                 let _ = sender.output(BrowseTabOutput::StateChanged);
             }
             BrowseTabInput::PageSizeChanged(size) => {
@@ -1053,7 +1081,7 @@ impl SimpleComponent for BrowseTab {
                 self.page_size = size;
                 self.current_offset = 0;
                 self.keyset_cursor = None;
-                self.emit_fetch_page(&sender);
+                let _ = sender.output(BrowseTabOutput::FetchPage);
                 let _ = sender.output(BrowseTabOutput::StateChanged);
             }
             BrowseTabInput::DuplicateRow { row_position } => self.handle_duplicate_row(row_position, sender),
@@ -1093,5 +1121,44 @@ impl SimpleComponent for BrowseTab {
             BrowseTabInput::Undo => self.handle_undo(),
             BrowseTabInput::Redo => self.handle_redo(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BrowsePageRequest, PageRequestTracker, RowCountRequestTracker};
+    use uuid::Uuid;
+
+    #[test]
+    fn only_the_latest_browse_page_request_is_accepted() {
+        let tracker = PageRequestTracker::default();
+        let older = tracker.begin(0);
+        let newer = tracker.begin(0);
+
+        assert!(!tracker.accepts(older, 0));
+        assert!(tracker.accepts(newer, 0));
+    }
+
+    #[test]
+    fn only_the_latest_row_count_request_is_accepted() {
+        let tracker = RowCountRequestTracker::default();
+        let older = tracker.begin();
+        let newer = tracker.begin();
+
+        assert!(!tracker.accepts(older));
+        assert!(tracker.accepts(newer));
+    }
+
+    #[test]
+    fn browse_page_response_must_match_the_current_offset() {
+        let tracker = PageRequestTracker::default();
+        let request = tracker.begin(100);
+        let same_id_wrong_offset = BrowsePageRequest {
+            id: request.id,
+            offset: 100,
+        };
+
+        assert!(!tracker.accepts(same_id_wrong_offset, 200));
+        assert_ne!(request.id, Uuid::nil());
     }
 }

@@ -97,6 +97,11 @@
 - Switching connections no longer clears the previous connection's saved tabs
 - A browse page or SQL run that finishes late no longer replaces a newer page or result
 - Unsaved edits in one window no longer block or discard edits in another window
+- Workspace changes are coalesced off the GTK thread, flushed before the last window closes, and reported instead of silently lost when persistence fails
+- Saved connections, favorites, organization data, and MCP tokens preserve valid concurrent updates across processes and refuse malformed, oversized, symlinked, or permissively stored input where applicable
+- MCP deadlines cover connection lookup, acquisition, metadata, preview execution, and rollback cleanup, with timed-out or uncertain guarded operations receiving terminal audit outcomes
+- The headless agent refreshes cached sessions when saved transport settings change, bounds health checks and connection attempts, and keeps SSH tunnels alive only while issued connections still use them
+- Secret Service failures are reported instead of being treated as empty database passwords, while SQLite and DuckDB connections do not require Secret Service
 - The headless agent daemon reuses one database session per connection instead of opening a new one on every tool call
 - The agent rate limiter forgets idle callers instead of growing for the lifetime of the process
 - Saved connections are written so only the owner can read them, and a save that fails part way leaves the previous file intact

@@ -279,3 +279,66 @@ async fn a_hostile_file_is_sanitized_rather_than_trusted() {
     assert_eq!(entry.tags.len(), MAX_TAGS_PER_CONNECTION);
     assert!(entry.favorite);
 }
+
+#[tokio::test]
+async fn concurrent_stale_indexes_merge_distinct_records() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("connection-organization.json");
+    save_to(&path, &ConnectionOrganizationIndex::default()).await.unwrap();
+    let mut first = load_from(&path).await.unwrap();
+    let mut second = load_from(&path).await.unwrap();
+    let first_id = Uuid::new_v4();
+    let second_id = Uuid::new_v4();
+    first.set(first_id, organization(Some("First"), &[], false)).unwrap();
+    second.set(second_id, organization(Some("Second"), &[], false)).unwrap();
+    let first_path = path.clone();
+    let second_path = path.clone();
+
+    let (first_result, second_result) = tokio::join!(save_to(&first_path, &first), save_to(&second_path, &second));
+
+    first_result.unwrap();
+    second_result.unwrap();
+    let loaded = load_from(&path).await.unwrap();
+    assert_eq!(loaded.get(first_id).group.as_deref(), Some("First"));
+    assert_eq!(loaded.get(second_id).group.as_deref(), Some("Second"));
+}
+
+#[tokio::test]
+async fn concurrent_stale_indexes_merge_distinct_fields_on_one_record() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("connection-organization.json");
+    let id = Uuid::new_v4();
+    let mut initial = ConnectionOrganizationIndex::default();
+    initial.set(id, organization(None, &["base"], false)).unwrap();
+    save_to(&path, &initial).await.unwrap();
+    let mut grouped = load_from(&path).await.unwrap();
+    let mut favorite = load_from(&path).await.unwrap();
+    grouped.set(id, organization(Some("Prod"), &[], false)).unwrap();
+    favorite.set_favorite(id, true).unwrap();
+    let grouped_path = path.clone();
+    let favorite_path = path.clone();
+
+    let (grouped_result, favorite_result) =
+        tokio::join!(save_to(&grouped_path, &grouped), save_to(&favorite_path, &favorite));
+
+    grouped_result.unwrap();
+    favorite_result.unwrap();
+    let loaded = load_from(&path).await.unwrap().get(id);
+    assert_eq!(loaded.group.as_deref(), Some("Prod"));
+    assert!(loaded.favorite);
+}
+
+#[tokio::test]
+async fn a_malformed_organization_file_survives_a_write() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("connection-organization.json");
+    let malformed = b"{not valid json";
+    tokio::fs::write(&path, malformed).await.unwrap();
+    let mut index = ConnectionOrganizationIndex::default();
+    index
+        .set(Uuid::new_v4(), organization(Some("Prod"), &[], false))
+        .unwrap();
+
+    assert!(save_to(&path, &index).await.is_err());
+    assert_eq!(tokio::fs::read(&path).await.unwrap(), malformed);
+}
