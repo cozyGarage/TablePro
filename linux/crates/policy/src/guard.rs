@@ -523,7 +523,7 @@ impl PolicyGuard {
         }
         let patterns = self.ctx.policy.effective_mask_patterns();
         let sensitive_positions =
-            sql.and_then(|sql| crate::classify::sensitive_projection(sql, &self.ctx.driver_id, &patterns));
+            sql.and_then(|sql| crate::sensitive_projection::sensitive_projection(sql, &self.ctx.driver_id, &patterns));
         apply_masking(result, &patterns, sensitive_positions.as_deref())
     }
 

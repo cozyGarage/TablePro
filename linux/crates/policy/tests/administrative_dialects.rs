@@ -104,8 +104,25 @@ fn postgres_host_and_network_functions_are_administrative() {
         "SELECT dblink('dbname=x', 'DELETE FROM t')",
         "SELECT query_to_xml('DELETE FROM t', true, true, '')",
         "SELECT id FROM t WHERE name = pg_read_file('/etc/passwd')",
+        "SELECT pg_file_write('/tmp/x', 'payload', false)",
+        "SELECT pg_file_unlink('/tmp/x')",
+        "SELECT dblink_open('conn', 'cur', 'SELECT 1')",
+        "SELECT dblink_fetch('conn', 'cur', 10)",
+        "SELECT dblink_connect_u('conn', 'dbname=x')",
+        "SELECT pg_stat_statements_reset()",
     ] {
         assert_admin_denied(sql, "postgres");
+    }
+}
+
+#[test]
+fn sqlite_fileio_functions_are_administrative() {
+    for sql in [
+        "SELECT writefile('/home/user/.bashrc', 'evil')",
+        "SELECT readfile('/etc/shadow')",
+        "SELECT load_extension('/tmp/evil.so')",
+    ] {
+        assert_admin_denied(sql, "sqlite");
     }
 }
 

@@ -208,7 +208,7 @@ async fn controlled_read_unknown_outcome_does_not_poison_governed_writes() {
     let control = OperationControl::new(Default::default(), None);
 
     let error = guard
-        .query_controlled("SELECT pg_sleep(30)", &control)
+        .query_controlled("SELECT * FROM jobs", &control)
         .await
         .expect_err("unknown read outcome must surface");
 

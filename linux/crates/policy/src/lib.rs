@@ -10,6 +10,7 @@ mod guard;
 mod mask;
 mod principal;
 mod rules;
+mod sensitive_projection;
 
 pub use approval::{ApprovalOutcome, ApprovalRequest, ApprovalSink, AutoApproveSink, DenyApprovalSink};
 pub use audit::{
