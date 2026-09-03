@@ -160,12 +160,30 @@ impl DatabaseService {
         Ok(())
     }
 
+    /// Whether some window already owns the saved connection `id`. Callers
+    /// must check this before activating: two windows opening the same
+    /// saved connection would otherwise silently overwrite each other's
+    /// entry, so a caller that steals a live entry can leave the other
+    /// window's connection handle answering for a session it no longer
+    /// owns.
+    pub fn is_active(&self, id: Uuid) -> bool {
+        self.connections
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&id)
+    }
+
     /// Register a fully validated connection and give it focus. Callers must
-    /// prepare the connection before this method: activation itself is
-    /// deliberately infallible and is the final step of a connection switch.
-    /// Activation is additive. A caller that means to replace a connection
-    /// closes the previous one itself, so ownership is never dropped as a
-    /// side effect of opening something else.
+    /// prepare the connection before this method: activation itself does no
+    /// I/O and is the final step of a connection switch. Activation is
+    /// additive. A caller that means to replace a connection closes the
+    /// previous one itself, so ownership is never dropped as a side effect
+    /// of opening something else.
+    ///
+    /// Returns `false` without registering anything when `id` is already
+    /// active. `connection` and `tunnel` are dropped in that case -- this
+    /// consumes them either way, so refusal alone is enough to close them.
+    #[must_use]
     pub fn activate(
         &self,
         id: Uuid,
@@ -174,7 +192,11 @@ impl DatabaseService {
         tunnel: Option<SshTunnel>,
         read_only: bool,
         params: ReconnectParams,
-    ) {
+    ) -> bool {
+        let mut connections = self.connections.lock().unwrap_or_else(|e| e.into_inner());
+        if connections.contains_key(&id) {
+            return false;
+        }
         let arc: Arc<dyn Connection> = Arc::from(connection);
         let environment = metadata.environment;
         let inner = Arc::new(Mutex::new(EntryInner {
@@ -192,8 +214,8 @@ impl DatabaseService {
             cancel,
             _monitor: monitor,
         };
-        let mut connections = self.connections.lock().unwrap_or_else(|e| e.into_inner());
         connections.insert(id, entry);
+        true
     }
 
     pub fn metadata(&self, id: Uuid) -> Option<ConnectionMetadata> {
@@ -279,7 +301,7 @@ mod tests {
             ..Default::default()
         };
         let connection = driver.connect(options.clone()).await.expect("sqlite connection");
-        service.activate(
+        let activated = service.activate(
             id,
             ConnectionMetadata {
                 id,
@@ -298,6 +320,7 @@ mod tests {
                 ssh: None,
             },
         );
+        assert!(activated, "the id is freshly generated, so activation must succeed");
         id
     }
 
@@ -312,6 +335,77 @@ mod tests {
         assert_eq!(service.all_connections().len(), 2);
         assert!(service.handle(first, Principal::human_gui()).is_some());
         assert!(service.handle(second, Principal::human_gui()).is_some());
+    }
+
+    /// H3: two windows opening the same saved connection must not let the
+    /// second one silently steal the first's entry. Before this fix,
+    /// `connections.insert(id, entry)` always overwrote, so window A's
+    /// connection handle would silently start answering for window B's
+    /// session, and A's original entry (and its reconnect-monitor task)
+    /// leaked with no cancellation.
+    #[tokio::test]
+    async fn a_second_window_cannot_steal_an_already_active_connection() {
+        let service = DatabaseService::new();
+        let id = Uuid::new_v4();
+        let driver: Arc<dyn DatabaseDriver> = Arc::new(drivers_sqlite::SqliteDriver);
+        let options = ConnectOptions {
+            database: ":memory:".into(),
+            ..Default::default()
+        };
+        let first_metadata = ConnectionMetadata {
+            id,
+            name: "window A".into(),
+            driver_id: "sqlite".into(),
+            environment: Environment::Local,
+            read_only: false,
+            server_version: None,
+        };
+        let first_conn = driver.connect(options.clone()).await.expect("sqlite connection");
+        assert!(service.activate(
+            id,
+            first_metadata,
+            first_conn,
+            None,
+            false,
+            ReconnectParams {
+                driver: driver.clone(),
+                opts: options.clone(),
+                ssh: None,
+            },
+        ));
+
+        let second_metadata = ConnectionMetadata {
+            id,
+            name: "window B".into(),
+            driver_id: "sqlite".into(),
+            environment: Environment::Local,
+            read_only: false,
+            server_version: None,
+        };
+        let second_conn = driver.connect(options.clone()).await.expect("sqlite connection");
+        let activated = service.activate(
+            id,
+            second_metadata,
+            second_conn,
+            None,
+            false,
+            ReconnectParams {
+                driver,
+                opts: options,
+                ssh: None,
+            },
+        );
+
+        assert!(
+            !activated,
+            "a second window must not overwrite the first window's entry"
+        );
+        assert_eq!(
+            service.metadata(id).map(|m| m.name),
+            Some("window A".into()),
+            "window A's entry must survive the refused activation untouched"
+        );
+        assert!(service.is_active(id));
     }
 
     #[tokio::test]

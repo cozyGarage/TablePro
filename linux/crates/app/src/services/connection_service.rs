@@ -43,6 +43,14 @@ pub struct ActivatedConnection {
 }
 
 impl PreparedConnection {
+    /// The saved connection this would activate, so a caller can check
+    /// `database_service::instance().is_active(id)` before committing to
+    /// the switch -- tearing down whatever it currently owns only after
+    /// confirming the target isn't already open in another window.
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+
     pub(crate) fn new(
         tables: Vec<tablepro_core::TableInfo>,
         views: Vec<tablepro_core::TableInfo>,
@@ -65,9 +73,16 @@ impl PreparedConnection {
         }
     }
 
-    pub fn activate(self) -> ActivatedConnection {
+    /// Returns `None` without changing anything when `id` is already active
+    /// in another window; the caller should show that error and leave
+    /// whatever it currently owns untouched. Callers that must guarantee
+    /// success should check [`Self::id`] against
+    /// `database_service::instance().is_active` before committing to the
+    /// switch (tearing down a previous connection, clearing tabs) so a
+    /// refusal here never needs to be rolled back.
+    pub fn activate(self) -> Option<ActivatedConnection> {
         let id = self.id;
-        database_service::instance().activate(
+        let activated = database_service::instance().activate(
             id,
             self.metadata,
             self.connection,
@@ -75,12 +90,15 @@ impl PreparedConnection {
             self.read_only,
             self.params,
         );
-        ActivatedConnection {
+        if !activated {
+            return None;
+        }
+        Some(ActivatedConnection {
             id,
             tables: self.tables,
             views: self.views,
             driver_id: self.driver_id,
-        }
+        })
     }
 }
 

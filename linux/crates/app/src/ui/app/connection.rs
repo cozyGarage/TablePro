@@ -487,6 +487,19 @@ impl App {
         let Some(prepared) = self.prepared_connection.take() else {
             return;
         };
+        // Check before touching any of this window's own state. Reconnecting
+        // to the connection this window already owns is fine (it will be
+        // closed and reopened below); opening one another window already
+        // owns is refused outright rather than stealing it, so a refusal
+        // never needs to roll back a half-finished switch.
+        let target_id = prepared.id();
+        if self.connection_id != Some(target_id) && database_service::instance().is_active(target_id) {
+            self.connection_transition = ConnectionTransition::Idle;
+            self.switch_saves_pending.clear();
+            self.switch_cancel_audit_was_disabled = None;
+            self.show_toast(&crate::tr!("This connection is already open in another window."));
+            return; // `prepared` drops here, closing the connection it dialled.
+        }
         if self.connected {
             // Persist while the old connection id is still active. Only then
             // dispose the old tab controllers and install the candidate.
@@ -499,7 +512,21 @@ impl App {
         if let Some(previous) = self.connection_id.take() {
             database_service::instance().close(previous);
         }
-        let activated = prepared.activate();
+        let Some(activated) = prepared.activate() else {
+            // Only reachable if another window raced this one between the
+            // check above and here; the GTK main loop makes that
+            // effectively impossible, but stay fail-closed rather than
+            // unwrap a connection-stealing race.
+            self.connection_transition = ConnectionTransition::Idle;
+            self.switch_saves_pending.clear();
+            self.switch_cancel_audit_was_disabled = None;
+            self.connected = false;
+            self.split_view.set_show_sidebar(false);
+            self.disconnect_action.set_enabled(false);
+            self.refresh_window_title();
+            self.show_toast(&crate::tr!("This connection is already open in another window."));
+            return;
+        };
         self.connection_transition = ConnectionTransition::Idle;
         self.switch_saves_pending.clear();
         self.switch_cancel_audit_was_disabled = None;
