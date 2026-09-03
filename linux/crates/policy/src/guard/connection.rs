@@ -146,7 +146,11 @@ impl Connection for PolicyGuard {
         );
         self.prepare_governed_read(&operation).await?;
         let start = Instant::now();
-        let result = self.inner.query(sql).await.map(|value| self.mask_result(value));
+        let result = self
+            .inner
+            .query(sql)
+            .await
+            .map(|value| self.mask_result_for_sql(Some(sql), value));
         let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
         self.audit_read_result(&operation, start, &result, rows).await?;
         result
@@ -173,7 +177,7 @@ impl Connection for PolicyGuard {
             .inner
             .query_controlled(sql, control)
             .await
-            .map(|value| self.mask_result(value));
+            .map(|value| self.mask_result_for_sql(Some(sql), value));
         let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
         self.audit_controlled_read_result(&operation, start, &result, rows)
             .await?;
@@ -201,7 +205,7 @@ impl Connection for PolicyGuard {
             .inner
             .query_params(sql, params)
             .await
-            .map(|value| self.mask_result(value));
+            .map(|value| self.mask_result_for_sql(Some(sql), value));
         let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
         self.audit_read_result(&operation, start, &result, rows).await?;
         result
@@ -235,7 +239,7 @@ impl Connection for PolicyGuard {
             .inner
             .query_params_controlled(sql, params, control)
             .await
-            .map(|value| self.mask_result(value));
+            .map(|value| self.mask_result_for_sql(Some(sql), value));
         let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
         self.audit_controlled_read_result(&operation, start, &result, rows)
             .await?;
@@ -439,7 +443,9 @@ impl PolicyGuard {
         self.handle_intent_failure(self.record_intent(&operation).await)?;
         let mut pending_write = self.ctx.audit_state.pending_write();
         let start = Instant::now();
-        let result = execute(&self.inner).await.map(|value| self.mask_result(value));
+        let result = execute(&self.inner)
+            .await
+            .map(|value| self.mask_result_for_sql(Some(sql), value));
         let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
         self.audit_write_result(&operation, start, &result, rows).await?;
         pending_write.disarm();
@@ -465,7 +471,11 @@ impl Transaction for PolicyTransaction {
                 .handle_intent_failure(self.guard.record_intent(&operation).await)?;
             let mut pending_write = self.guard.ctx.audit_state.pending_write();
             let start = Instant::now();
-            let result = self.inner.query(sql).await.map(|value| self.guard.mask_result(value));
+            let result = self
+                .inner
+                .query(sql)
+                .await
+                .map(|value| self.guard.mask_result_for_sql(Some(sql), value));
             let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
             self.guard
                 .audit_transaction_result(&operation, start, &result, rows)
@@ -483,7 +493,11 @@ impl Transaction for PolicyTransaction {
         );
         self.guard.prepare_governed_read(&operation).await?;
         let start = Instant::now();
-        let result = self.inner.query(sql).await.map(|value| self.guard.mask_result(value));
+        let result = self
+            .inner
+            .query(sql)
+            .await
+            .map(|value| self.guard.mask_result_for_sql(Some(sql), value));
         let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
         self.guard
             .audit_transaction_result(&operation, start, &result, rows)
@@ -511,7 +525,7 @@ impl Transaction for PolicyTransaction {
                 .inner
                 .query_controlled(sql, control)
                 .await
-                .map(|value| self.guard.mask_result(value));
+                .map(|value| self.guard.mask_result_for_sql(Some(sql), value));
             let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
             self.guard
                 .audit_transaction_result(&operation, start, &result, rows)
@@ -533,7 +547,7 @@ impl Transaction for PolicyTransaction {
             .inner
             .query_controlled(sql, control)
             .await
-            .map(|value| self.guard.mask_result(value));
+            .map(|value| self.guard.mask_result_for_sql(Some(sql), value));
         let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
         self.guard
             .audit_transaction_result(&operation, start, &result, rows)
@@ -561,7 +575,7 @@ impl Transaction for PolicyTransaction {
                 .inner
                 .query_params(sql, params)
                 .await
-                .map(|value| self.guard.mask_result(value));
+                .map(|value| self.guard.mask_result_for_sql(Some(sql), value));
             let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
             self.guard
                 .audit_transaction_result(&operation, start, &result, rows)
@@ -583,7 +597,7 @@ impl Transaction for PolicyTransaction {
             .inner
             .query_params(sql, params)
             .await
-            .map(|value| self.guard.mask_result(value));
+            .map(|value| self.guard.mask_result_for_sql(Some(sql), value));
         let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
         self.guard
             .audit_transaction_result(&operation, start, &result, rows)
@@ -616,7 +630,7 @@ impl Transaction for PolicyTransaction {
                 .inner
                 .query_params_controlled(sql, params, control)
                 .await
-                .map(|value| self.guard.mask_result(value));
+                .map(|value| self.guard.mask_result_for_sql(Some(sql), value));
             let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
             self.guard
                 .audit_transaction_result(&operation, start, &result, rows)
@@ -638,7 +652,7 @@ impl Transaction for PolicyTransaction {
             .inner
             .query_params_controlled(sql, params, control)
             .await
-            .map(|value| self.guard.mask_result(value));
+            .map(|value| self.guard.mask_result_for_sql(Some(sql), value));
         let rows = result.as_ref().ok().map(|value| value.rows.len() as u64);
         self.guard
             .audit_transaction_result(&operation, start, &result, rows)

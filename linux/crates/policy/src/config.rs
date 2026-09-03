@@ -137,36 +137,37 @@ pub struct MaskRule {
     pub pattern: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PolicyConfig {
     #[serde(default)]
     pub environments: HashMap<String, EnvPolicyOverride>,
     #[serde(default)]
     pub connection_overrides: HashMap<String, EnvPolicyOverride>,
-    #[serde(default = "default_mask_rules")]
+    /// Patterns the operator adds on top of `mask::DEFAULT_SENSITIVE_PATTERNS`.
+    /// The defaults are always active; there is no way to configure masking
+    /// off for `password`, `ssn`, `cvv` and the rest of the built-in list.
+    #[serde(default)]
     pub mask_patterns: Vec<MaskRule>,
 }
 
-fn default_mask_rules() -> Vec<MaskRule> {
-    crate::mask::DEFAULT_SENSITIVE_PATTERNS
-        .iter()
-        .map(|pattern| MaskRule {
-            pattern: (*pattern).into(),
-        })
-        .collect()
-}
-
-impl Default for PolicyConfig {
-    fn default() -> Self {
-        Self {
-            environments: HashMap::new(),
-            connection_overrides: HashMap::new(),
-            mask_patterns: default_mask_rules(),
-        }
-    }
-}
-
 impl PolicyConfig {
+    /// The full pattern list masking actually uses: the built-in sensitive
+    /// defaults plus whatever the operator configured, deduplicated. An
+    /// operator adding one pattern can only make masking cover more columns,
+    /// never fewer.
+    pub fn effective_mask_patterns(&self) -> Vec<String> {
+        let mut patterns: Vec<String> = crate::mask::DEFAULT_SENSITIVE_PATTERNS
+            .iter()
+            .map(|p| (*p).to_string())
+            .collect();
+        for rule in &self.mask_patterns {
+            if !patterns.contains(&rule.pattern) {
+                patterns.push(rule.pattern.clone());
+            }
+        }
+        patterns
+    }
+
     pub fn for_environment(&self, env: Environment) -> EnvPolicy {
         let defaults = match env {
             Environment::Local | Environment::Dev => EnvPolicy::local_defaults(),
@@ -212,9 +213,10 @@ pub fn load_policy() -> Result<PolicyConfig, String> {
 
 pub fn load_from_path(path: &Path) -> Result<PolicyConfig, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let mut policy: PolicyConfig = toml::from_str(&text).map_err(|e| e.to_string())?;
-    if policy.mask_patterns.is_empty() {
-        policy.mask_patterns = default_mask_rules();
+    let policy: PolicyConfig = toml::from_str(&text).map_err(|e| e.to_string())?;
+    for rule in &policy.mask_patterns {
+        glob::Pattern::new(&rule.pattern.to_lowercase())
+            .map_err(|e| format!("invalid mask_patterns entry {:?}: {e}", rule.pattern))?;
     }
     Ok(policy)
 }
@@ -296,7 +298,7 @@ mod tests {
     #[test]
     fn omitted_mask_patterns_keep_sensitive_defaults() {
         let policy: PolicyConfig = toml::from_str("").unwrap();
-        assert!(!policy.mask_patterns.is_empty());
+        assert!(!policy.effective_mask_patterns().is_empty());
     }
 
     #[test]
@@ -313,6 +315,30 @@ mod tests {
         let path = dir.path().join("policy.toml");
         std::fs::write(&path, "mask_patterns = []").unwrap();
         let policy = load_from_path(&path).unwrap();
-        assert!(!policy.mask_patterns.is_empty());
+        assert!(!policy.effective_mask_patterns().is_empty());
+    }
+
+    #[test]
+    fn a_custom_mask_pattern_adds_to_the_defaults_instead_of_replacing_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.toml");
+        std::fs::write(&path, r#"mask_patterns = [{ pattern = "*internal*" }]"#).unwrap();
+        let policy = load_from_path(&path).unwrap();
+        let patterns = policy.effective_mask_patterns();
+        assert!(patterns.contains(&"*internal*".to_string()));
+        for default_pattern in crate::mask::DEFAULT_SENSITIVE_PATTERNS {
+            assert!(
+                patterns.iter().any(|p| p == default_pattern),
+                "custom pattern discarded default {default_pattern}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_invalid_glob_mask_pattern_is_refused_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.toml");
+        std::fs::write(&path, r#"mask_patterns = [{ pattern = "*pan[*" }]"#).unwrap();
+        assert!(load_from_path(&path).is_err());
     }
 }

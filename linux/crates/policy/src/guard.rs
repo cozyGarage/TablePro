@@ -509,17 +509,20 @@ impl PolicyGuard {
     }
 
     fn mask_result(&self, result: QueryResult) -> QueryResult {
+        self.mask_result_for_sql(None, result)
+    }
+
+    /// Like `mask_result`, but when `sql` is available it also consults the
+    /// parsed statement's projection so an alias or wrapping expression
+    /// cannot hide a sensitive source column from the result-set-name match.
+    fn mask_result_for_sql(&self, sql: Option<&str>, result: QueryResult) -> QueryResult {
         if !self.should_mask() {
             return result;
         }
-        let patterns = self
-            .ctx
-            .policy
-            .mask_patterns
-            .iter()
-            .map(|rule| rule.pattern.clone())
-            .collect::<Vec<_>>();
-        apply_masking(result, &patterns)
+        let patterns = self.ctx.policy.effective_mask_patterns();
+        let sensitive_positions =
+            sql.and_then(|sql| crate::classify::sensitive_projection(sql, &self.ctx.driver_id, &patterns));
+        apply_masking(result, &patterns, sensitive_positions.as_deref())
     }
 
     async fn audit_read_result<T>(
