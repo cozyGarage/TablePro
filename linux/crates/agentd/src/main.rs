@@ -81,17 +81,51 @@ struct TtyApprovalSink;
 
 const MAX_TTY_ANSWER_BYTES: u64 = 64;
 
+/// How long a human has to answer one prompt before it is treated as a
+/// denial. Without this, one unanswered prompt would block every later
+/// tool call forever, since the stdio server processes requests serially.
+const APPROVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 #[async_trait]
 impl ApprovalSink for TtyApprovalSink {
     async fn request(&self, req: ApprovalRequest) -> ApprovalOutcome {
         let prompt = format!(
             "\n[tablepro-agentd] approval required\n  connection: {}\n  rule: {}\n  reason: {}\n  sql: {}\nApprove? [y/N] ",
-            req.connection_name, req.rule, req.reason, req.sql
+            sanitize_for_terminal(&req.connection_name),
+            sanitize_for_terminal(&req.rule),
+            sanitize_for_terminal(&req.reason),
+            sanitize_for_terminal(&req.sql),
         );
-        tokio::task::spawn_blocking(move || ask_on_controlling_terminal(&prompt))
-            .await
-            .unwrap_or(ApprovalOutcome::Deny)
+        approval_with_timeout(APPROVAL_TIMEOUT, move || ask_on_controlling_terminal(&prompt)).await
     }
+}
+
+async fn approval_with_timeout<F>(timeout: std::time::Duration, work: F) -> ApprovalOutcome
+where
+    F: FnOnce() -> ApprovalOutcome + Send + 'static,
+{
+    match tokio::time::timeout(timeout, tokio::task::spawn_blocking(work)).await {
+        Ok(joined) => joined.unwrap_or(ApprovalOutcome::Deny),
+        Err(_) => {
+            tracing::warn!(
+                seconds = timeout.as_secs(),
+                "approval prompt unanswered; denying (the blocking read on /dev/tty is left running \
+                 and will hold one blocking-pool thread until it eventually gets a line or the process exits)"
+            );
+            ApprovalOutcome::Deny
+        }
+    }
+}
+
+/// Strips control characters (including ESC) from operator-facing text
+/// before it is written to the terminal. `req.sql` is attacker-controlled:
+/// an agent could otherwise embed ANSI escapes and carriage returns to
+/// erase the displayed rule and reason and redraw a fake prompt, so the
+/// human approves something other than what they read.
+fn sanitize_for_terminal(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { '\u{FFFD}' } else { c })
+        .collect()
 }
 
 fn ask_on_controlling_terminal(prompt: &str) -> ApprovalOutcome {
@@ -235,6 +269,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
     use tablepro_core::{AuthMode, Environment};
+
+    #[test]
+    fn sanitize_for_terminal_strips_ansi_escapes_and_carriage_returns() {
+        // The exact shape of the bypass: erase the displayed rule/reason
+        // with CR and an ANSI clear-line, then redraw a fake benign prompt.
+        let hostile = "\x1b[2K\rApprove? [y/N] y\x1b[0m";
+        let sanitized = sanitize_for_terminal(hostile);
+        assert!(!sanitized.contains('\x1b'));
+        assert!(!sanitized.contains('\r'));
+        assert_eq!(sanitized.chars().filter(|c| *c == '\u{FFFD}').count(), 3);
+    }
+
+    #[test]
+    fn sanitize_for_terminal_leaves_ordinary_sql_untouched() {
+        let sql = "SELECT pan FROM cards WHERE id = 1";
+        assert_eq!(sanitize_for_terminal(sql), sql);
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_prompt_is_denied_after_the_timeout_instead_of_hanging_forever() {
+        // The blocking closure outlives the timeout but is still bounded:
+        // tokio's runtime waits for spawned blocking work to finish on
+        // shutdown, so an unbounded sleep here would hang the test process.
+        let started = std::time::Instant::now();
+        let outcome = approval_with_timeout(std::time::Duration::from_millis(20), || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            ApprovalOutcome::AllowOnce
+        })
+        .await;
+        assert_eq!(outcome, ApprovalOutcome::Deny);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
 
     fn saved_connection(id: Uuid) -> SavedConnection {
         SavedConnection {
