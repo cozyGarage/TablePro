@@ -59,6 +59,10 @@ pub enum AppMsg {
     ExplainActiveQuery,
     ShowPreferences,
     NewWindow,
+    /// A secondary window spawned by `NewWindow` was destroyed. Carries the
+    /// destroyed GTK widget's pointer, cast to `usize`, so the entry in
+    /// `extra_windows` can be found and dropped.
+    ExtraWindowClosed(usize),
     RowCountLoaded(Uuid, crate::ui::browse_tab::BrowseRowCountRequest, u64),
     ExportCsv,
     ExportJson,

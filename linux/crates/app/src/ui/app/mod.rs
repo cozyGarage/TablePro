@@ -193,8 +193,15 @@ pub struct App {
     /// trackers have already been cleared by the close path.
     closed_tabs_stack: std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<ClosedTabDescriptor>>>,
     /// Extra ApplicationWindows spawned via New Window. Kept alive so
-    /// closing the primary window does not drop them mid-use.
-    extra_windows: Vec<Controller<App>>,
+    /// closing the primary window does not drop them mid-use. Removing an
+    /// entry (see `AppMsg::ExtraWindowClosed`) drops its `Controller`,
+    /// which is what actually triggers that window's `Component::shutdown`.
+    extra_windows: Vec<(usize, Controller<App>)>,
+    /// Source for the once-a-second health poll, so `shutdown` can remove
+    /// it instead of leaving it firing forever after this window closes.
+    poll_health_source: Option<glib::SourceId>,
+    /// Source for the hourly history prune, same reasoning.
+    history_prune_source: Option<glib::SourceId>,
 }
 
 impl App {
@@ -398,7 +405,7 @@ impl SimpleComponent for App {
                     WelcomeViewOutput::Delete(id) => AppMsg::DeleteConnection(id),
                 });
 
-        let model = App {
+        let mut model = App {
             registry,
             window: root.clone(),
             split_view: widgets.split_view.clone(),
@@ -454,6 +461,8 @@ impl SimpleComponent for App {
                 CLOSED_TABS_CAPACITY,
             ))),
             extra_windows: Vec::new(),
+            poll_health_source: None,
+            history_prune_source: None,
         };
         sender.input(AppMsg::ReloadConnections);
         model.show_welcome_page(sender.clone());
@@ -474,12 +483,12 @@ impl SimpleComponent for App {
         });
 
         let poll_sender = sender.clone();
-        glib::timeout_add_seconds_local(1, move || {
+        model.poll_health_source = Some(glib::timeout_add_seconds_local(1, move || {
             poll_sender.input(AppMsg::PollHealth);
             glib::ControlFlow::Continue
-        });
+        }));
 
-        glib::timeout_add_seconds_local(3600, || {
+        model.history_prune_source = Some(glib::timeout_add_seconds_local(3600, || {
             let retention = crate::services::preferences::load().history_retention_days;
             relm4::spawn(async move {
                 if let Err(e) = tablepro_storage::query_history::prune_older_than(retention).await {
@@ -487,7 +496,7 @@ impl SimpleComponent for App {
                 }
             });
             glib::ControlFlow::Continue
-        });
+        }));
 
         model.load_favorites(sender.clone());
         model.load_connection_organization(sender.clone());
@@ -684,7 +693,22 @@ impl SimpleComponent for App {
                     ctrl.widget().set_application(Some(&application));
                 }
                 ctrl.widget().present();
-                self.extra_windows.push(ctrl);
+                // Dropping a Controller is what actually runs the child's
+                // Component::shutdown (which closes its connection and
+                // cancels its timers), but nothing does that when the user
+                // just closes the window -- the GTK widget is destroyed
+                // while this Vec keeps the Controller alive forever. Watch
+                // for that destruction and remove our own entry so the
+                // Controller drops.
+                let key = ctrl.widget().as_ptr() as usize;
+                let destroy_sender = sender.clone();
+                ctrl.widget().connect_destroy(move |_| {
+                    destroy_sender.input(AppMsg::ExtraWindowClosed(key));
+                });
+                self.extra_windows.push((key, ctrl));
+            }
+            AppMsg::ExtraWindowClosed(key) => {
+                self.extra_windows.retain(|(k, _)| *k != key);
             }
             AppMsg::ExportCsv => self.on_export(ExportFormat::Csv),
             AppMsg::ExportJson => self.on_export(ExportFormat::Json),
@@ -705,6 +729,25 @@ impl SimpleComponent for App {
             AppMsg::OpenSaved(saved) => self.on_open_saved(saved, sender),
             AppMsg::ReopenClosedTab => self.on_reopen_closed_tab(sender),
             AppMsg::ShowFilterDialog => self.on_show_filter_dialog(),
+        }
+    }
+
+    /// Runs once for every window, including the primary one on full
+    /// application shutdown (relm4 guarantees this). Closing a window's
+    /// GTK widget alone does not release what it owns: the DatabaseService
+    /// entry (server session, SSH tunnel, reconnect-monitor task) stays
+    /// registered under this window's connection id, and the health-poll
+    /// and history-prune timers keep firing on the process-wide main
+    /// context, until this runs (H12).
+    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        if let Some(id) = self.connection_id.take() {
+            crate::services::database_service::instance().close(id);
+        }
+        if let Some(source) = self.poll_health_source.take() {
+            source.remove();
+        }
+        if let Some(source) = self.history_prune_source.take() {
+            source.remove();
         }
     }
 }
