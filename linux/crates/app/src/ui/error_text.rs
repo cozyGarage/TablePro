@@ -10,6 +10,10 @@ pub fn build_sql_message(error: &BuildSqlError) -> String {
                 .replace("{expected}", &expected.to_string())
                 .replace("{got}", &got.to_string())
         }
+        BuildSqlError::StaleColumns => crate::tr!(
+            "This table's columns changed after you started editing (for example, in a Structure tab). \
+             Reload the page and reapply your changes."
+        ),
     }
 }
 

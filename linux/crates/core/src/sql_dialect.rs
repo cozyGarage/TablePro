@@ -42,6 +42,9 @@ pub enum BuildSqlError {
 
     #[error("new_values length {got} does not match columns length {expected}")]
     LengthMismatch { expected: usize, got: usize },
+
+    #[error("the table's columns changed since this edit was made; reload and reapply your changes")]
+    StaleColumns,
 }
 
 pub fn quote_ident(driver_id: &str, name: &str) -> String {

@@ -616,6 +616,15 @@ impl TabChangeTracker {
             // acceptable: PK values were captured from the original
             // row at edit time and are still equality-correct).
             let pk_values: Vec<Value> = pk_keyvalues.iter().map(keyvalue_to_value).collect();
+            // Both col_idx (per edit) and pk_indices (derived from the
+            // current `columns`) were computed against whatever schema
+            // was current when the edit was tracked. If a Structure tab
+            // dropped or reordered a column since, those indices can run
+            // past the current columns/pk_values -- indexing them
+            // directly would panic and abort the app mid-save.
+            if edits.iter().any(|(col_idx, ..)| *col_idx >= columns.len()) || pk_values.len() != pk_indices.len() {
+                return Err(BuildSqlError::StaleColumns);
+            }
             let mut params: Vec<Value> = Vec::new();
             let mut placeholder_idx = 0;
             let set_clauses: Vec<String> = edits
@@ -683,6 +692,12 @@ impl TabChangeTracker {
                 return Err(BuildSqlError::NoPrimaryKey);
             }
             let pk_values: Vec<Value> = pk_keyvalues.iter().map(keyvalue_to_value).collect();
+            // Same staleness guard as the UPDATE path above: the PK
+            // shape recorded when this delete was tracked may no longer
+            // match the table's current primary key.
+            if pk_values.len() != pk_indices.len() {
+                return Err(BuildSqlError::StaleColumns);
+            }
             let mut params: Vec<Value> = Vec::new();
             // Same NULL-safe rewrite as the UPDATE path above.
             let where_clauses: Vec<String> = pk_indices

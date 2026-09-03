@@ -168,3 +168,6 @@
 - The administrative-function list denies more PostgreSQL host-access and dblink calls (pg_file_write, pg_file_unlink, dblink_open, dblink_fetch, dblink_connect_u, pg_stat_statements_reset), and SQLite's fileio and extension-loading functions (writefile, readfile, load_extension) are recognised as administrative for the first time
 - The MCP execute_query tool refuses a statement that writes instead of committing it directly, so a write can no longer skip execute_write's preview-by-default workflow
 - MySQL connections tunnelled through SSH verify Verify Ca and Verify Full against the real database hostname instead of the local tunnel endpoint, matching how PostgreSQL already worked
+- Saving a Browse tab edit made before a Structure tab dropped or reordered a column now shows a clear "reload and reapply" error instead of crashing the whole application
+- Two windows can no longer open the same saved connection at once; the second is refused with a toast instead of silently taking over the first window's live connection
+- Closing a secondary window now closes its database connection, SSH tunnel, and reconnect monitor, and cancels its health-poll and history-prune timers, instead of leaving them running for the rest of the process
