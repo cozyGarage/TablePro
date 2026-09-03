@@ -162,3 +162,4 @@
 - A policy pattern the operator adds is applied on top of the built-in sensitive-column patterns instead of replacing them, and an unparseable mask pattern refuses to load instead of silently matching nothing
 - An SSH jump hop configured for password authentication is refused instead of silently authenticating with the first hop's password
 - ClickHouse identifier quoting escapes a backslash, so a table or column name reported by the server cannot break out of its quoted identifier
+- Query history is stored at 0600, including its WAL and SHM files, instead of the filesystem default, so another local account cannot read past statement text

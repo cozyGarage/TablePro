@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -77,14 +77,56 @@ pub async fn init() -> Result<(), StorageError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    create_private_file_if_missing(&path)?;
     let opts = SqliteConnectOptions::new()
         .filename(&path)
         .create_if_missing(true)
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
     let pool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await?;
     apply_schema(&pool).await?;
+    restrict_permissions(&path)?;
     POOL.set(pool)
         .map_err(|_| StorageError::Schema("history pool already initialised".into()))?;
+    Ok(())
+}
+
+/// Creates the database file with 0600 up front so sqlx never has a chance
+/// to create it at its own default mode; a fresh file is the common case.
+fn create_private_file_if_missing(path: &PathBuf) -> Result<(), StorageError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    if path.exists() {
+        return Ok(());
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map(|_| ())
+        .or_else(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                Ok(())
+            } else {
+                Err(StorageError::Io(error))
+            }
+        })
+}
+
+/// Restricts the main database file and its WAL/SHM siblings, covering both
+/// a database already created with wider permissions by an older build and
+/// the WAL/SHM files sqlx creates on its own once WAL mode is active.
+fn restrict_permissions(path: &Path) -> Result<(), StorageError> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+        return Ok(());
+    };
+    for suffix in ["-wal", "-shm"] {
+        let sibling = path.with_file_name(format!("{file_name}{suffix}"));
+        if sibling.exists() {
+            std::fs::set_permissions(&sibling, std::fs::Permissions::from_mode(0o600))?;
+        }
+    }
     Ok(())
 }
 
@@ -533,5 +575,35 @@ mod tests {
         assert_eq!(csv_field("a,b"), "\"a,b\"");
         assert_eq!(csv_field("a\"b"), "\"a\"\"b\"");
         assert_eq!(csv_field("line\n"), "\"line\n\"");
+    }
+
+    #[test]
+    fn a_fresh_history_db_is_created_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        create_private_file_if_missing(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn restrict_permissions_tightens_the_database_and_its_wal_and_shm_siblings() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        let wal = dir.path().join("history.db-wal");
+        let shm = dir.path().join("history.db-shm");
+        for p in [&path, &wal, &shm] {
+            std::fs::write(p, b"").unwrap();
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        restrict_permissions(&path).unwrap();
+
+        for p in [&path, &wal, &shm] {
+            let mode = std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{p:?} must be private");
+        }
     }
 }
