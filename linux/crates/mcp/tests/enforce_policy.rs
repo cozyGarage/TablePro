@@ -125,6 +125,37 @@ async fn a_read_only_token_is_refused_a_delete_before_a_connection_opens() {
     assert_eq!(provider.connection_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
+/// H7: execute_write defaults to preview=true (run in a transaction, report,
+/// roll back). execute_query must not be a second, unpreviewed path to the
+/// same write for a token that already holds tools:write scope.
+#[tokio::test]
+async fn a_write_scoped_token_cannot_use_execute_query_to_skip_the_preview_workflow() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(TokenStore::open(dir.path().join("tokens.json")).unwrap());
+    let connection_id = Uuid::nil();
+    let (_metadata, plaintext) = store
+        .issue("writer".into(), TokenPermissions::ReadWrite, vec![connection_id], None)
+        .unwrap();
+    let provider = Arc::new(RecordingProvider::default());
+    let bridge = McpBridge::new(provider.clone(), store);
+    let token = bridge.authenticate(&plaintext).unwrap();
+
+    let error = bridge
+        .execute_query(&token, connection_id, "DELETE FROM t WHERE id = 1 RETURNING *")
+        .await
+        .unwrap_err();
+
+    assert!(
+        error.contains("execute_write"),
+        "must steer the caller to execute_write: {error}"
+    );
+    assert_eq!(
+        provider.connection_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "must refuse before ever touching the connection"
+    );
+}
+
 #[tokio::test]
 async fn guarded_tool_path_journals_policy_decision() {
     use tablepro_core::Environment;

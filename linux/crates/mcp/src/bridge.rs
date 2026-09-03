@@ -228,6 +228,11 @@ impl McpBridge {
         };
         if sql_looks_like_write(sql, &driver_id) {
             authorize_scopes(token.permissions, McpScope::ToolsWrite)?;
+            return Err(
+                "execute_query only runs reads; call execute_write for a statement that writes, so the \
+                 preview-by-default workflow applies"
+                    .into(),
+            );
         }
         let max_rows = self.max_rows;
         let sql = sql.to_string();
