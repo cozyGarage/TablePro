@@ -167,3 +167,4 @@
 - Blast-radius limits now cover INSERT the same way they already covered UPDATE and DELETE, and an UPDATE/DELETE's JOIN, USING, or FROM clause is included in the affected-row estimate instead of being silently dropped
 - The administrative-function list denies more PostgreSQL host-access and dblink calls (pg_file_write, pg_file_unlink, dblink_open, dblink_fetch, dblink_connect_u, pg_stat_statements_reset), and SQLite's fileio and extension-loading functions (writefile, readfile, load_extension) are recognised as administrative for the first time
 - The MCP execute_query tool refuses a statement that writes instead of committing it directly, so a write can no longer skip execute_write's preview-by-default workflow
+- MySQL connections tunnelled through SSH verify Verify Ca and Verify Full against the real database hostname instead of the local tunnel endpoint, matching how PostgreSQL already worked

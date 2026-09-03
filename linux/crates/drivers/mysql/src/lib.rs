@@ -10,9 +10,15 @@ use futures::stream::StreamExt;
 
 use tablepro_core::{
     ColumnInfo, ConnectOptions, Connection, DatabaseDriver, DriverError, ExecResult, ForeignKeyInfo, IndexInfo,
-    MAX_QUERY_ROWS, OperationControl, QueryResult, TableInfo, Value, check_pre_dispatch, run_controlled_setup,
-    run_server_cancellable,
+    MAX_QUERY_ROWS, OperationControl, QueryResult, TableInfo, Transport, Value, check_pre_dispatch,
+    run_controlled_setup, run_server_cancellable,
 };
+
+/// Name of the SSH-forwarded rendezvous socket inside the private directory
+/// `SshTunnel::open_chain_socket` creates. Not a real mysqld socket; just a
+/// name shared between `forwarded_socket_name` (which tells the transport
+/// layer to forward one) and `connect` (which dials it).
+const FORWARDED_SOCKET_NAME: &str = "mysqld.sock";
 
 pub struct MysqlDriver;
 
@@ -38,24 +44,12 @@ impl DatabaseDriver for MysqlDriver {
         true
     }
 
+    fn forwarded_socket_name(&self, _service_port: u16) -> Option<String> {
+        Some(FORWARDED_SOCKET_NAME.to_string())
+    }
+
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
-        use tablepro_core::TlsMode;
-        let mut mysql_opts = MySqlConnectOptions::new()
-            .host(&opts.host)
-            .port(opts.port)
-            .database(&opts.database)
-            .username(&opts.username)
-            .password(opts.password.expose_secret())
-            .ssl_mode(match opts.tls.mode {
-                TlsMode::Disabled => sqlx::mysql::MySqlSslMode::Disabled,
-                TlsMode::Prefer => sqlx::mysql::MySqlSslMode::Preferred,
-                TlsMode::Require => sqlx::mysql::MySqlSslMode::Required,
-                TlsMode::VerifyCa => sqlx::mysql::MySqlSslMode::VerifyCa,
-                TlsMode::VerifyFull => sqlx::mysql::MySqlSslMode::VerifyIdentity,
-            });
-        if let Some(path) = &opts.tls.root_cert {
-            mysql_opts = mysql_opts.ssl_ca(path);
-        }
+        let mysql_opts = mysql_connect_options(&opts);
         let cancellation_options = mysql_opts.clone();
         let pool = MySqlPoolOptions::new()
             .max_connections(4)
@@ -663,6 +657,41 @@ fn bind_mysql_params<'q>(
     q
 }
 
+/// Dial through the SSH-forwarded socket when there is one, keeping the real
+/// service hostname as the TLS identity sqlx verifies against; otherwise
+/// dial and verify the same TCP host, exactly as an untunnelled connection
+/// already did.
+fn mysql_connect_options(opts: &ConnectOptions) -> MySqlConnectOptions {
+    use tablepro_core::TlsMode;
+    let mut mysql_opts = match opts.transport() {
+        Transport::Tcp { host, port } => MySqlConnectOptions::new().host(host).port(port),
+        Transport::Socket {
+            directory,
+            identity_host,
+            identity_port,
+            ..
+        } => MySqlConnectOptions::new()
+            .host(identity_host)
+            .port(identity_port)
+            .socket(directory.join(FORWARDED_SOCKET_NAME)),
+    };
+    mysql_opts = mysql_opts
+        .database(&opts.database)
+        .username(&opts.username)
+        .password(opts.password.expose_secret())
+        .ssl_mode(match opts.tls.mode {
+            TlsMode::Disabled => sqlx::mysql::MySqlSslMode::Disabled,
+            TlsMode::Prefer => sqlx::mysql::MySqlSslMode::Preferred,
+            TlsMode::Require => sqlx::mysql::MySqlSslMode::Required,
+            TlsMode::VerifyCa => sqlx::mysql::MySqlSslMode::VerifyCa,
+            TlsMode::VerifyFull => sqlx::mysql::MySqlSslMode::VerifyIdentity,
+        });
+    if let Some(path) = &opts.tls.root_cert {
+        mysql_opts = mysql_opts.ssl_ca(path);
+    }
+    mysql_opts
+}
+
 fn quote_ident(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
 }
@@ -721,5 +750,36 @@ mod tests {
         assert_eq!(quote_ident("users"), "`users`");
         assert_eq!(quote_ident("My Table"), "`My Table`");
         assert_eq!(quote_ident("evil`; DROP TABLE x; --"), "`evil``; DROP TABLE x; --`");
+    }
+
+    #[test]
+    fn a_direct_connection_dials_and_verifies_the_same_host() {
+        let opts = ConnectOptions {
+            host: "db.corp.example".into(),
+            port: 3306,
+            ..Default::default()
+        };
+        let mysql_opts = mysql_connect_options(&opts);
+        assert_eq!(mysql_opts.get_host(), "db.corp.example");
+        assert_eq!(mysql_opts.get_socket(), None);
+    }
+
+    /// H1: a tunnelled connection must dial the forwarded local socket but
+    /// keep verifying TLS against the real service hostname, not 127.0.0.1
+    /// -- exactly the pattern PostgreSQL's driver already uses.
+    #[test]
+    fn a_tunnelled_connection_dials_the_forwarded_socket_and_verifies_the_service_hostname() {
+        let directory = std::path::PathBuf::from("/tmp/tablepro-ssh-abc123");
+        let opts = ConnectOptions {
+            host: "127.0.0.1".into(),
+            port: 54321,
+            service_endpoint: Some(("db.corp.example".into(), 3306)),
+            forwarded_socket_dir: Some(directory.clone()),
+            ..Default::default()
+        };
+        let mysql_opts = mysql_connect_options(&opts);
+        assert_eq!(mysql_opts.get_host(), "db.corp.example");
+        assert_eq!(mysql_opts.get_port(), 3306);
+        assert_eq!(mysql_opts.get_socket(), Some(&directory.join(FORWARDED_SOCKET_NAME)));
     }
 }
