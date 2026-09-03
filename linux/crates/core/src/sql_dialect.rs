@@ -45,8 +45,17 @@ pub enum BuildSqlError {
 }
 
 pub fn quote_ident(driver_id: &str, name: &str) -> String {
+    let name: std::borrow::Cow<'_, str> = if validate_ident(name).is_err() {
+        name.chars().filter(|c| !c.is_control()).collect::<String>().into()
+    } else {
+        name.into()
+    };
     match driver_id {
-        "mysql" | "clickhouse" => format!("`{}`", name.replace('`', "``")),
+        // ClickHouse backtick-quoted identifiers treat a backslash as an
+        // escape character, exactly like its string literals (sql_literal.rs);
+        // a table named `evil\` would otherwise consume the closing backtick.
+        "clickhouse" => format!("`{}`", name.replace('\\', "\\\\").replace('`', "``")),
+        "mysql" => format!("`{}`", name.replace('`', "``")),
         "mssql" => format!("[{}]", name.replace(']', "]]")),
         _ => format!("\"{}\"", name.replace('"', "\"\"")),
     }
@@ -347,6 +356,32 @@ mod tests {
     fn quote_ident_doubles_embedded_delimiter() {
         assert_eq!(quote_ident("postgres", "foo\"bar"), "\"foo\"\"bar\"");
         assert_eq!(quote_ident("mysql", "foo`bar"), "`foo``bar`");
+    }
+
+    /// The exact shape that broke identifier quoting: a trailing backslash
+    /// consumes the closing backtick, so text after it parses as SQL rather
+    /// than staying part of the identifier. Mirrors the literal-escaping
+    /// regression test in sql_literal.rs.
+    #[test]
+    fn clickhouse_identifier_quoting_escapes_a_trailing_backslash() {
+        assert_eq!(quote_ident("clickhouse", "evil\\"), "`evil\\\\`");
+        assert_eq!(
+            quote_ident("clickhouse", "evil\\`; DROP TABLE users; --"),
+            "`evil\\\\``; DROP TABLE users; --`"
+        );
+    }
+
+    #[test]
+    fn mysql_identifier_quoting_does_not_touch_a_backslash() {
+        // MySQL identifiers (unlike its string literals) do not treat
+        // backslash as an escape character, so doubling it here would
+        // corrupt the identifier instead of protecting it.
+        assert_eq!(quote_ident("mysql", "evil\\"), "`evil\\`");
+    }
+
+    #[test]
+    fn quote_ident_strips_control_characters_from_an_invalid_identifier() {
+        assert_eq!(quote_ident("postgres", "a\nb"), "\"ab\"");
     }
 
     #[test]
