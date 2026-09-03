@@ -233,23 +233,22 @@ async fn resolve_saved_ssh_hop(
     hop_index: usize,
 ) -> Result<SshConfig, TransportError> {
     let auth = match &saved.auth {
+        SavedSshAuth::Password if hop_index > 0 => {
+            // The keyring holds one SSH password per connection, not per hop
+            // (storage::secrets keys on connection id and secret kind only),
+            // so a jump hop cannot have its own password. Reusing hop 0's
+            // password here would send it to a different host silently; fail
+            // closed instead.
+            return Err(TransportError::Secret(format!(
+                "jump hop {hop_index} uses password auth, but only hop 0 can \
+                 (edit connections.json jump auth to use a private key for this hop)"
+            )));
+        }
         SavedSshAuth::Password => {
-            let pw = if hop_index == 0 {
-                load_ssh_password(id)
-                    .await
-                    .map_err(|e| TransportError::Secret(format!("load ssh password: {e}")))?
-                    .ok_or_else(|| TransportError::Secret("ssh password not in keyring".into()))?
-            } else {
-                load_ssh_password(id)
-                    .await
-                    .map_err(|e| TransportError::Secret(format!("load ssh password for hop {hop_index}: {e}")))?
-                    .ok_or_else(|| {
-                        TransportError::Secret(format!(
-                            "ssh password for jump hop {hop_index} not in keyring \
-                             (edit connections.json jump auth to use a private key, or store the hop-0 password)"
-                        ))
-                    })?
-            };
+            let pw = load_ssh_password(id)
+                .await
+                .map_err(|e| TransportError::Secret(format!("load ssh password: {e}")))?
+                .ok_or_else(|| TransportError::Secret("ssh password not in keyring".into()))?;
             SshAuth::Password { password: pw }
         }
         SavedSshAuth::PrivateKey { path, has_passphrase } => {
@@ -497,5 +496,72 @@ mod tests {
         assert!(check_auth_mode(AuthMode::Kerberos, false, "PostgreSQL").is_err());
         assert!(check_auth_mode(AuthMode::Kerberos, true, "SQL Server").is_ok());
         assert!(check_auth_mode(AuthMode::Password, false, "PostgreSQL").is_ok());
+    }
+
+    fn key_hop(host: &str) -> SavedSshConfig {
+        SavedSshConfig {
+            host: host.into(),
+            port: 22,
+            username: "svc".into(),
+            auth: SavedSshAuth::PrivateKey {
+                path: "/home/svc/.ssh/id_ed25519".into(),
+                has_passphrase: false,
+            },
+            jump: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_jump_hop_cannot_use_password_auth() {
+        let bastion = SavedSshConfig {
+            jump: Some(Box::new(SavedSshConfig {
+                auth: SavedSshAuth::Password,
+                ..key_hop("jump2.partner")
+            })),
+            ..key_hop("bastion.corp")
+        };
+
+        let error = resolve_saved_ssh_chain(Uuid::new_v4(), &bastion)
+            .await
+            .expect_err("a jump hop with password auth must be refused");
+
+        let message = error.to_string();
+        assert!(message.contains("hop 1"), "unexpected error: {message}");
+        assert!(
+            !message.contains("not in keyring"),
+            "must fail before ever touching the keyring: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_multi_hop_key_only_chain_still_resolves() {
+        let bastion = SavedSshConfig {
+            jump: Some(Box::new(key_hop("jump2.partner"))),
+            ..key_hop("bastion.corp")
+        };
+
+        let chain = resolve_saved_ssh_chain(Uuid::new_v4(), &bastion)
+            .await
+            .expect("a chain with only key-based hops must resolve");
+
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].host, "bastion.corp");
+        assert_eq!(chain[1].host, "jump2.partner");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running Secret Service; scripts/test-secret-service.sh provides one"]
+    async fn hop_zero_password_auth_still_works() {
+        let bastion = SavedSshConfig {
+            auth: SavedSshAuth::Password,
+            jump: Some(Box::new(key_hop("jump2.partner"))),
+            ..key_hop("bastion.corp")
+        };
+
+        let error = resolve_saved_ssh_chain(Uuid::new_v4(), &bastion).await.unwrap_err();
+        assert!(
+            error.to_string().contains("not in keyring"),
+            "hop 0 password auth must still reach the keyring lookup: {error}"
+        );
     }
 }
