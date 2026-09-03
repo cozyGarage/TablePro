@@ -16,7 +16,7 @@ pub use audit::{
     AuditApprovalOutcome, AuditError, AuditErrorCategory, AuditEvent, AuditOperationClass, AuditPreviewState,
     AuditRecordPhase, AuditSink, AuditState, AuditTerminalStatus, AuditTransactionOutcome, NullAuditSink,
 };
-pub use blast_radius::{BlastRadiusResult, count_sql_for_mutation};
+pub use blast_radius::{BlastRadiusResult, BlastRadiusRewrite, count_sql_for_mutation};
 pub use classify::{StatementClass, StatementFacts, classify, statement_requires_write_capability};
 pub use config::{EnvPolicy, MaskRule, PolicyConfig, WritePolicy, load_from_path, load_policy, policy_path};
 pub use guard::{GuardContext, PolicyGuard};

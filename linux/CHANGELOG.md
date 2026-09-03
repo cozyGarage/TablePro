@@ -164,3 +164,4 @@
 - ClickHouse identifier quoting escapes a backslash, so a table or column name reported by the server cannot break out of its quoted identifier
 - Query history is stored at 0600, including its WAL and SHM files, instead of the filesystem default, so another local account cannot read past statement text
 - The headless agent daemon's terminal approval prompt strips control characters from the displayed SQL and rule/reason text instead of writing them to the terminal as-is, and denies an unanswered prompt after two minutes instead of blocking every later tool call indefinitely
+- Blast-radius limits now cover INSERT the same way they already covered UPDATE and DELETE, and an UPDATE/DELETE's JOIN, USING, or FROM clause is included in the affected-row estimate instead of being silently dropped

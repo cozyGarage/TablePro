@@ -1,4 +1,6 @@
-use sqlparser::ast::{Delete, Expr, FromTable, Statement, TableFactor, TableWithJoins};
+use sqlparser::ast::{
+    Delete, Expr, FromTable, Insert, SetExpr, Statement, TableFactor, TableObject, TableWithJoins, UpdateTableFromKind,
+};
 use sqlparser::dialect::{Dialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
 
@@ -8,34 +10,88 @@ pub struct BlastRadiusResult {
     pub tables: Vec<String>,
 }
 
-/// Rewrite an UPDATE or DELETE into `SELECT count(*) FROM ... WHERE ...`
-/// so the guard can measure blast radius before executing. Returns
-/// `None` when the statement is not a single UPDATE/DELETE or cannot
-/// be rewritten safely.
-pub fn count_sql_for_mutation(sql: &str, driver_id: &str) -> Option<BlastRadiusResult> {
+/// What it takes to learn how many rows a mutation would affect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlastRadiusRewrite {
+    /// The row count is already known from the parsed statement; running a
+    /// query would only add a needless round trip and audit record.
+    Known(u64),
+    /// Run `count_sql` against the database to learn the row count.
+    CountQuery(BlastRadiusResult),
+}
+
+/// Rewrite an UPDATE, DELETE, or INSERT into something the guard can use to
+/// measure blast radius before executing. Returns `None` when the statement
+/// is not a single one of those or cannot be rewritten safely; callers must
+/// treat `None` as "unknown", not "zero rows".
+pub fn count_sql_for_mutation(sql: &str, driver_id: &str) -> Option<BlastRadiusRewrite> {
     let dialect = dialect_for(driver_id);
     let statements = Parser::parse_sql(dialect.as_ref(), sql.trim()).ok()?;
     if statements.len() != 1 {
         return None;
     }
     match &statements[0] {
-        Statement::Update { table, selection, .. } => {
-            let tables = table_names_from_factor(&table.relation);
-            let from = vec![TableWithJoins {
-                relation: table.relation.clone(),
-                joins: table.joins.clone(),
-            }];
-            Some(build_count_sql(&from, selection.as_ref(), tables, driver_id))
+        Statement::Update {
+            table, from, selection, ..
+        } => {
+            let mut sources = vec![table.clone()];
+            if let Some(extra) = from {
+                let (UpdateTableFromKind::BeforeSet(more) | UpdateTableFromKind::AfterSet(more)) = extra;
+                sources.extend(more.clone());
+            }
+            let tables = sources.iter().flat_map(table_names_from_with_joins).collect();
+            Some(BlastRadiusRewrite::CountQuery(build_count_sql(
+                &sources,
+                selection.as_ref(),
+                tables,
+                driver_id,
+            )))
         }
-        Statement::Delete(Delete { from, selection, .. }) => {
+        Statement::Delete(Delete {
+            from, using, selection, ..
+        }) => {
             let list = match from {
                 FromTable::WithFromKeyword(t) | FromTable::WithoutKeyword(t) => t,
             };
-            let tables: Vec<String> = list.iter().flat_map(|t| table_names_from_factor(&t.relation)).collect();
-            Some(build_count_sql(list, selection.as_ref(), tables, driver_id))
+            let mut sources = list.clone();
+            if let Some(more) = using {
+                sources.extend(more.clone());
+            }
+            let tables = sources.iter().flat_map(table_names_from_with_joins).collect();
+            Some(BlastRadiusRewrite::CountQuery(build_count_sql(
+                &sources,
+                selection.as_ref(),
+                tables,
+                driver_id,
+            )))
         }
+        Statement::Insert(insert) => count_sql_for_insert(insert, driver_id),
         _ => None,
     }
+}
+
+/// `INSERT ... VALUES (...), (...)` is counted from the literal row list, no
+/// database round trip needed. `INSERT ... SELECT ...` wraps the source
+/// query so its row count is measured the same way a bulk `INSERT ... SELECT
+/// * FROM huge_table` would actually affect `huge_table`'s row count.
+fn count_sql_for_insert(insert: &Insert, driver_id: &str) -> Option<BlastRadiusRewrite> {
+    let tables = match &insert.table {
+        TableObject::TableName(name) => vec![name.to_string()],
+        TableObject::TableFunction(f) => vec![f.name.to_string()],
+    };
+    let Some(source) = &insert.source else {
+        return Some(BlastRadiusRewrite::Known(1));
+    };
+    if let SetExpr::Values(values) = source.body.as_ref() {
+        return Some(BlastRadiusRewrite::Known(values.rows.len() as u64));
+    }
+    Some(BlastRadiusRewrite::CountQuery(BlastRadiusResult {
+        count_sql: format!(
+            "SELECT {} FROM ({source}) AS blast_radius_estimate",
+            count_fn(driver_id)
+        ),
+        tables,
+    }))
 }
 
 fn build_count_sql(
@@ -44,36 +100,28 @@ fn build_count_sql(
     tables: Vec<String>,
     driver_id: &str,
 ) -> BlastRadiusResult {
-    let table_sql = if from.len() == 1 {
-        match &from[0].relation {
-            TableFactor::Table { name, alias, .. } => {
-                let base = name.to_string();
-                match alias {
-                    Some(a) => format!("{base} AS {}", a.name),
-                    None => base,
-                }
-            }
-            _ => from[0].relation.to_string(),
-        }
-    } else {
-        from.iter()
-            .map(|t| t.relation.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-
+    let table_sql = from.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
     let where_sql = selection.map(|s| format!(" WHERE {s}")).unwrap_or_default();
+    BlastRadiusResult {
+        count_sql: format!("SELECT {} FROM {table_sql}{where_sql}", count_fn(driver_id)),
+        tables,
+    }
+}
 
-    let count_fn = if driver_id == "mssql" {
+fn count_fn(driver_id: &str) -> &'static str {
+    if driver_id == "mssql" {
         "COUNT_BIG(*)"
     } else {
         "count(*)"
-    };
-
-    BlastRadiusResult {
-        count_sql: format!("SELECT {count_fn} FROM {table_sql}{where_sql}"),
-        tables,
     }
+}
+
+fn table_names_from_with_joins(twj: &TableWithJoins) -> Vec<String> {
+    let mut out = table_names_from_factor(&twj.relation);
+    for join in &twj.joins {
+        out.extend(table_names_from_factor(&join.relation));
+    }
+    out
 }
 
 fn table_names_from_factor(factor: &TableFactor) -> Vec<String> {
@@ -97,9 +145,16 @@ fn dialect_for(driver_id: &str) -> Box<dyn Dialect> {
 mod tests {
     use super::*;
 
+    fn count_query(sql: &str, driver_id: &str) -> BlastRadiusResult {
+        match count_sql_for_mutation(sql, driver_id).unwrap() {
+            BlastRadiusRewrite::CountQuery(result) => result,
+            BlastRadiusRewrite::Known(rows) => panic!("expected a count query, got a known count of {rows}"),
+        }
+    }
+
     #[test]
     fn rewrite_delete_with_where() {
-        let r = count_sql_for_mutation("DELETE FROM payments WHERE status = 'x'", "postgres").unwrap();
+        let r = count_query("DELETE FROM payments WHERE status = 'x'", "postgres");
         let sql = r.count_sql.to_lowercase();
         assert!(sql.contains("count"), "{sql}");
         assert!(sql.contains("payments"), "{sql}");
@@ -108,7 +163,7 @@ mod tests {
 
     #[test]
     fn rewrite_update() {
-        let r = count_sql_for_mutation("UPDATE t SET a = 1 WHERE id = 2", "postgres").unwrap();
+        let r = count_query("UPDATE t SET a = 1 WHERE id = 2", "postgres");
         assert!(r.count_sql.to_lowercase().contains("count"));
         assert!(r.tables.iter().any(|t| t.contains('t')));
     }
@@ -116,5 +171,44 @@ mod tests {
     #[test]
     fn select_returns_none() {
         assert!(count_sql_for_mutation("SELECT * FROM t", "postgres").is_none());
+    }
+
+    #[test]
+    fn an_update_join_is_not_dropped_from_the_count() {
+        let r = count_query("UPDATE a JOIN b ON a.id = b.id SET a.x = 1 WHERE b.flag = 1", "mysql");
+        let sql = r.count_sql.to_lowercase();
+        assert!(sql.contains("join b"), "{sql}");
+        assert!(r.tables.iter().any(|t| t == "a"));
+        assert!(r.tables.iter().any(|t| t == "b"));
+    }
+
+    #[test]
+    fn a_delete_using_clause_is_not_dropped_from_the_count() {
+        let r = count_query("DELETE FROM a USING b WHERE a.id = b.id", "postgres");
+        let sql = r.count_sql.to_lowercase();
+        assert!(sql.contains('b'), "{sql}");
+        assert!(r.tables.iter().any(|t| t == "b"));
+    }
+
+    #[test]
+    fn an_update_from_clause_is_not_dropped_from_the_count() {
+        let r = count_query("UPDATE a SET x = 1 FROM b WHERE a.id = b.id", "postgres");
+        let sql = r.count_sql.to_lowercase();
+        assert!(sql.contains('b'), "{sql}");
+        assert!(r.tables.iter().any(|t| t == "b"));
+    }
+
+    #[test]
+    fn insert_values_is_a_known_count_with_no_query() {
+        let rewrite = count_sql_for_mutation("INSERT INTO t (a) VALUES (1), (2), (3)", "postgres").unwrap();
+        assert_eq!(rewrite, BlastRadiusRewrite::Known(3));
+    }
+
+    #[test]
+    fn insert_select_is_rewritten_into_a_count_query() {
+        let r = count_query("INSERT INTO t SELECT * FROM huge_table", "postgres");
+        let sql = r.count_sql.to_lowercase();
+        assert!(sql.contains("count"), "{sql}");
+        assert!(sql.contains("huge_table"), "{sql}");
     }
 }

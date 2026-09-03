@@ -229,8 +229,10 @@ impl PolicyGuard {
         facts: &StatementFacts,
         control: Option<&OperationControl>,
     ) -> Result<Option<u64>, DriverError> {
-        let Some(rewrite) = count_sql_for_mutation(sql, &self.ctx.driver_id) else {
-            return Ok(None);
+        let rewrite = match count_sql_for_mutation(sql, &self.ctx.driver_id) {
+            None => return Ok(None),
+            Some(crate::blast_radius::BlastRadiusRewrite::Known(rows)) => return Ok(Some(rows)),
+            Some(crate::blast_radius::BlastRadiusRewrite::CountQuery(rewrite)) => rewrite,
         };
         let operation = self.metadata_operation("BLAST RADIUS ESTIMATE", facts.tables.clone());
         self.record_intent(&operation).await.map_err(|error| {

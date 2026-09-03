@@ -521,7 +521,7 @@ fn classify_insert(insert: &Insert) -> StatementFacts {
         tables,
         has_where: true,
         contains_ddl: false,
-        contains_mutating_dml: false,
+        contains_mutating_dml: true,
         contains_unscoped_dml: false,
         contains_unknown_write: false,
         is_multi_statement: false,
@@ -913,6 +913,17 @@ mod tests {
         assert!(!f.writes);
         assert_eq!(f.class, StatementClass::Select);
         assert!(f.tables.iter().any(|t| t.contains("users")));
+    }
+
+    #[test]
+    fn insert_is_mutating_dml() {
+        let f = classify("INSERT INTO t (a) VALUES (1)", "postgres");
+        assert!(f.writes);
+        assert_eq!(f.class, StatementClass::Insert);
+        assert!(
+            f.contains_mutating_dml,
+            "an unbounded INSERT ... SELECT must still be subject to a blast-radius check"
+        );
     }
 
     #[test]
