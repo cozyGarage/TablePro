@@ -4,7 +4,10 @@ set -euo pipefail
 work_root="$(mktemp -d)"
 socket_root="$work_root/socket"
 config_root="$work_root/config"
-mkdir -p "$socket_root" "$config_root"
+secret_root="$work_root/secret"
+mkdir -p "$socket_root" "$config_root" \
+  "$secret_root/home" "$secret_root/data" "$secret_root/cache" "$secret_root/state" "$secret_root/runtime"
+chmod 0700 "$secret_root/runtime"
 container_name="tablepro-pg-socket-${RANDOM}-$$"
 cleanup() {
   docker rm -f "$container_name" >/dev/null 2>&1 || true
@@ -37,6 +40,17 @@ fi
 TABLEPRO_PG_SOCKET_DIR="$socket_root" \
   cargo test -p tablepro-driver-postgres --test socket_local -- --include-ignored --test-threads=1
 
-XDG_CONFIG_HOME="$config_root" \
+cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+CARGO_HOME="$cargo_home" \
+  HOME="$secret_root/home" \
+  XDG_CONFIG_HOME="$config_root" \
+  XDG_DATA_HOME="$secret_root/data" \
+  XDG_CACHE_HOME="$secret_root/cache" \
+  XDG_STATE_HOME="$secret_root/state" \
+  XDG_RUNTIME_DIR="$secret_root/runtime" \
   TABLEPRO_PG_SOCKET_DIR="$socket_root" \
-  cargo test -p tablepro-agentd --test socket_local -- --include-ignored --test-threads=1
+  dbus-run-session -- bash -c '
+    set -euo pipefail
+    eval "$(printf "tablepro-test" | gnome-keyring-daemon --daemonize --unlock --components=secrets)"
+    cargo test -p tablepro-agentd --test socket_local -- --include-ignored --test-threads=1
+  '
