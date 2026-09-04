@@ -181,3 +181,5 @@
 - The query-timeout preference is cached instead of re-read from disk on the GTK thread before every query dispatch
 - Preferences → Default page size now offers the same fixed choices (100 / 500 / 1,000 / 5,000 / 10,000) the per-tab paginator does, so a chosen default can no longer silently revert to 1,000 after restart
 - Copy row as INSERT now copies the row shown at the clicked position instead of a different row's values when a draft row is pending
+- Closing an editor or structure tab now disconnects its dark-mode-change handler instead of leaking the tab's widget tree for the rest of the process
+- The editor font-size preference now scopes to the SQL editor instead of resizing every text view on screen, including the EXPLAIN dialog and JSON popover

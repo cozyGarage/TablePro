@@ -34,6 +34,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use relm4::adw::prelude::*;
+use relm4::gtk::glib;
 use relm4::{ComponentParts, ComponentSender, SimpleComponent, adw, gtk};
 use sourceview5::prelude::BufferExt;
 
@@ -155,6 +156,11 @@ pub struct StructureTab {
     /// flag is set; `StructureLoaded` flips it back and triggers a
     /// fresh recompute against the up-to-date snapshots.
     refetching: Rc<Cell<bool>>,
+    /// Disconnected in `shutdown`. Mirrors the same leak in
+    /// `ui/editor/mod.rs`: without this, every tab's `connect_dark_notify`
+    /// closure -- which strongly captures this tab's SQL preview buffer --
+    /// stayed registered on the process-global `AdwStyleManager` forever.
+    dark_notify_handler: Option<glib::SignalHandlerId>,
 }
 
 #[derive(Debug)]
@@ -552,7 +558,7 @@ impl SimpleComponent for StructureTab {
         // theme choice instead of staying frozen on the boot scheme.
         apply_sql_scheme(&sql_buffer);
         let buffer_for_theme = sql_buffer.clone();
-        adw::StyleManager::default().connect_dark_notify(move |_| {
+        let dark_notify_handler = adw::StyleManager::default().connect_dark_notify(move |_| {
             apply_sql_scheme(&buffer_for_theme);
         });
         let sql_scroll = gtk::ScrolledWindow::builder().child(&sql_view).vexpand(true).build();
@@ -810,12 +816,19 @@ impl SimpleComponent for StructureTab {
             next_column_seq: Rc::new(RefCell::new(1)),
             column_popovers: Rc::new(RefCell::new(Vec::new())),
             refetching: Rc::new(Cell::new(false)),
+            dark_notify_handler: Some(dark_notify_handler),
         };
 
         // Initial render so New-mode tabs aren't blank.
         sender.input(StructureTabInput::Refresh);
 
         ComponentParts { model, widgets: () }
+    }
+
+    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        if let Some(handler) = self.dark_notify_handler.take() {
+            adw::StyleManager::default().disconnect(handler);
+        }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {

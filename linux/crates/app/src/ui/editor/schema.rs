@@ -55,7 +55,13 @@ pub(crate) fn apply_editor_scheme(view: &sourceview5::View) {
     }
 }
 
-pub(crate) fn apply_editor_font_size(_view: &sourceview5::View, font_size: u32) {
+/// Scopes the font-size CSS to source views carrying this class, rather
+/// than every `textview` on the display -- which previously included the
+/// EXPLAIN dialog and the JSON popover's text views too.
+const EDITOR_FONT_CSS_CLASS: &str = "tp-sql-editor-font";
+
+pub(crate) fn apply_editor_font_size(view: &sourceview5::View, font_size: u32) {
+    view.add_css_class(EDITOR_FONT_CSS_CLASS);
     thread_local! {
         static EDITOR_FONT_PROVIDER: std::cell::RefCell<Option<gtk::CssProvider>> =
             const { std::cell::RefCell::new(None) };
@@ -67,7 +73,7 @@ pub(crate) fn apply_editor_font_size(_view: &sourceview5::View, font_size: u32) 
         if let Some(prev) = cell.borrow_mut().take() {
             gtk::style_context_remove_provider_for_display(&display, &prev);
         }
-        let css = format!("textview, textview text {{ font-size: {font_size}pt; }}");
+        let css = format!(".{EDITOR_FONT_CSS_CLASS}, .{EDITOR_FONT_CSS_CLASS} text {{ font-size: {font_size}pt; }}");
         let provider = gtk::CssProvider::new();
         provider.load_from_string(&css);
         gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);

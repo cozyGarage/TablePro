@@ -39,6 +39,12 @@ pub struct SqlEditor {
     connection_id: Option<Uuid>,
     run_generation: RunGeneration,
     drop_generation: std::rc::Rc<DropGeneration>,
+    /// Disconnected in `shutdown`. Without this, every tab's
+    /// `connect_dark_notify` closure -- which strongly captures this
+    /// tab's `source_view` -- stayed registered on the process-global
+    /// `AdwStyleManager` forever, keeping the whole tab's widget tree
+    /// alive past the tab's own close.
+    dark_notify_handler: Option<glib::SignalHandlerId>,
 }
 
 pub struct SqlEditorInit {
@@ -297,7 +303,7 @@ impl SimpleComponent for SqlEditor {
         }
         apply_editor_scheme(&widgets.source_view);
         let view_for_theme = widgets.source_view.clone();
-        adw::StyleManager::default().connect_dark_notify(move |_| {
+        let dark_notify_handler = adw::StyleManager::default().connect_dark_notify(move |_| {
             apply_editor_scheme(&view_for_theme);
         });
 
@@ -448,8 +454,15 @@ impl SimpleComponent for SqlEditor {
             connection_id: init.connection_id,
             run_generation: RunGeneration::default(),
             drop_generation,
+            dark_notify_handler: Some(dark_notify_handler),
         };
         ComponentParts { model, widgets }
+    }
+
+    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        if let Some(handler) = self.dark_notify_handler.take() {
+            adw::StyleManager::default().disconnect(handler);
+        }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
