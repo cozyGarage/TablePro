@@ -574,6 +574,12 @@ fn col_to_info(c: &Column) -> ColumnInfo {
     }
 }
 
+/// rust_decimal::Decimal stores its mantissa in a 96-bit unsigned
+/// integer -- 2^96 - 1, the crate's own stable, documented capacity.
+/// `Decimal::from_i128_with_scale` panics above this instead of
+/// returning a `Result`, so it must be checked before calling.
+const MAX_DECIMAL_MANTISSA: u128 = 0x0000_0000_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF;
+
 fn column_data_to_value(cd: &ColumnData<'static>) -> Value {
     match cd {
         ColumnData::Bit(v) => (*v).map(Value::Bool).unwrap_or(Value::Null),
@@ -586,11 +592,25 @@ fn column_data_to_value(cd: &ColumnData<'static>) -> Value {
         ColumnData::String(v) => v.as_ref().map(|s| Value::Text(s.to_string())).unwrap_or(Value::Null),
         ColumnData::Binary(v) => v.as_ref().map(|b| Value::Bytes(b.to_vec())).unwrap_or(Value::Null),
         ColumnData::Guid(v) => (*v).map(Value::Uuid).unwrap_or(Value::Null),
-        ColumnData::Numeric(_) => Decimal::from_sql(cd)
-            .ok()
-            .flatten()
-            .map(Value::Decimal)
-            .unwrap_or(Value::Null),
+        // SQL Server NUMERIC carries up to 38 digits of precision;
+        // rust_decimal::Decimal's 96-bit mantissa caps out lower than
+        // that. Decimal::from_i128_with_scale (which tiberius's own
+        // Decimal::from_sql calls) panics rather than erroring on an
+        // out-of-range value, so the fit has to be checked before
+        // calling it -- a legitimately large value falls back to the
+        // raw tiberius Numeric's own Display instead of crashing or
+        // losing it to Null.
+        ColumnData::Numeric(raw) => match raw {
+            Some(numeric) => {
+                let value = numeric.value();
+                if u32::from(numeric.scale()) <= Decimal::MAX_SCALE && value.unsigned_abs() <= MAX_DECIMAL_MANTISSA {
+                    Value::Decimal(Decimal::from_i128_with_scale(value, u32::from(numeric.scale())))
+                } else {
+                    Value::Text(numeric.to_string())
+                }
+            }
+            None => Value::Null,
+        },
         ColumnData::Date(_) => NaiveDate::from_sql(cd)
             .ok()
             .flatten()
@@ -861,6 +881,32 @@ mod tests {
             database: "sales".into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_numeric_value_past_decimals_range_keeps_its_full_precision_as_text() {
+        // i128::MAX at scale 0 has 39 digits -- past rust_decimal's
+        // ~28-29 digit capacity, but still exactly what tiberius's own
+        // Numeric type holds.
+        let numeric = tiberius::numeric::Numeric::new_with_scale(i128::MAX, 0);
+        let column_data = ColumnData::Numeric(Some(numeric));
+        assert_eq!(column_data_to_value(&column_data), Value::Text(numeric.to_string()));
+    }
+
+    #[test]
+    fn a_null_numeric_column_stays_null() {
+        let column_data = ColumnData::Numeric(None);
+        assert_eq!(column_data_to_value(&column_data), Value::Null);
+    }
+
+    #[test]
+    fn a_numeric_value_within_decimals_range_still_decodes_as_decimal() {
+        let numeric = tiberius::numeric::Numeric::new_with_scale(1234, 2);
+        let column_data = ColumnData::Numeric(Some(numeric));
+        assert_eq!(
+            column_data_to_value(&column_data),
+            Value::Decimal(rust_decimal::Decimal::new(1234, 2))
+        );
     }
 
     #[test]
