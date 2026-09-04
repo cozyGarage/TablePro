@@ -57,12 +57,14 @@ impl DatabaseDriver for MysqlDriver {
             .connect_with(mysql_opts)
             .await
             .map_err(map_sqlx_error)?;
+        // Lazy: a saved connection with a failed-login lockout policy
+        // must not see two authentication attempts for one Connect
+        // click. The real dial happens only when a cancel is actually
+        // requested.
         let cancellation_pool = MySqlPoolOptions::new()
             .max_connections(1)
             .acquire_timeout(Duration::from_secs(5))
-            .connect_with(cancellation_options)
-            .await
-            .map_err(map_sqlx_error)?;
+            .connect_lazy_with(cancellation_options);
         Ok(Box::new(MysqlConnection {
             pool,
             cancellation_pool,

@@ -89,12 +89,14 @@ impl DatabaseDriver for PgDriver {
             .connect_with(pg_opts)
             .await
             .map_err(map_sqlx_error)?;
+        // Lazy: a saved connection with a failed-login lockout policy
+        // must not see two authentication attempts for one Connect
+        // click. The real dial happens only when a cancel is actually
+        // requested.
         let cancellation_pool = PgPoolOptions::new()
             .max_connections(1)
             .acquire_timeout(Duration::from_secs(5))
-            .connect_with(cancellation_options)
-            .await
-            .map_err(map_sqlx_error)?;
+            .connect_lazy_with(cancellation_options);
         Ok(Box::new(PgConnection {
             pool,
             cancellation_pool,
@@ -669,12 +671,31 @@ async fn finish_connection<T>(
     (Some(connection), result)
 }
 
+/// `run_server_cancellable` wraps this future in its own dispatch
+/// timeout and moves on without it if that elapses. Run the actual
+/// round trip in a spawned task instead of inline, so giving up on it
+/// here can never drop it mid-response and return a protocol-desynced
+/// connection to the single-slot cancellation pool -- the task always
+/// finishes and explicitly closes the connection on failure rather than
+/// trusting an implicit pool return.
 async fn request_cancellation(pool: &Pool<Postgres>, backend_pid: i32) -> Result<(), DriverError> {
-    let cancelled: bool = sqlx::query_scalar("SELECT pg_cancel_backend($1)")
-        .bind(backend_pid)
-        .fetch_one(pool)
-        .await
-        .map_err(map_sqlx_error)?;
+    let pool = pool.clone();
+    let task = tokio::spawn(async move {
+        let mut conn = pool.acquire().await.map_err(map_sqlx_error)?;
+        let outcome: Result<bool, DriverError> = sqlx::query_scalar("SELECT pg_cancel_backend($1)")
+            .bind(backend_pid)
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(map_sqlx_error);
+        if outcome.is_err() {
+            let _ = conn.detach().close_hard().await;
+        }
+        outcome
+    });
+    let cancelled = match task.await {
+        Ok(result) => result?,
+        Err(_) => return Err(DriverError::Cancelled),
+    };
     if cancelled {
         Ok(())
     } else {

@@ -190,3 +190,5 @@
 - A KILL QUERY dispatch that outlasts its own two-second cancellation window now finishes and closes the connection it used instead of leaving MySQL's single-slot cancellation pool with a connection whose response was never fully read
 - MongoDB connections always request a direct connection, so a replica set member's advertised hostname can no longer redirect the client away from the saved host or its SSH tunnel
 - MongoDB errors are now classified from the driver's structured error kind instead of substring-matching the error message, so an unrelated failure whose text happens to contain "connection" or "auth" is no longer misreported as connection-refused or an authentication failure
+- Connecting to PostgreSQL or MySQL now makes one authentication attempt instead of two, so a server that locks an account out after repeated failures no longer counts a single Connect click twice
+- A cancellation request that outlasts its own two-second dispatch window now finishes and closes the connection it used on PostgreSQL as well as MySQL, instead of risking a protocol-desynced connection in the single-slot cancellation pool
