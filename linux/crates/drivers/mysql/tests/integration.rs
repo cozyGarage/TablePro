@@ -266,6 +266,23 @@ async fn pagination_and_truncated_flag() {
 
 #[tokio::test]
 #[ignore = "requires docker"]
+async fn a_decimal_value_past_rust_decimals_range_keeps_its_digits() {
+    let (_c, opts) = start_mysql().await;
+    let conn = connect(opts).await;
+    conn.execute("CREATE TABLE big_decimal (v DECIMAL(65,0))")
+        .await
+        .unwrap();
+    let digits = "1".repeat(65);
+    conn.execute(&format!("INSERT INTO big_decimal (v) VALUES ({digits})"))
+        .await
+        .unwrap();
+
+    let result = conn.query("SELECT v FROM big_decimal").await.unwrap();
+    assert_eq!(result.rows, vec![vec![Value::Text(digits)]]);
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
 async fn a_bigint_unsigned_value_past_i64_max_keeps_its_digits() {
     let (_c, opts) = start_mysql().await;
     let conn = connect(opts).await;

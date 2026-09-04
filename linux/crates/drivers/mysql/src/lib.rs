@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use secrecy::ExposeSecret;
 use sqlx::mysql::{MySql, MySqlConnectOptions, MySqlPoolOptions, MySqlRow};
 use sqlx::pool::PoolConnection;
-use sqlx::{Column, Connection as SqlxConnection, Pool, Row, TypeInfo};
+use sqlx::{Column, Connection as SqlxConnection, Pool, Row, TypeInfo, ValueRef};
 
 use futures::stream::StreamExt;
 
@@ -519,10 +519,16 @@ fn extract_value(row: &MySqlRow, idx: usize) -> Value {
             .or_else(|_| row.try_get::<u64, _>(idx).map(|v| Value::Text(v.to_string())))
             .unwrap_or(Value::Null),
         "FLOAT" | "DOUBLE" => row.try_get::<f64, _>(idx).map(Value::Float).unwrap_or(Value::Null),
+        // DECIMAL/NUMERIC arrive over the wire as text, but sqlx only
+        // decodes that text into rust_decimal::Decimal, which caps out
+        // at ~28-29 significant digits -- well inside what MySQL
+        // itself allows (up to 65). A legitimately large value keeps
+        // its exact digits as text instead of the row's real number
+        // silently disappearing.
         "DECIMAL" | "NUMERIC" => row
             .try_get::<rust_decimal::Decimal, _>(idx)
             .map(Value::Decimal)
-            .unwrap_or(Value::Null),
+            .unwrap_or_else(|_| decimal_text_fallback(row, idx)),
         "BOOLEAN" => row.try_get::<bool, _>(idx).map(Value::Bool).unwrap_or(Value::Null),
         "DATE" => row
             .try_get::<chrono::NaiveDate, _>(idx)
@@ -548,6 +554,19 @@ fn extract_value(row: &MySqlRow, idx: usize) -> Value {
             row.try_get::<Vec<u8>, _>(idx).map(Value::Bytes).unwrap_or(Value::Null)
         }
         _ => row.try_get::<String, _>(idx).map(Value::Text).unwrap_or(Value::Null),
+    }
+}
+
+/// `String`'s `Type<MySql>` compatibility check refuses a DECIMAL
+/// column outright, even though its wire representation is already
+/// text -- decoding through the raw value ref bypasses that check
+/// instead of going through `Row::try_get`.
+fn decimal_text_fallback(row: &MySqlRow, idx: usize) -> Value {
+    match row.try_get_raw(idx) {
+        Ok(raw) if !raw.is_null() => <&str as sqlx::Decode<sqlx::MySql>>::decode(raw)
+            .map(|s| Value::Text(s.to_string()))
+            .unwrap_or(Value::Null),
+        _ => Value::Null,
     }
 }
 

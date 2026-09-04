@@ -197,3 +197,4 @@
 - SQLite values that don't match their column's declared type (SQLite's type affinity can store a row's value in a different storage class than the column declares) now keep their text or byte representation instead of silently appearing as an empty cell
 - MySQL BIGINT UNSIGNED values past i64's range now show their full digits as text instead of appearing as an empty cell
 - A SQL Server NUMERIC value past rust_decimal's range no longer crashes the query; it now shows its full precision as text instead
+- MySQL DECIMAL values past rust_decimal's range now show their exact digits as text instead of appearing as an empty cell
