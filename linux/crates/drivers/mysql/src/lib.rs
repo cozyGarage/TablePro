@@ -607,12 +607,31 @@ async fn connection_id(connection: &mut PoolConnection<MySql>) -> Result<u64, Dr
 /// stopped by `KILL QUERY` from a second session. That aborts the
 /// running statement and leaves the session alive, which is what makes
 /// the connection reusable afterwards.
+///
+/// `run_server_cancellable` wraps this future in its own dispatch
+/// timeout and moves on without it if that elapses. The KILL QUERY
+/// round trip runs in a spawned task instead of inline so giving up on
+/// it here can never drop it mid-response and return a
+/// protocol-desynced connection to the single-slot cancellation pool --
+/// the task always finishes and explicitly closes the connection on
+/// failure rather than trusting an implicit pool return.
 async fn request_cancellation(pool: &Pool<MySql>, connection_id: u64) -> Result<(), DriverError> {
-    sqlx::query(&format!("KILL QUERY {connection_id}"))
-        .execute(pool)
-        .await
-        .map_err(map_sqlx_error)?;
-    Ok(())
+    let pool = pool.clone();
+    let task = tokio::spawn(async move {
+        let mut conn = pool.acquire().await.map_err(map_sqlx_error)?;
+        let outcome = sqlx::query(&format!("KILL QUERY {connection_id}"))
+            .execute(&mut *conn)
+            .await
+            .map_err(map_sqlx_error);
+        if outcome.is_err() {
+            let _ = conn.detach().close_hard().await;
+        }
+        outcome.map(|_| ())
+    });
+    match task.await {
+        Ok(result) => result,
+        Err(_) => Err(DriverError::Cancelled),
+    }
 }
 
 /// `ER_QUERY_INTERRUPTED` is the only outcome that proves the server
