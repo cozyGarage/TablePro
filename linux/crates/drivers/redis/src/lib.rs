@@ -70,6 +70,7 @@ impl DatabaseDriver for RedisDriver {
         Ok(Box::new(RedisConnection {
             conn: Mutex::new(manager),
             db_count: 16,
+            db_index,
         }))
     }
 }
@@ -96,6 +97,7 @@ fn root_certificate(config: &tablepro_core::TlsConfig, verifies: bool) -> Result
 struct RedisConnection {
     conn: Mutex<ConnectionManager>,
     db_count: usize,
+    db_index: u8,
 }
 
 fn redis_columns() -> Vec<ColumnInfo> {
@@ -181,18 +183,17 @@ impl Connection for RedisConnection {
             .query_async::<()>(&mut *conn)
             .await
             .map_err(map_redis_error)?;
-        let keys = scan_keys(&mut conn, "*", (offset + limit) as usize).await?;
-        let skip = offset as usize;
-        let page: Vec<String> = keys.into_iter().skip(skip).take(limit as usize).collect();
-        let mut rows = Vec::with_capacity(page.len());
-        for key in page {
-            rows.push(key_row(&mut conn, &key).await?);
-        }
-        Ok(QueryResult {
-            columns: redis_columns(),
-            rows,
-            truncated: false,
-        })
+        let outcome = fetch_page(&mut conn, offset, limit).await;
+        // conn is shared with every later query()/fetch_rows() call --
+        // restore the connection's own db before releasing the lock.
+        let restored = redis::cmd("SELECT")
+            .arg(self.db_index)
+            .query_async::<()>(&mut *conn)
+            .await
+            .map_err(map_redis_error);
+        let result = outcome?;
+        restored?;
+        Ok(result)
     }
 
     async fn query(&self, sql: &str) -> Result<QueryResult, DriverError> {
@@ -277,6 +278,21 @@ impl Connection for RedisConnection {
     async fn close(self: Box<Self>) -> Result<(), DriverError> {
         Ok(())
     }
+}
+
+async fn fetch_page(conn: &mut ConnectionManager, offset: u64, limit: u64) -> Result<QueryResult, DriverError> {
+    let keys = scan_keys(conn, "*", (offset + limit) as usize).await?;
+    let skip = offset as usize;
+    let page: Vec<String> = keys.into_iter().skip(skip).take(limit as usize).collect();
+    let mut rows = Vec::with_capacity(page.len());
+    for key in page {
+        rows.push(key_row(conn, &key).await?);
+    }
+    Ok(QueryResult {
+        columns: redis_columns(),
+        rows,
+        truncated: false,
+    })
 }
 
 async fn scan_keys(conn: &mut ConnectionManager, pattern: &str, limit: usize) -> Result<Vec<String>, DriverError> {

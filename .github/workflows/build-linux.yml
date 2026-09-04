@@ -281,6 +281,8 @@ jobs:
         run: cargo test --test integration -p tablepro-driver-mssql -- --include-ignored --test-threads=1
       - name: ClickHouse integration tests
         run: cargo test --test integration -p tablepro-driver-clickhouse -- --include-ignored --test-threads=1
+      - name: Redis integration tests
+        run: cargo test --test integration -p tablepro-driver-redis -- --include-ignored --test-threads=1
 
   driver-tls:
     name: Driver TLS fixture (docker)

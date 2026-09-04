@@ -6484,6 +6484,8 @@ dependencies = [
  "redis",
  "secrecy",
  "tablepro-core",
+ "testcontainers",
+ "testcontainers-modules",
  "tokio",
 ]
 
