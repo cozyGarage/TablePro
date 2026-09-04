@@ -1,6 +1,6 @@
 # TablePro Linux roadmap
 
-Last audited: 2026-08-30
+Last audited: 2026-09-04
 
 The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Linux capability backlog. This file is the concise status view.
 
@@ -165,4 +165,4 @@ Phase 10 is in progress. Slice 10.2 added connection organisation: groups, tags,
 
 The immediate target is the internal Arch RC. The exact-commit hosted jobs first ran fully green on 2026-08-21 at `c8f91f06`, so the Phase 4 soak ledger has started and needs 30 consecutive retry-free attempts across at least six runs. What remains is accumulating that ledger and verifying install/upgrade/rollback on Wayland. Those gates are mostly waiting, so Phase 10 feature work runs in parallel on `linux` while the candidate stays frozen on a release branch. Phase 10 comes before full-table snapshot export and Phase 6 object administration; new drivers come after both.
 
-Which macOS features we take, skip, and in what order is in [docs/upstream-adoption.md](docs/upstream-adoption.md). The next product slice after views is the typed activity console (10.3), then the rest of 10.6.
+Which macOS features we take, skip, and in what order is in [docs/upstream-adoption.md](docs/upstream-adoption.md), reviewed through their v0.71.0 release as of 2026-09-04. The next product slice after views is the typed activity console (10.3), then the rest of 10.6. The 2026-09-04 review pass also flagged four upstream bug fixes (MongoDB collection drop, an SSH stale-tunnel-port race, server-owned-column edit refusal, identity-column DEFAULT on insert) to check against our own drivers — see "Since 0.69" in that file.

@@ -1,6 +1,6 @@
 # TablePro Linux development plan
 
-Last audited: 2026-08-30
+Last audited: 2026-09-04
 
 This plan is the source of truth for the Linux application. It separates:
 
@@ -546,9 +546,17 @@ in the sidebar as read-only objects. Materialized views, routines, triggers,
 sequences, extensions, roles, and grants are not started. Slices 10.4, 10.5,
 and 10.7 are not started.
 
-Which macOS 0.68–0.69 behavior we reimplement, and in what order, is recorded
-in `linux/docs/upstream-adoption.md`. Review their behavior; do not merge
-their source.
+Which macOS behavior we reimplement, and in what order, is recorded in
+`linux/docs/upstream-adoption.md`, reviewed through their v0.71.0 release
+as of 2026-09-04. Review their behavior; do not merge their source.
+
+That 2026-09-04 pass also found four upstream bug fixes worth checking
+against our own drivers independent of feature sequencing: a MongoDB
+collection-drop gap, an SSH stale-tunnel-port-reuse race, edits to
+server-owned columns not refused at the model boundary, and a new Browse
+row not leaving an identity column at DEFAULT. See "Since 0.69" in
+`upstream-adoption.md` for the detail; none are confirmed as real gaps
+in this codebase yet.
 
 The product is strong on safety and thin on operations. A DBA who manages many
 servers gets one active connection per process, an activity dialog that renders
