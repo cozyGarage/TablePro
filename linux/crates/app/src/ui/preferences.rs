@@ -4,6 +4,27 @@ use relm4::{adw, gtk};
 
 use crate::services::preferences::{self, Preferences};
 
+/// Must match `browse_tab`'s own `PAGE_SIZE_OPTIONS` (duplicated there and
+/// in `workspace_state.rs`, the same way those two already duplicate each
+/// other): the per-tab paginator only ever offers this fixed set, so a
+/// default outside it would silently snap back to 1,000 on restart instead
+/// of the value chosen here.
+const PAGE_SIZE_OPTIONS: &[u64] = &[100, 500, 1_000, 5_000, 10_000];
+
+fn format_thousands(n: u64) -> String {
+    let s = n.to_string();
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(len + len / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (len - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out
+}
+
 pub fn present(parent: &impl IsA<gtk::Widget>) {
     let window = adw::PreferencesDialog::builder()
         .title(crate::tr!("Preferences"))
@@ -23,10 +44,17 @@ pub fn present(parent: &impl IsA<gtk::Widget>) {
 
     let current = preferences::load();
 
-    let page_size_row = adw::SpinRow::with_range(100.0, 100_000.0, 100.0);
+    let page_size_row = adw::ComboRow::new();
     page_size_row.set_title(&crate::tr!("Default page size"));
     page_size_row.set_subtitle(&crate::tr!("Rows fetched per request when browsing a table"));
-    page_size_row.set_value(current.default_page_size as f64);
+    let page_size_labels: Vec<String> = PAGE_SIZE_OPTIONS.iter().map(|n| format_thousands(*n)).collect();
+    let page_size_strs: Vec<&str> = page_size_labels.iter().map(String::as_str).collect();
+    page_size_row.set_model(Some(&gtk::StringList::new(&page_size_strs)));
+    let initial_page_size_idx = PAGE_SIZE_OPTIONS
+        .iter()
+        .position(|n| *n == current.default_page_size)
+        .unwrap_or(2) as u32;
+    page_size_row.set_selected(initial_page_size_idx);
 
     let confirm_row = adw::SwitchRow::builder()
         .title(crate::tr!("Confirm before deleting rows"))
@@ -169,8 +197,12 @@ pub fn present(parent: &impl IsA<gtk::Widget>) {
         let retention = retention_row.clone();
         let timeout = timeout_row.clone();
         std::rc::Rc::new(move || {
+            let default_page_size = PAGE_SIZE_OPTIONS
+                .get(page_size.selected() as usize)
+                .copied()
+                .unwrap_or(1_000);
             preferences::save(&Preferences {
-                default_page_size: page_size.value() as u64,
+                default_page_size,
                 confirm_destructive: confirm.is_active(),
                 editor_font_size: font.value() as u32,
                 history_retention_days: retention.value() as u32,
@@ -178,7 +210,7 @@ pub fn present(parent: &impl IsA<gtk::Widget>) {
             });
         })
     };
-    page_size_row.connect_value_notify({
+    page_size_row.connect_selected_notify({
         let s = save_all.clone();
         move |_| s()
     });
@@ -200,4 +232,29 @@ pub fn present(parent: &impl IsA<gtk::Widget>) {
     });
 
     window.present(Some(parent));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_thousands_matches_the_browse_tab_paginator() {
+        assert_eq!(format_thousands(100), "100");
+        assert_eq!(format_thousands(500), "500");
+        assert_eq!(format_thousands(1_000), "1,000");
+        assert_eq!(format_thousands(5_000), "5,000");
+        assert_eq!(format_thousands(10_000), "10,000");
+    }
+
+    /// The stored default must always be one of the choices the per-tab
+    /// paginator actually offers, so it survives a restart unchanged
+    /// instead of silently reverting to 1,000.
+    #[test]
+    fn every_page_size_option_round_trips_through_its_own_index() {
+        for (index, &size) in PAGE_SIZE_OPTIONS.iter().enumerate() {
+            let found = PAGE_SIZE_OPTIONS.iter().position(|n| *n == size);
+            assert_eq!(found, Some(index));
+        }
+    }
 }

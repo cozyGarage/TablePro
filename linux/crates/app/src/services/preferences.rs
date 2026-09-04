@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use serde::{Deserialize, Serialize};
 
 use super::config_io::{atomic_write_json, xdg_config_path};
@@ -39,7 +41,34 @@ impl Default for Preferences {
     }
 }
 
+/// Mirrors the cache in `filter_settings.rs` / `column_widths.rs`. Without
+/// it, every caller -- including `operation_control::configured_timeout_secs`,
+/// read on the GTK thread before each query dispatch -- did a synchronous
+/// file read on the main thread for a value that only ever changes from the
+/// Preferences dialog.
+static CACHE: Mutex<Option<Preferences>> = Mutex::new(None);
+
 pub fn load() -> Preferences {
+    let mut guard = match CACHE.lock() {
+        Ok(g) => g,
+        Err(_) => return load_from_disk(),
+    };
+    guard.get_or_insert_with(load_from_disk).clone()
+}
+
+pub fn save(prefs: &Preferences) {
+    if let Ok(mut guard) = CACHE.lock() {
+        *guard = Some(prefs.clone());
+    }
+    let Some(path) = xdg_config_path("preferences.json") else {
+        return;
+    };
+    if let Err(e) = atomic_write_json(&path, prefs) {
+        tracing::warn!(path = %path.display(), error = %e, "preferences: write failed");
+    }
+}
+
+fn load_from_disk() -> Preferences {
     let Some(path) = xdg_config_path("preferences.json") else {
         return Preferences::default();
     };
@@ -49,11 +78,21 @@ pub fn load() -> Preferences {
         .unwrap_or_default()
 }
 
-pub fn save(prefs: &Preferences) {
-    let Some(path) = xdg_config_path("preferences.json") else {
-        return;
-    };
-    if let Err(e) = atomic_write_json(&path, prefs) {
-        tracing::warn!(path = %path.display(), error = %e, "preferences: write failed");
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Seeds the cache directly rather than calling `save`, so the test
+    /// never touches the real XDG config file: `load` must return exactly
+    /// what's cached instead of re-reading (or falling back to a default
+    /// because it can't read) disk.
+    #[test]
+    fn load_reads_the_cache_instead_of_disk_once_populated() {
+        let sentinel = Preferences {
+            default_page_size: 424_242,
+            ..Preferences::default()
+        };
+        *CACHE.lock().unwrap() = Some(sentinel.clone());
+        assert_eq!(load().default_page_size, sentinel.default_page_size);
     }
 }

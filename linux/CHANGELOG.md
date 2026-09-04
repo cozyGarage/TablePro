@@ -178,3 +178,5 @@
 - Repeated failed MCP authentication attempts are rate limited even when every attempt uses a different token string
 - The MCP HTTP transport now enforces the same request-size limit the stdio transport already did, instead of a larger framework default
 - A malformed Redis database index (a typo, stray text) refuses the connection instead of silently landing on database 0, usually the production database
+- The query-timeout preference is cached instead of re-read from disk on the GTK thread before every query dispatch
+- Preferences → Default page size now offers the same fixed choices (100 / 500 / 1,000 / 5,000 / 10,000) the per-tab paginator does, so a chosen default can no longer silently revert to 1,000 after restart
