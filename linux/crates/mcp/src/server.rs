@@ -101,18 +101,44 @@ where
 /// protocol for Cursor / Claude Code: `initialize`, `tools/list`,
 /// `tools/call`. Auth via `Authorization` in `_meta` or `params.token`.
 pub async fn serve_stdio(bridge: Arc<McpBridge>) -> Result<(), String> {
-    let stdin = tokio::io::stdin();
-    let mut reader = BufReader::new(stdin);
-    let mut stdout = tokio::io::stdout();
+    let reader = BufReader::new(tokio::io::stdin());
+    let stdout = tokio::io::stdout();
+    serve_json_rpc_lines(&bridge, reader, stdout).await
+}
+
+async fn serve_json_rpc_lines<R, W>(bridge: &McpBridge, mut reader: R, mut stdout: W) -> Result<(), String>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
     let mut line = String::new();
 
     loop {
         line.clear();
-        let n = (&mut reader)
+        let read = (&mut reader)
             .take(MAX_REQUEST_BYTES as u64 + 1)
             .read_line(&mut line)
-            .await
-            .map_err(|e| e.to_string())?;
+            .await;
+        let n = match read {
+            Ok(n) => n,
+            // read_line still consumes the malformed bytes before failing
+            // the UTF-8 conversion, so the stream is resynced at the next
+            // newline -- this can recover the same way an invalid JSON
+            // line does, instead of ending the whole session.
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                write_response(
+                    &mut stdout,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": null,
+                        "error": {"code": -32700, "message": format!("parse error: {error}")}
+                    }),
+                )
+                .await?;
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        };
         if n == 0 {
             break;
         }
@@ -158,18 +184,11 @@ pub async fn serve_stdio(bridge: Arc<McpBridge>) -> Result<(), String> {
                 Err(message) => json_rpc_error(&id, -32602, message),
             },
             "notifications/initialized" | "initialized" => continue,
-            "tools/list" => json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "tools": TOOL_NAMES.iter().map(|name| json!({
-                        "name": name,
-                        "description": tool_description(name),
-                        "inputSchema": tool_schema(name),
-                    })).collect::<Vec<_>>()
-                }
-            }),
-            "tools/call" => match handle_tool_call(&bridge, params).await {
+            "tools/list" => match handle_tools_list(bridge, &params) {
+                Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                Err(message) => json_rpc_error(&id, -32000, message),
+            },
+            "tools/call" => match handle_tool_call(bridge, params).await {
                 Ok(content) => json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -199,20 +218,44 @@ pub async fn serve_stdio(bridge: Arc<McpBridge>) -> Result<(), String> {
     Ok(())
 }
 
-async fn handle_tool_call(bridge: &McpBridge, params: JsonValue) -> Result<JsonValue, String> {
-    let name = params.get("name").and_then(|v| v.as_str()).ok_or("missing tool name")?;
-    let args = params.get("arguments").cloned().unwrap_or(json!({}));
-    let token_str = params
+/// Shared lookup for every method that requires a token: `params.token`,
+/// `params._meta.authorization`, then (for `tools/call`) `arguments.token`.
+fn extract_token_str(params: &JsonValue) -> Option<&str> {
+    params
         .get("token")
         .and_then(|v| v.as_str())
         .or_else(|| params.pointer("/_meta/authorization").and_then(|v| v.as_str()))
-        .or_else(|| args.get("token").and_then(|v| v.as_str()))
-        .ok_or("missing token (pass params.token or arguments.token)")?;
+        .or_else(|| params.pointer("/arguments/token").and_then(|v| v.as_str()))
+}
+
+async fn handle_tool_call(bridge: &McpBridge, params: JsonValue) -> Result<JsonValue, String> {
+    let name = params.get("name").and_then(|v| v.as_str()).ok_or("missing tool name")?;
+    let args = params.get("arguments").cloned().unwrap_or(json!({}));
+    let token_str = extract_token_str(&params).ok_or("missing token (pass params.token or arguments.token)")?;
     let token = bridge.authenticate(token_str)?;
     tools::dispatch(bridge, &token, name, args).await
 }
 
-async fn write_response(stdout: &mut tokio::io::Stdout, value: JsonValue) -> Result<(), String> {
+/// `tools/list` names every tool this server exposes, including ones a
+/// least-privilege token could never call. Require the same token
+/// `tools/call` does rather than disclosing the catalogue to anyone who can
+/// reach the loopback listener.
+fn handle_tools_list(bridge: &McpBridge, params: &JsonValue) -> Result<JsonValue, String> {
+    let token_str = extract_token_str(params).ok_or("missing token (pass params.token)")?;
+    bridge.authenticate(token_str)?;
+    Ok(json!({
+        "tools": TOOL_NAMES.iter().map(|name| json!({
+            "name": name,
+            "description": tool_description(name),
+            "inputSchema": tool_schema(name),
+        })).collect::<Vec<_>>()
+    }))
+}
+
+async fn write_response<W>(stdout: &mut W, value: JsonValue) -> Result<(), String>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
     let mut line = serde_json::to_string(&value).map_err(|e| e.to_string())?;
     line.push('\n');
     stdout.write_all(line.as_bytes()).await.map_err(|e| e.to_string())?;
@@ -300,56 +343,56 @@ fn origin_is_allowed(headers: &HeaderMap) -> bool {
 /// Bind a loopback streamable-HTTP endpoint that forwards tool calls to
 /// the same bridge. Loopback only by default.
 pub async fn serve_streamable_http(bridge: Arc<McpBridge>, config: McpServerConfig) -> Result<(), String> {
+    use axum::extract::DefaultBodyLimit;
     use axum::response::IntoResponse;
     use axum::{Json, Router, http::StatusCode, routing::post};
 
     let addr = loopback_bind_addr(&config.bind_host, config.bind_port)?;
 
     let bridge = bridge.clone();
-    let app = Router::new().route(
-        "/mcp",
-        post(move |headers: HeaderMap, Json(body): Json<JsonValue>| {
-            let bridge = bridge.clone();
-            async move {
-                if !origin_is_allowed(&headers) {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(json!({
-                            "jsonrpc": "2.0",
-                            "id": null,
-                            "error": {"code": -32000, "message": "forbidden origin"}
-                        })),
-                    )
-                        .into_response();
+    let app = Router::new()
+        .route(
+            "/mcp",
+            post(move |headers: HeaderMap, Json(body): Json<JsonValue>| {
+                let bridge = bridge.clone();
+                async move {
+                    if !origin_is_allowed(&headers) {
+                        return (
+                            StatusCode::FORBIDDEN,
+                            Json(json!({
+                                "jsonrpc": "2.0",
+                                "id": null,
+                                "error": {"code": -32000, "message": "forbidden origin"}
+                            })),
+                        )
+                            .into_response();
+                    }
+                    let id = body.get("id").cloned().unwrap_or(JsonValue::Null);
+                    let method = body.get("method").and_then(|m| m.as_str()).unwrap_or("");
+                    let params = body.get("params").cloned().unwrap_or(json!({}));
+                    let result = match method {
+                        "tools/call" => handle_tool_call(&bridge, params).await,
+                        "tools/list" => handle_tools_list(&bridge, &params),
+                        "initialize" => match initialize_result(&params) {
+                            Ok(result) => Ok(result),
+                            Err(message) => {
+                                return Json(json_rpc_error(&id, -32602, message)).into_response();
+                            }
+                        },
+                        other => Err(format!("unsupported method: {other}")),
+                    };
+                    let response = match result {
+                        Ok(r) => json!({"jsonrpc": "2.0", "id": id, "result": r}),
+                        Err(e) => json_rpc_error(&id, -32000, e),
+                    };
+                    Json(response).into_response()
                 }
-                let id = body.get("id").cloned().unwrap_or(JsonValue::Null);
-                let method = body.get("method").and_then(|m| m.as_str()).unwrap_or("");
-                let params = body.get("params").cloned().unwrap_or(json!({}));
-                let result = match method {
-                    "tools/call" => handle_tool_call(&bridge, params).await,
-                    "tools/list" => Ok(json!({
-                        "tools": TOOL_NAMES.iter().map(|name| json!({
-                            "name": name,
-                            "description": tool_description(name),
-                            "inputSchema": tool_schema(name),
-                        })).collect::<Vec<_>>()
-                    })),
-                    "initialize" => match initialize_result(&params) {
-                        Ok(result) => Ok(result),
-                        Err(message) => {
-                            return Json(json_rpc_error(&id, -32602, message)).into_response();
-                        }
-                    },
-                    other => Err(format!("unsupported method: {other}")),
-                };
-                let response = match result {
-                    Ok(r) => json!({"jsonrpc": "2.0", "id": id, "result": r}),
-                    Err(e) => json_rpc_error(&id, -32000, e),
-                };
-                Json(response).into_response()
-            }
-        }),
-    );
+            }),
+        )
+        // Matches stdio's own MAX_REQUEST_BYTES instead of axum's larger
+        // default, so the sql argument (and everything else in the body)
+        // is bounded the same way regardless of which transport carried it.
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES));
 
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| e.to_string())?;
     tracing::info!(%addr, "MCP HTTP listening (loopback)");
@@ -365,6 +408,118 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(ORIGIN, HeaderValue::from_str(origin).unwrap());
         headers
+    }
+
+    struct NoProvider;
+
+    #[async_trait::async_trait]
+    impl crate::bridge::ConnectionProvider for NoProvider {
+        async fn list_saved_connections(&self) -> Result<Vec<tablepro_storage::SavedConnection>, String> {
+            Ok(Vec::new())
+        }
+        async fn connection(
+            &self,
+            _connection_id: uuid::Uuid,
+            _principal: tablepro_policy::Principal,
+        ) -> Result<Arc<dyn tablepro_core::Connection>, String> {
+            Err("no connections in this test".into())
+        }
+    }
+
+    /// Keeps the temporary token-store directory alive for the test's
+    /// duration -- dropping it early deletes tokens.json out from under
+    /// a later `authenticate` call.
+    fn bridge_with_token() -> (tempfile::TempDir, McpBridge, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(crate::tokens::TokenStore::open(dir.path().join("tokens.json")).unwrap());
+        let (_metadata, plaintext) = store
+            .issue("test".into(), crate::TokenPermissions::ReadOnly, vec![], None)
+            .unwrap();
+        (dir, McpBridge::new(Arc::new(NoProvider), store), plaintext)
+    }
+
+    /// H-adjacent finding: tools/list disclosed the full tool catalogue to
+    /// any caller that could reach the listener, with no token at all.
+    #[test]
+    fn tools_list_is_refused_without_a_token() {
+        let (_dir, bridge, _) = bridge_with_token();
+        let error = handle_tools_list(&bridge, &json!({})).unwrap_err();
+        assert!(error.contains("token"), "{error}");
+    }
+
+    #[test]
+    fn tools_list_is_refused_with_a_bad_token() {
+        let (_dir, bridge, _) = bridge_with_token();
+        let error = handle_tools_list(&bridge, &json!({"token": "not-a-real-token"})).unwrap_err();
+        assert!(!error.is_empty());
+    }
+
+    #[test]
+    fn tools_list_succeeds_with_a_valid_token() {
+        let (_dir, bridge, token) = bridge_with_token();
+        let result = handle_tools_list(&bridge, &json!({"token": token})).unwrap();
+        let tools = result["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), TOOL_NAMES.len());
+    }
+
+    /// A minimal in-memory `AsyncWrite` sink so `serve_json_rpc_lines` can be
+    /// driven from a test without real stdio: pushes every write straight
+    /// into a shared buffer the test can inspect afterward.
+    #[derive(Clone)]
+    struct RecordingWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl tokio::io::AsyncWrite for RecordingWriter {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            std::task::Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    /// The stdio server used to terminate the whole session on the first
+    /// non-UTF-8 byte instead of resyncing the way it already does for
+    /// invalid JSON. A malformed line must produce one parse-error
+    /// response and leave the loop able to answer the next request.
+    #[tokio::test]
+    async fn a_non_utf8_line_is_resynced_instead_of_ending_the_session() {
+        let (_dir, bridge, _) = bridge_with_token();
+        let mut input = Vec::new();
+        input.extend_from_slice(&[0xFF, 0xFE, 0xFD, b'\n']);
+        input.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n");
+        let reader = BufReader::new(std::io::Cursor::new(input));
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer = RecordingWriter(output.clone());
+
+        serve_json_rpc_lines(&bridge, reader, writer).await.unwrap();
+
+        let bytes = output.lock().unwrap().clone();
+        let text = String::from_utf8(bytes).unwrap();
+        let mut responses = text
+            .lines()
+            .map(|line| serde_json::from_str::<JsonValue>(line).unwrap());
+        let first = responses.next().unwrap();
+        assert_eq!(first["error"]["code"], -32700, "{first}");
+        let second = responses.next().unwrap();
+        assert_eq!(
+            second["result"],
+            json!({}),
+            "the ping after the bad line must still be answered: {second}"
+        );
     }
 
     #[tokio::test]

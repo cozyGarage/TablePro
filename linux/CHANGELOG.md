@@ -173,3 +173,7 @@
 - Closing a secondary window now closes its database connection, SSH tunnel, and reconnect monitor, and cancels its health-poll and history-prune timers, instead of leaving them running for the rest of the process
 - GRANT, REVOKE, COPY, MERGE, and CREATE FUNCTION now name the table or object they target in the audit trail and approval dialog instead of showing a blank object list
 - A misspelled policy.toml environment or field name, or a connection override keyed by a UUID typed in a different case, now refuses to load instead of the override silently never applying
+- The MCP tools/list method requires the same token tools/call already does, instead of disclosing the full tool catalogue to any caller that can reach the listener
+- The MCP stdio server recovers from a non-UTF-8 line the same way it already does from invalid JSON, instead of ending the whole session
+- Repeated failed MCP authentication attempts are rate limited even when every attempt uses a different token string
+- The MCP HTTP transport now enforces the same request-size limit the stdio transport already did, instead of a larger framework default

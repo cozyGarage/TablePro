@@ -31,9 +31,21 @@ pub struct McpBridge {
     provider: Arc<dyn ConnectionProvider>,
     tokens: Arc<TokenStore>,
     rate_limiter: RateLimiter,
+    /// Bounds every call to `authenticate`, not just successful ones. It is
+    /// keyed on a single fixed key rather than the bearer string tried --
+    /// a brute-force caller sends a different string on every attempt, so
+    /// keying on the string would never throttle it -- so this bounds the
+    /// aggregate rate of authentication attempts against the whole server.
+    /// Without it, a failed authenticate never resolves to a token id to
+    /// key `rate_limiter` on, so it was unbounded: unlimited guesses, each
+    /// one taking the same cross-process token-store file lock issue and
+    /// revoke need.
+    auth_rate_limiter: RateLimiter,
     pub max_rows: u64,
     pub query_timeout_secs: u64,
 }
+
+const AUTH_ATTEMPT_KEY: &str = "authenticate";
 
 #[derive(Debug, Clone, Copy)]
 pub struct McpLimits {
@@ -62,6 +74,7 @@ impl McpBridge {
             provider,
             tokens,
             rate_limiter: RateLimiter::new(limits.requests_per_minute),
+            auth_rate_limiter: RateLimiter::new(limits.requests_per_minute),
             max_rows: limits.max_rows,
             query_timeout_secs: limits.query_timeout_secs,
         }
@@ -72,6 +85,7 @@ impl McpBridge {
     }
 
     pub fn authenticate(&self, bearer: &str) -> Result<McpToken, String> {
+        self.auth_rate_limiter.check(AUTH_ATTEMPT_KEY)?;
         let token = bearer.strip_prefix("Bearer ").unwrap_or(bearer).trim();
         self.tokens.authenticate(token)
     }
@@ -496,8 +510,50 @@ fn sql_looks_like_write(sql: &str, driver_id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{McpLimits, count_from_value, count_statement, sql_looks_like_write, validated_identifier};
+    use std::sync::Arc;
+
+    use super::{McpBridge, McpLimits, count_from_value, count_statement, sql_looks_like_write, validated_identifier};
+    use crate::tokens::TokenStore;
     use tablepro_core::Value;
+
+    struct NoProvider;
+
+    #[async_trait::async_trait]
+    impl super::ConnectionProvider for NoProvider {
+        async fn list_saved_connections(&self) -> Result<Vec<tablepro_storage::SavedConnection>, String> {
+            Ok(Vec::new())
+        }
+        async fn connection(
+            &self,
+            _connection_id: uuid::Uuid,
+            _principal: tablepro_policy::Principal,
+        ) -> Result<Arc<dyn tablepro_core::Connection>, String> {
+            Err("no connections in this test".into())
+        }
+    }
+
+    /// H-adjacent finding: a failed authenticate never resolves to a token
+    /// id, so it never reached the per-token rate limiter and could be
+    /// retried without bound, each attempt taking the token store's
+    /// cross-process file lock.
+    #[test]
+    fn repeated_failed_authentication_is_rate_limited_even_with_no_valid_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(TokenStore::open(dir.path().join("tokens.json")).unwrap());
+        let bridge = McpBridge::with_limits(
+            Arc::new(NoProvider),
+            store,
+            McpLimits {
+                requests_per_minute: 2,
+                ..McpLimits::default()
+            },
+        );
+
+        assert!(bridge.authenticate("guess-1").is_err());
+        assert!(bridge.authenticate("guess-2").is_err());
+        let third = bridge.authenticate("guess-3").unwrap_err();
+        assert!(third.contains("rate limit"), "{third}");
+    }
 
     #[test]
     fn a_count_statement_quotes_the_target_for_the_engine() {
