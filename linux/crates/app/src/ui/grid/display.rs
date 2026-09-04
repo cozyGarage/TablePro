@@ -24,7 +24,14 @@ pub fn value_to_display_text(value: &Value) -> String {
         Value::Int(i) => i.to_string(),
         Value::Float(f) => f.to_string(),
         Value::Text(s) => truncate_for_display(s),
-        Value::Bytes(b) => format!("<{} bytes>", b.len()),
+        // A NUL byte survives UTF-8 decoding (it's a valid codepoint)
+        // but is a strong signal the column really is binary, not
+        // text that happens to be stored as bytes -- keep the byte
+        // count for that case instead of displaying invisible NULs.
+        Value::Bytes(b) => match std::str::from_utf8(b) {
+            Ok(s) if !s.contains('\0') => truncate_for_display(s),
+            _ => format!("<{} bytes>", b.len()),
+        },
         Value::Date(d) => d.format("%Y-%m-%d").to_string(),
         Value::Time(t) => t.format("%H:%M:%S").to_string(),
         Value::DateTime(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -135,6 +142,22 @@ mod tests {
         assert_eq!(value_to_display_text(&Value::Int(42)), "42");
         assert_eq!(value_to_display_text(&Value::Text("hello".into())), "hello");
         assert_eq!(value_to_display_text(&Value::Bytes(vec![0u8; 16])), "<16 bytes>");
+    }
+
+    #[test]
+    fn display_text_shows_valid_utf8_bytes_as_text() {
+        assert_eq!(
+            value_to_display_text(&Value::Bytes(b"hello world".to_vec())),
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn display_text_keeps_invalid_utf8_bytes_as_a_byte_count() {
+        assert_eq!(
+            value_to_display_text(&Value::Bytes(vec![0xFF, 0xFE, 0x00, 0x01])),
+            "<4 bytes>"
+        );
     }
 
     #[test]

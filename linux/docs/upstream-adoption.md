@@ -67,7 +67,7 @@ not have to reconstruct the review.
 | Restore Previous Values | Browse quality, free, audited | Parked |
 | Copy or duplicate across connections | After object admin | Parked |
 | Pick a foreign key value from the rows it references; show a row as JSON with foreign keys expanded | Browse quality | Not started |
-| Read a binary column holding valid UTF-8 as text instead of raw bytes | Browse quality | Not started |
+| Read a binary column holding valid UTF-8 as text instead of raw bytes | Browse quality | Done: display-only, `Value` stays `Bytes` for export/literal/copy paths |
 | Exclude AUTO_INCREMENT/DEFINER from a SQL export, order exports by foreign-key dependency | SQL dump export (Priority A) | Not started |
 | MSSQL sign-in with Microsoft Entra ID | Connection auth, alongside Kerberos | Not started |
 | Redis Sentinel and Cluster connection modes | Redis driver depth (experimental) | Not started |

@@ -49,6 +49,7 @@
 - Screen readers now announce the browse toolbar's insert-row button by name
 - Installed GTK checks that a connection switch gates pending row edits and that a browse tab reads the connection it was reopened against
 - Each window holds its own database connection, so several databases can be open at the same time in separate windows
+- A binary column holding valid UTF-8 text now displays as that text instead of a byte count
 
 ### Changed
 
