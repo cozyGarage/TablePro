@@ -201,6 +201,10 @@ pub enum BrowseTabInput {
         request: BrowseRowCountRequest,
         count: u64,
     },
+    /// The row-count query failed or returned something unparseable.
+    /// Clears any previously known total instead of leaving it on
+    /// screen as if it were still accurate.
+    RowCountFailed(BrowseRowCountRequest),
     /// Show an error status page.
     ShowError(String),
     /// Re-issue the fetch for this tab (F5).
@@ -956,6 +960,14 @@ impl SimpleComponent for BrowseTab {
                         let _ = sender.output(BrowseTabOutput::StateChanged);
                     }
                 }
+                self.update_paginator_label();
+            }
+            BrowseTabInput::RowCountFailed(request) => {
+                if !self.row_count_requests.accepts(request) {
+                    return;
+                }
+                self.current_total_rows = None;
+                self.last_button.set_sensitive(false);
                 self.update_paginator_label();
             }
             BrowseTabInput::ShowError(message) => {

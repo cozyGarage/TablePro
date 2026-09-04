@@ -184,3 +184,4 @@
 - Closing an editor or structure tab now disconnects its dark-mode-change handler instead of leaking the tab's widget tree for the rest of the process
 - The editor font-size preference now scopes to the SQL editor instead of resizing every text view on screen, including the EXPLAIN dialog and JSON popover
 - Browsing a different Redis database from the sidebar no longer leaves later queries on that connection running against it; the connection's own database is restored afterward
+- A failed row-count query now clears the paginator's total and disables Last Page instead of leaving the previous total on screen as if it were still accurate

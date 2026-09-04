@@ -259,19 +259,14 @@ impl App {
                     } else {
                         conn.query_controlled(&sql, &control).await
                     };
-                    if let Ok(qr) = qr_result
-                        && let Some(row) = qr.rows.first()
-                        && let Some(value) = row.first()
-                    {
-                        let count = match value {
-                            tablepro_core::Value::Int(i) if *i >= 0 => Some(*i as u64),
-                            tablepro_core::Value::Float(f) if *f >= 0.0 && f.is_finite() => Some(*f as u64),
-                            tablepro_core::Value::Decimal(d) => d.to_string().parse::<u64>().ok(),
-                            _ => None,
-                        };
-                        if let Some(count) = count {
-                            sender_clone.input(AppMsg::RowCountLoaded(tab_id, request, count));
-                        }
+                    let count = qr_result.ok().and_then(|qr| row_count_from_result(&qr));
+                    match count {
+                        Some(count) => sender_clone.input(AppMsg::RowCountLoaded(tab_id, request, count)),
+                        // A stale total left on screen after a failed
+                        // recount can enable Last Page past the real
+                        // end of the table -- clear it instead of
+                        // leaving the last successful count displayed.
+                        None => sender_clone.input(AppMsg::RowCountFailed(tab_id, request)),
                     }
                 })
                 .drop_on_shutdown()
@@ -298,6 +293,10 @@ impl App {
 
     pub(super) fn on_browse_row_count_loaded(&self, tab_id: Uuid, request: BrowseRowCountRequest, count: u64) {
         self.dispatch_to_tab(tab_id, BrowseTabInput::RowCountLoaded { request, count });
+    }
+
+    pub(super) fn on_browse_row_count_failed(&self, tab_id: Uuid, request: BrowseRowCountRequest) {
+        self.dispatch_to_tab(tab_id, BrowseTabInput::RowCountFailed(request));
     }
 
     pub(super) fn on_browse_load_failed(&mut self, tab_id: Option<Uuid>, failure: BrowseLoadFailure) {
@@ -498,6 +497,16 @@ impl App {
     }
 }
 
+fn row_count_from_result(result: &QueryResult) -> Option<u64> {
+    let value = result.rows.first()?.first()?;
+    match value {
+        tablepro_core::Value::Int(i) if *i >= 0 => Some(*i as u64),
+        tablepro_core::Value::Float(f) if *f >= 0.0 && f.is_finite() => Some(*f as u64),
+        tablepro_core::Value::Decimal(d) => d.to_string().parse::<u64>().ok(),
+        _ => None,
+    }
+}
+
 fn resolved_order_by(driver_id: &str, columns: &[ColumnInfo], sort: Option<(usize, bool)>) -> Option<String> {
     let mut terms = Vec::new();
     let selected = sort.and_then(|(index, ascending)| {
@@ -524,8 +533,44 @@ fn resolved_order_by(driver_id: &str, columns: &[ColumnInfo], sort: Option<(usiz
 
 #[cfg(test)]
 mod tests {
-    use super::resolved_order_by;
-    use tablepro_core::ColumnInfo;
+    use super::{resolved_order_by, row_count_from_result};
+    use tablepro_core::{ColumnInfo, QueryResult, Value};
+
+    fn scalar_result(row: Option<Value>) -> QueryResult {
+        QueryResult {
+            columns: Vec::new(),
+            rows: row.map(|v| vec![vec![v]]).unwrap_or_default(),
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn a_non_negative_integer_count_is_used() {
+        assert_eq!(row_count_from_result(&scalar_result(Some(Value::Int(42)))), Some(42));
+    }
+
+    #[test]
+    fn an_empty_result_has_no_count() {
+        assert_eq!(row_count_from_result(&scalar_result(None)), None);
+    }
+
+    #[test]
+    fn a_negative_or_non_finite_count_is_refused_instead_of_wrapping() {
+        assert_eq!(row_count_from_result(&scalar_result(Some(Value::Int(-1)))), None);
+        assert_eq!(
+            row_count_from_result(&scalar_result(Some(Value::Float(f64::NAN)))),
+            None
+        );
+        assert_eq!(row_count_from_result(&scalar_result(Some(Value::Float(-1.0)))), None);
+    }
+
+    #[test]
+    fn a_non_numeric_scalar_has_no_count() {
+        assert_eq!(
+            row_count_from_result(&scalar_result(Some(Value::Text("x".into())))),
+            None
+        );
+    }
 
     fn column(name: &str, primary_key: bool) -> ColumnInfo {
         ColumnInfo {

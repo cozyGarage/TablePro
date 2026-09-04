@@ -522,6 +522,7 @@ impl SimpleComponent for App {
             AppMsg::RowsLoaded(tab_id, offset, result) => self.on_browse_rows_loaded(tab_id, offset, result),
             AppMsg::LoadFailed(tab_id, msg) => self.on_browse_load_failed(tab_id, msg),
             AppMsg::RowCountLoaded(tab_id, request, count) => self.on_browse_row_count_loaded(tab_id, request, count),
+            AppMsg::RowCountFailed(tab_id, request) => self.on_browse_row_count_failed(tab_id, request),
             AppMsg::FetchBrowsePage(tab_id) => self.fetch_browse_page(tab_id, sender),
             AppMsg::FetchBrowseColumns(tab_id) => self.fetch_browse_columns(tab_id, sender),
             AppMsg::FetchBrowseRowCount(tab_id) => self.fetch_browse_row_count(tab_id, sender),
