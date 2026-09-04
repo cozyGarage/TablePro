@@ -192,3 +192,4 @@
 - MongoDB errors are now classified from the driver's structured error kind instead of substring-matching the error message, so an unrelated failure whose text happens to contain "connection" or "auth" is no longer misreported as connection-refused or an authentication failure
 - Connecting to PostgreSQL or MySQL now makes one authentication attempt instead of two, so a server that locks an account out after repeated failures no longer counts a single Connect click twice
 - A cancellation request that outlasts its own two-second dispatch window now finishes and closes the connection it used on PostgreSQL as well as MySQL, instead of risking a protocol-desynced connection in the single-slot cancellation pool
+- Restoring a saved workspace with a "new table" draft or an unnamed table tab ahead of the previously active tab now reactivates the correct tab instead of one shifted by the tabs that were never persisted
