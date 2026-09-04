@@ -27,10 +27,25 @@ pub enum BlastRadiusRewrite {
 pub fn count_sql_for_mutation(sql: &str, driver_id: &str) -> Option<BlastRadiusRewrite> {
     let dialect = dialect_for(driver_id);
     let statements = Parser::parse_sql(dialect.as_ref(), sql.trim()).ok()?;
-    if statements.len() != 1 {
-        return None;
+    if statements.len() == 1 {
+        return rewrite_for_statement(&statements[0], driver_id);
     }
-    match &statements[0] {
+    // A batch's every statement must resolve to a literal row count with
+    // no database round trip -- a mix of unknowns, or one that needs its
+    // own count query, can't be folded into a single estimate, so the
+    // batch as a whole stays unknown rather than guessing.
+    let mut total = 0u64;
+    for statement in &statements {
+        match rewrite_for_statement(statement, driver_id)? {
+            BlastRadiusRewrite::Known(rows) => total += rows,
+            BlastRadiusRewrite::CountQuery(_) => return None,
+        }
+    }
+    Some(BlastRadiusRewrite::Known(total))
+}
+
+fn rewrite_for_statement(statement: &Statement, driver_id: &str) -> Option<BlastRadiusRewrite> {
+    match statement {
         Statement::Update {
             table, from, selection, ..
         } => {
@@ -210,5 +225,24 @@ mod tests {
         let sql = r.count_sql.to_lowercase();
         assert!(sql.contains("count"), "{sql}");
         assert!(sql.contains("huge_table"), "{sql}");
+    }
+
+    #[test]
+    fn a_batch_of_literal_insert_values_sums_to_a_known_count() {
+        let rewrite = count_sql_for_mutation(
+            "INSERT INTO t (a) VALUES (1);\nINSERT INTO t (a) VALUES (2), (3)",
+            "postgres",
+        )
+        .unwrap();
+        assert_eq!(rewrite, BlastRadiusRewrite::Known(3));
+    }
+
+    #[test]
+    fn a_batch_mixing_a_known_and_an_unknown_statement_stays_unknown() {
+        let rewrite = count_sql_for_mutation(
+            "INSERT INTO t (a) VALUES (1);\nUPDATE t SET a = 2 WHERE id = 1",
+            "postgres",
+        );
+        assert!(rewrite.is_none());
     }
 }
