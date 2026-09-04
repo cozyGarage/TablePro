@@ -249,8 +249,16 @@ impl Connection for MongodbConnection {
                 rows_affected: result.deleted_count,
             });
         }
+        if let Some(coll) = parse_drop_table_sql(trimmed) {
+            self.db()
+                .collection::<Document>(&coll)
+                .drop()
+                .await
+                .map_err(map_mongo_error)?;
+            return Ok(ExecResult { rows_affected: 0 });
+        }
         Err(DriverError::Unsupported(
-            "MongoDB execute supports insertOne/deleteMany shell forms only in this MVP".into(),
+            "MongoDB execute supports insertOne/deleteMany shell forms and DROP TABLE only in this MVP".into(),
         ))
     }
 
@@ -537,6 +545,31 @@ fn parse_delete_many(input: &str) -> Option<(String, Document)> {
     Some((collection, serde_json_to_document(doc_src).ok()?))
 }
 
+/// The Structure tab's "Drop table" action builds engine-neutral SQL
+/// through `tablepro_core::sql_ddl::build_drop_table`, which has no
+/// MongoDB-specific case -- it emits `DROP TABLE IF EXISTS "name"`
+/// with the same quoting every other driver gets. Recognize that shape
+/// here and translate it into a native collection drop instead of
+/// failing the drop outright.
+fn parse_drop_table_sql(input: &str) -> Option<String> {
+    let trimmed = input.trim().trim_end_matches(';').trim();
+    let rest = trimmed.strip_prefix("DROP TABLE")?.trim_start();
+    let rest = rest.strip_prefix("IF EXISTS").unwrap_or(rest).trim_start();
+    let mut chars = rest.strip_prefix('"')?.chars();
+    let mut name = String::new();
+    loop {
+        match chars.next()? {
+            '"' if chars.clone().next() == Some('"') => {
+                chars.next();
+                name.push('"');
+            }
+            '"' => break,
+            c => name.push(c),
+        }
+    }
+    Some(name)
+}
+
 fn split_collection_call<'a>(input: &'a str, method: &str) -> Option<(String, &'a str)> {
     let rest = input.strip_prefix("db")?;
     let (collection, after) = if let Some(rest) = rest.strip_prefix('.') {
@@ -640,6 +673,32 @@ mod tests {
         assert_eq!(d.id(), "mongodb");
         assert_eq!(d.display_name(), "MongoDB");
         assert_eq!(d.default_port(), 27017);
+    }
+
+    #[test]
+    fn drop_table_sql_extracts_the_collection_name() {
+        assert_eq!(
+            parse_drop_table_sql(r#"DROP TABLE IF EXISTS "widgets""#),
+            Some("widgets".to_string())
+        );
+        assert_eq!(
+            parse_drop_table_sql(r#"DROP TABLE "widgets""#),
+            Some("widgets".to_string())
+        );
+    }
+
+    #[test]
+    fn drop_table_sql_unescapes_a_doubled_quote_in_the_name() {
+        assert_eq!(
+            parse_drop_table_sql(r#"DROP TABLE IF EXISTS "a""b""#),
+            Some(r#"a"b"#.to_string())
+        );
+    }
+
+    #[test]
+    fn drop_table_sql_ignores_an_unrelated_statement() {
+        assert_eq!(parse_drop_table_sql("SELECT 1"), None);
+        assert_eq!(parse_drop_table_sql(r#"db.widgets.deleteMany({})"#), None);
     }
 
     #[tokio::test]

@@ -85,10 +85,10 @@ to wait for Phase 10/6 sequencing:
 
 | Upstream fix | Check | Status |
 |---|---|---|
-| `fix(mongodb): implement dropObjectStatement to support dropping collections` | Does `tablepro-driver-mongodb` support dropping a collection through the structure tab's drop action, or only tables/databases it treats as SQL-shaped? | Not checked |
-| `fix(connections): wait for a stale tunnel process to exit before reusing its port` | Does `tablepro-ssh`'s local-port allocation risk rebinding a port a just-closed tunnel hasn't released yet? | Not checked |
-| `fix(datagrid): refuse edits to server-owned columns at the model boundary` | Generated/identity columns are already read-only in Structure; confirm Browse's inline cell editor also refuses to open an editor on a generated column, not just on save | Not checked |
-| `fix(datagrid): carry identity columns through so a new row pre-fills DEFAULT` | Does inserting a new Browse row already leave an identity/auto-increment column unset (DEFAULT) rather than sending an explicit value? | Not checked |
+| `fix(mongodb): implement dropObjectStatement to support dropping collections` | Does `tablepro-driver-mongodb` support dropping a collection through the structure tab's drop action, or only tables/databases it treats as SQL-shaped? | Confirmed and fixed: `execute()` only recognized `insertOne`/`deleteMany` shell forms, so Drop Table's engine-neutral `DROP TABLE IF EXISTS "name"` failed with `Unsupported`. Added a `DROP TABLE` recognizer that translates to a native collection drop |
+| `fix(connections): wait for a stale tunnel process to exit before reusing its port` | Does `tablepro-ssh`'s local-port allocation risk rebinding a port a just-closed tunnel hasn't released yet? | Not applicable: `bind_local` always binds TCP to port 0 (OS-assigned ephemeral port) for every new tunnel; it never reuses a specific remembered port, so this race has no analog here |
+| `fix(datagrid): refuse edits to server-owned columns at the model boundary` | Generated/identity columns are already read-only in Structure; confirm Browse's inline cell editor also refuses to open an editor on a generated column, not just on save | Already correct: `is_cell_editable` (`ui/grid/column.rs`) excludes `is_generated`/`is_auto_increment`/primary-key columns before a cell editor is ever constructed, with an existing unit test |
+| `fix(datagrid): carry identity columns through so a new row pre-fills DEFAULT` | Does inserting a new Browse row already leave an identity/auto-increment column unset (DEFAULT) rather than sending an explicit value? | Already correct: `build_insert_from_draft` (`core/src/sql_dialect.rs`) unconditionally omits `is_auto_increment`/`is_generated` columns from every generated INSERT, letting the server apply its own default |
 
 Feature-shaped items from the same slice are folded into the Take table
 above, in their natural category. None of these outrank the existing

@@ -126,6 +126,7 @@
 - PostgreSQL cancellation now stops the server query, records a terminal audit outcome, supports parameterized operations and transaction rollback, and discards sessions with unknown outcomes
 - Approval dialogs attach to a visible application window when the desktop does not report an active window
 - Saved connections expose a keyboard and screen-reader accessible open action
+- Drop Table on a MongoDB collection now drops it instead of failing with an unsupported-statement error
 
 ### Removed
 
