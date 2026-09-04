@@ -68,7 +68,7 @@ not have to reconstruct the review.
 | Copy or duplicate across connections | After object admin | Parked |
 | Pick a foreign key value from the rows it references; show a row as JSON with foreign keys expanded | Browse quality | First slice done: Browse now fetches foreign keys and marks the column header (🔗). The picker dialog itself is the next slice -- deliberately deferred since it means adding a button into the ColumnView cell factory, the most delicate part of grid rendering |
 | Read a binary column holding valid UTF-8 as text instead of raw bytes | Browse quality | Done: display-only, `Value` stays `Bytes` for export/literal/copy paths |
-| Exclude AUTO_INCREMENT/DEFINER from a SQL export, order exports by foreign-key dependency | SQL dump export (Priority A) | Not started |
+| Exclude AUTO_INCREMENT/DEFINER from a SQL export, order exports by foreign-key dependency | SQL dump export (Priority A) | Not applicable yet: no bulk SQL dump export exists to fix. Checked whether it applied to Copy Row as INSERT instead -- it doesn't, that helper deliberately keeps auto-increment values by design (see its doc comment in sql_literal.rs) |
 | MSSQL sign-in with Microsoft Entra ID | Connection auth, alongside Kerberos | Not started |
 | Redis Sentinel and Cluster connection modes | Redis driver depth (experimental) | Not started |
 | Open a Parquet/CSV/TSV/JSON file directly as a DuckDB-backed connection | DuckDB driver depth (experimental) | Not started |
