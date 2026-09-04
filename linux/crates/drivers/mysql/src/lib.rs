@@ -507,16 +507,18 @@ fn rows_into_result(collected: &[MySqlRow], truncated: bool) -> QueryResult {
 fn extract_value(row: &MySqlRow, idx: usize) -> Value {
     let type_name = row.columns()[idx].type_info().name().to_ascii_uppercase();
     match type_name.as_str() {
-        // BIGINT UNSIGNED's range (up to u64::MAX) exceeds i64, the
-        // only integer Value carries -- decoding a legitimately large
-        // id or hash as i64 fails for a real, non-null value, so a
-        // second attempt as u64 keeps its digits as text rather than
-        // showing an empty cell for what looked like a normal integer
-        // column.
-        "TINYINT" | "SMALLINT" | "INT" | "MEDIUMINT" | "BIGINT" => row
-            .try_get::<i64, _>(idx)
-            .map(Value::Int)
-            .or_else(|_| row.try_get::<u64, _>(idx).map(|v| Value::Text(v.to_string())))
+        "TINYINT" | "SMALLINT" | "INT" | "MEDIUMINT" | "BIGINT" => {
+            row.try_get::<i64, _>(idx).map(Value::Int).unwrap_or(Value::Null)
+        }
+        // sqlx's i64 decoder refuses an UNSIGNED-flagged column
+        // outright (a distinct type-compatibility class, not just the
+        // same decode with a wider range), so every one of these
+        // columns read back as an empty cell regardless of value --
+        // decode as u64 instead, and keep BIGINT UNSIGNED's digits as
+        // text on the rare value that exceeds i64::MAX.
+        "TINYINT UNSIGNED" | "SMALLINT UNSIGNED" | "INT UNSIGNED" | "MEDIUMINT UNSIGNED" | "BIGINT UNSIGNED" => row
+            .try_get::<u64, _>(idx)
+            .map(|v| i64::try_from(v).map_or_else(|_| Value::Text(v.to_string()), Value::Int))
             .unwrap_or(Value::Null),
         "FLOAT" | "DOUBLE" => row.try_get::<f64, _>(idx).map(Value::Float).unwrap_or(Value::Null),
         // DECIMAL/NUMERIC arrive over the wire as text, but sqlx only
