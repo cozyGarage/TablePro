@@ -514,25 +514,37 @@ fn rows_into_result(collected: &[SqliteRow], truncated: bool) -> QueryResult {
 fn extract_value(row: &SqliteRow, idx: usize) -> Value {
     let type_name = row.columns()[idx].type_info().name().to_ascii_uppercase();
     match type_name.as_str() {
-        "INTEGER" => row.try_get::<i64, _>(idx).map(Value::Int).unwrap_or(Value::Null),
-        "REAL" => row.try_get::<f64, _>(idx).map(Value::Float).unwrap_or(Value::Null),
-        "BLOB" => row.try_get::<Vec<u8>, _>(idx).map(Value::Bytes).unwrap_or(Value::Null),
-        "BOOLEAN" => row.try_get::<bool, _>(idx).map(Value::Bool).unwrap_or(Value::Null),
+        "INTEGER" => row
+            .try_get::<i64, _>(idx)
+            .map(Value::Int)
+            .unwrap_or_else(|_| decode_fallback(row, idx)),
+        "REAL" => row
+            .try_get::<f64, _>(idx)
+            .map(Value::Float)
+            .unwrap_or_else(|_| decode_fallback(row, idx)),
+        "BLOB" => row
+            .try_get::<Vec<u8>, _>(idx)
+            .map(Value::Bytes)
+            .unwrap_or_else(|_| decode_fallback(row, idx)),
+        "BOOLEAN" => row
+            .try_get::<bool, _>(idx)
+            .map(Value::Bool)
+            .unwrap_or_else(|_| decode_fallback(row, idx)),
         "DATE" => row
             .try_get::<chrono::NaiveDate, _>(idx)
             .map(Value::Date)
             .or_else(|_| row.try_get::<String, _>(idx).map(Value::Text))
-            .unwrap_or(Value::Null),
+            .unwrap_or_else(|_| decode_fallback(row, idx)),
         "TIME" => row
             .try_get::<chrono::NaiveTime, _>(idx)
             .map(Value::Time)
             .or_else(|_| row.try_get::<String, _>(idx).map(Value::Text))
-            .unwrap_or(Value::Null),
+            .unwrap_or_else(|_| decode_fallback(row, idx)),
         "DATETIME" | "TIMESTAMP" => row
             .try_get::<chrono::NaiveDateTime, _>(idx)
             .map(Value::DateTime)
             .or_else(|_| row.try_get::<String, _>(idx).map(Value::Text))
-            .unwrap_or(Value::Null),
+            .unwrap_or_else(|_| decode_fallback(row, idx)),
         _ => untyped_value(row, idx),
     }
 }
@@ -555,6 +567,22 @@ fn untyped_value(row: &SqliteRow, idx: usize) -> Value {
         .ok()
         .flatten()
         .map_or(Value::Null, Value::Bytes)
+}
+
+/// A declared column type is a hint, not a guarantee -- SQLite's type
+/// affinity can still store a row's actual value in a different
+/// storage class than the column's declared type. When the declared
+/// type's own decode fails, this is reached to find out whether the
+/// value is genuinely NULL or just stored as text/bytes instead, so a
+/// real value is never silently shown as an empty cell.
+fn decode_fallback(row: &SqliteRow, idx: usize) -> Value {
+    if let Ok(Some(text)) = row.try_get::<Option<String>, _>(idx) {
+        return Value::Text(text);
+    }
+    if let Ok(Some(bytes)) = row.try_get::<Option<Vec<u8>>, _>(idx) {
+        return Value::Text(bytes.iter().map(|b| format!("{b:02x}")).collect());
+    }
+    Value::Null
 }
 
 fn bind_sqlite_params<'q>(
@@ -744,6 +772,20 @@ mod tests {
                 Value::Text("a,b".into()),
             ]]
         );
+    }
+
+    #[tokio::test]
+    async fn a_value_that_does_not_match_its_declared_column_type_keeps_its_text_instead_of_becoming_null() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("affinity.db");
+        let conn = SqliteDriver.connect(opts_for(path.to_str().unwrap())).await.unwrap();
+        conn.execute("CREATE TABLE t (v REAL)").await.unwrap();
+        // REAL/NUMERIC affinity only converts a string that looks
+        // numeric; this one doesn't, so SQLite keeps it stored as
+        // TEXT even though the column is declared REAL.
+        conn.execute("INSERT INTO t (v) VALUES ('not-a-number')").await.unwrap();
+        let result = conn.query("SELECT v FROM t").await.unwrap();
+        assert_eq!(result.rows, vec![vec![Value::Text("not-a-number".into())]]);
     }
 
     #[tokio::test]
