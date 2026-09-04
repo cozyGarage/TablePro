@@ -195,3 +195,4 @@
 - Restoring a saved workspace with a "new table" draft or an unnamed table tab ahead of the previously active tab now reactivates the correct tab instead of one shifted by the tabs that were never persisted
 - The audit journal's hash chain is now verified against each record's exact original bytes instead of a re-serialization of its parsed contents, so a future change to how an audit event is written can no longer retroactively break verification of records already on disk
 - SQLite values that don't match their column's declared type (SQLite's type affinity can store a row's value in a different storage class than the column declares) now keep their text or byte representation instead of silently appearing as an empty cell
+- MySQL BIGINT UNSIGNED values past i64's range now show their full digits as text instead of appearing as an empty cell

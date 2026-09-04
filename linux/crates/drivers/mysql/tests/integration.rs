@@ -266,6 +266,22 @@ async fn pagination_and_truncated_flag() {
 
 #[tokio::test]
 #[ignore = "requires docker"]
+async fn a_bigint_unsigned_value_past_i64_max_keeps_its_digits() {
+    let (_c, opts) = start_mysql().await;
+    let conn = connect(opts).await;
+    conn.execute("CREATE TABLE big_unsigned (v BIGINT UNSIGNED)")
+        .await
+        .unwrap();
+    conn.execute("INSERT INTO big_unsigned (v) VALUES (18446744073709551615)")
+        .await
+        .unwrap();
+
+    let result = conn.query("SELECT v FROM big_unsigned").await.unwrap();
+    assert_eq!(result.rows, vec![vec![Value::Text("18446744073709551615".into())]]);
+}
+
+#[tokio::test]
+#[ignore = "requires docker"]
 async fn bad_sql_returns_query_error() {
     let (_c, opts) = start_mysql().await;
     let conn = connect(opts).await;

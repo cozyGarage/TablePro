@@ -507,9 +507,17 @@ fn rows_into_result(collected: &[MySqlRow], truncated: bool) -> QueryResult {
 fn extract_value(row: &MySqlRow, idx: usize) -> Value {
     let type_name = row.columns()[idx].type_info().name().to_ascii_uppercase();
     match type_name.as_str() {
-        "TINYINT" | "SMALLINT" | "INT" | "MEDIUMINT" | "BIGINT" => {
-            row.try_get::<i64, _>(idx).map(Value::Int).unwrap_or(Value::Null)
-        }
+        // BIGINT UNSIGNED's range (up to u64::MAX) exceeds i64, the
+        // only integer Value carries -- decoding a legitimately large
+        // id or hash as i64 fails for a real, non-null value, so a
+        // second attempt as u64 keeps its digits as text rather than
+        // showing an empty cell for what looked like a normal integer
+        // column.
+        "TINYINT" | "SMALLINT" | "INT" | "MEDIUMINT" | "BIGINT" => row
+            .try_get::<i64, _>(idx)
+            .map(Value::Int)
+            .or_else(|_| row.try_get::<u64, _>(idx).map(|v| Value::Text(v.to_string())))
+            .unwrap_or(Value::Null),
         "FLOAT" | "DOUBLE" => row.try_get::<f64, _>(idx).map(Value::Float).unwrap_or(Value::Null),
         "DECIMAL" | "NUMERIC" => row
             .try_get::<rust_decimal::Decimal, _>(idx)
