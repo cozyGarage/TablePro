@@ -32,6 +32,21 @@ struct JournalRecord {
     event: AuditEvent,
 }
 
+/// Parses a line without committing to `AuditEvent`'s current shape --
+/// `event` stays the exact bytes it was on disk so the hash can be
+/// checked against what was actually written, not a re-serialization
+/// of a parsed struct. A future change to `AuditEvent`'s `Serialize`
+/// output would otherwise retroactively break verification of every
+/// record already on disk.
+#[derive(Debug, Deserialize)]
+struct JournalRecordRaw<'a> {
+    seq: u64,
+    prev_hash: String,
+    hash: String,
+    #[serde(borrow)]
+    event: &'a serde_json::value::RawValue,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AuditJournalRecovery {
     legacy_journal: Option<LegacyJournalRotation>,
@@ -383,8 +398,8 @@ fn verify_locked(file: &mut File, recover_partial: bool) -> Result<VerifiedJourn
             continue;
         }
 
-        let record = match serde_json::from_slice::<JournalRecord>(line) {
-            Ok(record) => record,
+        let raw = match serde_json::from_slice::<JournalRecordRaw>(line) {
+            Ok(raw) => raw,
             Err(_) if !terminated && recover_partial => {
                 file.set_len(offset as u64)?;
                 file.sync_data()?;
@@ -392,11 +407,12 @@ fn verify_locked(file: &mut File, recover_partial: bool) -> Result<VerifiedJourn
             }
             Err(error) => return Err(error.into()),
         };
-        validate_record(&record, &tail)?;
-        track_operation_state(&mut pending, &mut unresolved, &record.event);
+        validate_chain_fields(raw.seq, &raw.prev_hash, &raw.hash, &tail, raw.event.get().as_bytes())?;
+        let event: AuditEvent = serde_json::from_str(raw.event.get())?;
+        track_operation_state(&mut pending, &mut unresolved, &event);
         tail = JournalTail {
-            seq: record.seq,
-            hash: record.hash,
+            seq: raw.seq,
+            hash: raw.hash,
         };
 
         if !terminated && recover_partial {
@@ -487,16 +503,6 @@ fn recovery_outcome(mut intent: AuditEvent) -> AuditEvent {
     intent.rows_affected = None;
     intent.duration_ms = None;
     intent
-}
-
-fn validate_record(record: &JournalRecord, tail: &JournalTail) -> Result<(), StorageError> {
-    validate_chain_fields(
-        record.seq,
-        &record.prev_hash,
-        &record.hash,
-        tail,
-        &serde_json::to_vec(&record.event)?,
-    )
 }
 
 fn validate_chain_fields(
@@ -713,6 +719,28 @@ mod tests {
             .unwrap();
         assert_eq!(journal.verify_chain().await.unwrap(), 2);
         assert_eq!(journal.recent(10).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_record_with_non_canonical_whitespace_in_its_event_json_still_verifies() {
+        // Simulates a record written by a differently-formatted (but
+        // semantically identical) serialization of AuditEvent -- e.g.
+        // a future field-order or whitespace change. Hashing the raw
+        // on-disk bytes must still validate it; re-serializing the
+        // parsed struct to recompute the hash would not reproduce
+        // these exact bytes and would wrongly reject it as tampered.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let event = sample_event(Principal::human_gui());
+        let canonical = serde_json::to_string(&event).unwrap();
+        let padded = canonical.replacen(':', ":  ", 1);
+        assert_ne!(padded, canonical);
+        let hash = record_hash(GENESIS_HASH, 1, padded.as_bytes());
+        let line = format!(r#"{{"seq":1,"prev_hash":"{GENESIS_HASH}","hash":"{hash}","event":{padded}}}"#);
+        tokio::fs::write(&path, format!("{line}\n")).await.unwrap();
+        let journal =
+            AuditJournal::open_validated(path).expect("a non-canonical but faithfully hashed record must verify");
+        assert!(!journal.recovery().recovered_unresolved_operations());
     }
 
     #[tokio::test]
