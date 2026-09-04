@@ -743,6 +743,7 @@ impl SimpleComponent for App {
     fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
         if let Some(id) = self.connection_id.take() {
             crate::services::database_service::instance().close(id);
+            crate::services::window_registry::unregister(id);
         }
         if let Some(source) = self.poll_health_source.take() {
             source.remove();

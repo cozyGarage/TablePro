@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::classify::StatementFacts;
 use crate::principal::Principal;
@@ -9,6 +10,7 @@ use tablepro_core::Environment;
 pub struct ApprovalRequest {
     pub principal: Principal,
     pub environment: Environment,
+    pub connection_id: Uuid,
     pub connection_name: String,
     pub sql: String,
     pub facts: StatementFacts,

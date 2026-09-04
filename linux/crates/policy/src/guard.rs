@@ -171,6 +171,7 @@ impl PolicyGuard {
                     .request(ApprovalRequest {
                         principal: self.ctx.principal.clone(),
                         environment: self.ctx.environment,
+                        connection_id: self.ctx.connection_id,
                         connection_name: self.ctx.connection_name.clone(),
                         sql: sql.to_string(),
                         facts: facts.clone(),

@@ -49,6 +49,7 @@ mod tests {
         ApprovalRequest {
             principal,
             environment: Environment::Prod,
+            connection_id: uuid::Uuid::new_v4(),
             connection_name: "production".into(),
             sql: "DELETE FROM jobs WHERE id = 1".into(),
             facts: StatementFacts::unparseable("test"),

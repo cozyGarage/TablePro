@@ -58,6 +58,7 @@ impl App {
         self.dialog = None;
         self.connected = true;
         self.connection_id = Some(id);
+        crate::services::window_registry::register(id, self.window.clone().upcast());
         self.current_driver_id = Some(driver_id.clone());
         self.read_only = self.window_metadata().map(|m| m.read_only).unwrap_or(false);
         self.read_only_badge.set_visible(self.read_only);
@@ -168,6 +169,7 @@ impl App {
                 crate::services::window_state::set_last_connection_id(None);
             }
             database_service::instance().close(id);
+            crate::services::window_registry::unregister(id);
         }
         self.schema_buffer.set_text(crate::ui::editor::SQL_KEYWORDS);
         self.current_driver_id = None;
