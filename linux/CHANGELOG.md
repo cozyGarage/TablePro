@@ -188,3 +188,5 @@
 - An approval dialog now appears on the window that owns the connection the statement runs on, instead of whichever window last had keyboard focus
 - SQL Server Verify Ca and Verify Full connections now use a saved certificate authority to verify the server, instead of only ever checking the system trust store
 - A KILL QUERY dispatch that outlasts its own two-second cancellation window now finishes and closes the connection it used instead of leaving MySQL's single-slot cancellation pool with a connection whose response was never fully read
+- MongoDB connections always request a direct connection, so a replica set member's advertised hostname can no longer redirect the client away from the saved host or its SSH tunnel
+- MongoDB errors are now classified from the driver's structured error kind instead of substring-matching the error message, so an unrelated failure whose text happens to contain "connection" or "auth" is no longer misreported as connection-refused or an authentication failure

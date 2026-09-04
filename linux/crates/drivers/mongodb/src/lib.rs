@@ -36,24 +36,7 @@ impl DatabaseDriver for MongodbDriver {
     }
 
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
-        let scheme = "mongodb";
-        let password = opts.password.expose_secret();
-        let auth = if !opts.username.is_empty() {
-            format!("{}:{}@", encode_uri(&opts.username), encode_uri(password))
-        } else {
-            String::new()
-        };
-        let db_path = if opts.database.is_empty() {
-            String::new()
-        } else {
-            format!("/{}", encode_uri(&opts.database))
-        };
-        let uri = format!("{scheme}://{auth}{}:{}{db_path}", opts.host, opts.port);
-        let mut client_opts = ClientOptions::parse(&uri).await.map_err(map_mongo_error)?;
-        client_opts.app_name = Some("TablePro".into());
-        client_opts.tls = Some(tls_for(&opts.tls));
-        client_opts.connect_timeout = Some(CONNECT_TIMEOUT);
-        client_opts.server_selection_timeout = Some(CONNECT_TIMEOUT);
+        let client_opts = build_client_options(&opts).await?;
         let client = Client::with_options(client_opts).map_err(map_mongo_error)?;
         let database_name = if opts.database.is_empty() {
             "test".into()
@@ -70,6 +53,33 @@ impl DatabaseDriver for MongodbDriver {
 }
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+async fn build_client_options(opts: &ConnectOptions) -> Result<ClientOptions, DriverError> {
+    let scheme = "mongodb";
+    let password = opts.password.expose_secret();
+    let auth = if !opts.username.is_empty() {
+        format!("{}:{}@", encode_uri(&opts.username), encode_uri(password))
+    } else {
+        String::new()
+    };
+    let db_path = if opts.database.is_empty() {
+        String::new()
+    } else {
+        format!("/{}", encode_uri(&opts.database))
+    };
+    let uri = format!("{scheme}://{auth}{}:{}{db_path}", opts.host, opts.port);
+    let mut client_opts = ClientOptions::parse(&uri).await.map_err(map_mongo_error)?;
+    client_opts.app_name = Some("TablePro".into());
+    client_opts.tls = Some(tls_for(&opts.tls));
+    client_opts.connect_timeout = Some(CONNECT_TIMEOUT);
+    client_opts.server_selection_timeout = Some(CONNECT_TIMEOUT);
+    // Every saved connection names exactly one host. Without this, SDAM
+    // topology discovery can pick up a replica set member's advertised
+    // hostname and try to redial it directly, bypassing the SSH tunnel
+    // or reaching a host the client can't resolve.
+    client_opts.direct_connection = Some(true);
+    Ok(client_opts)
+}
 
 /// Map the shared TLS modes onto what the rustls-backed MongoDB driver can
 /// express. It has no CA-only mode, so `VerifyCa` verifies the hostname too,
@@ -597,16 +607,16 @@ fn serde_json_to_document(src: &str) -> Result<Document, String> {
 }
 
 fn map_mongo_error(err: mongodb::error::Error) -> DriverError {
-    let msg = err.to_string();
-    if msg.contains("Connection refused") || msg.contains("connection") {
-        DriverError::ConnectionRefused
-    } else if msg.contains("Authentication failed") || msg.contains("auth") {
-        DriverError::AuthFailed
-    } else {
-        DriverError::Query {
-            message: msg,
+    use mongodb::error::ErrorKind;
+    let message = err.to_string();
+    match &*err.kind {
+        ErrorKind::Authentication { .. } => DriverError::AuthFailed,
+        ErrorKind::Io(io) if io.kind() == std::io::ErrorKind::ConnectionRefused => DriverError::ConnectionRefused,
+        ErrorKind::ServerSelection { .. } | ErrorKind::DnsResolve { .. } => DriverError::ConnectionRefused,
+        _ => DriverError::Query {
+            message,
             sqlstate: None,
-        }
+        },
     }
 }
 
@@ -630,6 +640,31 @@ mod tests {
         assert_eq!(d.id(), "mongodb");
         assert_eq!(d.display_name(), "MongoDB");
         assert_eq!(d.default_port(), 27017);
+    }
+
+    #[tokio::test]
+    async fn a_single_host_connection_always_requests_a_direct_connection() {
+        let opts = ConnectOptions {
+            host: "db.internal".into(),
+            port: 27017,
+            ..Default::default()
+        };
+        let client_opts = build_client_options(&opts).await.expect("build client options");
+        assert_eq!(client_opts.direct_connection, Some(true));
+    }
+
+    #[test]
+    fn a_connection_refused_io_error_maps_to_connection_refused() {
+        let io = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        let error = mongodb::error::Error::from(io);
+        assert!(matches!(map_mongo_error(error), DriverError::ConnectionRefused));
+    }
+
+    #[test]
+    fn an_unrelated_io_error_is_not_mistaken_for_connection_refused() {
+        let io = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let error = mongodb::error::Error::from(io);
+        assert!(matches!(map_mongo_error(error), DriverError::Query { .. }));
     }
 
     #[test]
