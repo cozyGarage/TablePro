@@ -230,9 +230,15 @@ impl BrowseTab {
             .filter(|(_, c)| c.primary_key)
             .map(|(i, _)| i)
             .collect();
+        let foreign_key_columns = self
+            .foreign_keys
+            .iter()
+            .flat_map(|fk| fk.columns.iter().cloned())
+            .collect();
         let tab_ctx = TabGridContext {
             tab_id: Some(self.tab_id),
             pk_col_indices,
+            foreign_key_columns,
         };
         let (column_view, selection) = build_column_view(
             &result,

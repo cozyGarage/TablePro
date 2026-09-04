@@ -1,4 +1,4 @@
-use tablepro_core::{ColumnInfo, QueryResult, TableInfo, Value};
+use tablepro_core::{ColumnInfo, ForeignKeyInfo, QueryResult, TableInfo, Value};
 use tablepro_storage::{ConnectionOrganization, ConnectionOrganizationIndex, SavedConnection};
 use uuid::Uuid;
 
@@ -17,6 +17,8 @@ pub enum AppMsg {
         open_mode: OpenMode,
     },
     ColumnsLoaded(Uuid, Vec<ColumnInfo>),
+    FetchBrowseForeignKeys(Uuid),
+    ForeignKeysLoaded(Uuid, Vec<ForeignKeyInfo>),
     RowsLoaded(Uuid, crate::ui::browse_tab::BrowsePageRequest, QueryResult),
     LoadFailed(Option<Uuid>, crate::ui::browse_tab::BrowseLoadFailure),
     RowOpStarted,

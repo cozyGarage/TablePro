@@ -6,7 +6,7 @@ use relm4::prelude::*;
 use relm4::{adw, gtk};
 use uuid::Uuid;
 
-use tablepro_core::{ColumnInfo, QueryResult, Value};
+use tablepro_core::{ColumnInfo, ForeignKeyInfo, QueryResult, Value};
 
 use crate::ui::grid::{GridMsg, TabGridContext, build_column_view};
 
@@ -101,6 +101,10 @@ pub struct BrowseTab {
     /// at offset 0 since filtered counts shift.
     current_filter: tablepro_core::FilterSet,
     current_columns: Vec<ColumnInfo>,
+    /// Foreign keys declared on this table, fetched alongside
+    /// `current_columns`. Drives the cell value picker; empty for a
+    /// driver that doesn't report foreign keys or a table with none.
+    foreign_keys: Vec<ForeignKeyInfo>,
     current_result: Option<QueryResult>,
     /// Last row's primary-key values from the most recent page. Used
     /// for keyset seek when offset exceeds `KEYSET_OFFSET_THRESHOLD`.
@@ -196,6 +200,9 @@ pub enum BrowseTabInput {
     },
     /// Schema columns for the current table arrived (governs editability).
     ColumnsLoaded(Vec<ColumnInfo>),
+    /// Foreign keys for the current table arrived. Drives the cell
+    /// value picker; never blocks or errors the tab on its own.
+    ForeignKeysLoaded(Vec<ForeignKeyInfo>),
     /// Total row count for paginator label.
     RowCountLoaded {
         request: BrowseRowCountRequest,
@@ -823,6 +830,7 @@ impl SimpleComponent for BrowseTab {
             current_sort: init.initial_sort,
             current_filter: initial_filter,
             current_columns: Vec::new(),
+            foreign_keys: Vec::new(),
             current_result: None,
             keyset_cursor: None,
             current_selection: None,
@@ -943,6 +951,9 @@ impl SimpleComponent for BrowseTab {
                 // If rows are already cached, render now with the proper
                 // editability map. Otherwise wait for RowsLoaded.
                 self.render_grid_if_ready(sender);
+            }
+            BrowseTabInput::ForeignKeysLoaded(foreign_keys) => {
+                self.foreign_keys = foreign_keys;
             }
             BrowseTabInput::RowCountLoaded { request, count } => {
                 if !self.row_count_requests.accepts(request) {

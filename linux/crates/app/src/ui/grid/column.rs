@@ -24,6 +24,16 @@ pub(super) fn is_cell_editable(col: &ColumnInfo) -> bool {
     !col.primary_key && !col.is_generated && !col.is_auto_increment && !is_bytes_type(&col.data_type)
 }
 
+/// Marks a foreign-key column's header before the cell value picker
+/// (a later slice) exists to act on it.
+fn column_header_title(name: &str, is_foreign_key: bool) -> String {
+    if is_foreign_key {
+        format!("{name} \u{1F517}")
+    } else {
+        name.to_string()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_column(
     info: &ColumnInfo,
@@ -248,8 +258,9 @@ pub(super) fn build_column(
         }
     });
 
+    let title = column_header_title(&info.name, tab_ctx.foreign_key_columns.contains(&info.name));
     let column = gtk4::ColumnViewColumn::builder()
-        .title(&info.name)
+        .title(&title)
         .factory(&factory)
         .resizable(true)
         .expand(true)
@@ -342,6 +353,16 @@ mod tests {
         let mut c = col("integer", false);
         c.is_auto_increment = true;
         assert!(!is_cell_editable(&c));
+    }
+
+    #[test]
+    fn header_title_marks_a_foreign_key_column() {
+        assert_eq!(column_header_title("customer_id", true), "customer_id \u{1F517}");
+    }
+
+    #[test]
+    fn header_title_leaves_a_plain_column_unmarked() {
+        assert_eq!(column_header_title("name", false), "name");
     }
 
     #[test]

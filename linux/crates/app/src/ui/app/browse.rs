@@ -209,6 +209,39 @@ impl App {
         });
     }
 
+    pub(super) fn fetch_browse_foreign_keys(&self, tab_id: Uuid, sender: ComponentSender<Self>) {
+        let (schema, table) = {
+            let tabs = self.workspace_tabs.borrow();
+            let Some(controller) = tabs.get(&tab_id).and_then(|t| t.browse_controller()) else {
+                return;
+            };
+            let model = controller.model();
+            (model.schema().map(str::to_owned), model.table().to_string())
+        };
+
+        let Some(conn) = self.window_connection() else {
+            return;
+        };
+        let timeout_secs = crate::services::operation_control::configured_timeout_secs();
+        let sender_clone = sender.clone();
+        sender.command(move |_, shutdown| {
+            shutdown
+                .register(async move {
+                    let control = crate::services::operation_control::bounded(timeout_secs);
+                    // Foreign keys are used only to offer a value picker on
+                    // the referencing cell -- a failed or unsupported read
+                    // just means no picker, not a load failure for the tab.
+                    if let Ok(foreign_keys) = conn
+                        .fetch_foreign_keys_controlled(schema.as_deref(), &table, &control)
+                        .await
+                    {
+                        sender_clone.input(AppMsg::ForeignKeysLoaded(tab_id, foreign_keys));
+                    }
+                })
+                .drop_on_shutdown()
+        });
+    }
+
     pub(super) fn fetch_browse_row_count(&self, tab_id: Uuid, sender: ComponentSender<Self>) {
         let (schema, table, request, filter, columns, driver_id) = {
             let tabs = self.workspace_tabs.borrow();
@@ -285,6 +318,11 @@ impl App {
         // updated the tab model.
         sender.input(AppMsg::FetchBrowseRowCount(tab_id));
         sender.input(AppMsg::FetchBrowsePage(tab_id));
+        sender.input(AppMsg::FetchBrowseForeignKeys(tab_id));
+    }
+
+    pub(super) fn on_browse_foreign_keys_loaded(&self, tab_id: Uuid, foreign_keys: Vec<tablepro_core::ForeignKeyInfo>) {
+        self.dispatch_to_tab(tab_id, BrowseTabInput::ForeignKeysLoaded(foreign_keys));
     }
 
     pub(super) fn on_browse_rows_loaded(&self, tab_id: Uuid, request: BrowsePageRequest, result: QueryResult) {

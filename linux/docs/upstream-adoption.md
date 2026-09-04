@@ -66,7 +66,7 @@ not have to reconstruct the review.
 | SQLite over SSH, read-only copy | Transport, after SSH profiles | Parked |
 | Restore Previous Values | Browse quality, free, audited | Parked |
 | Copy or duplicate across connections | After object admin | Parked |
-| Pick a foreign key value from the rows it references; show a row as JSON with foreign keys expanded | Browse quality | Not started |
+| Pick a foreign key value from the rows it references; show a row as JSON with foreign keys expanded | Browse quality | First slice done: Browse now fetches foreign keys and marks the column header (🔗). The picker dialog itself is the next slice -- deliberately deferred since it means adding a button into the ColumnView cell factory, the most delicate part of grid rendering |
 | Read a binary column holding valid UTF-8 as text instead of raw bytes | Browse quality | Done: display-only, `Value` stays `Bytes` for export/literal/copy paths |
 | Exclude AUTO_INCREMENT/DEFINER from a SQL export, order exports by foreign-key dependency | SQL dump export (Priority A) | Not started |
 | MSSQL sign-in with Microsoft Entra ID | Connection auth, alongside Kerberos | Not started |

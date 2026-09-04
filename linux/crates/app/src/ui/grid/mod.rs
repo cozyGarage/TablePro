@@ -50,6 +50,10 @@ pub enum GridMsg {
 pub struct TabGridContext {
     pub tab_id: Option<uuid::Uuid>,
     pub pk_col_indices: Vec<usize>,
+    /// Names of columns that are part of a foreign key on this table.
+    /// Marks the column header so a reference is visible before the
+    /// cell value picker (a later slice) exists.
+    pub foreign_key_columns: std::collections::HashSet<String>,
 }
 
 const WIDE_TABLE_THRESHOLD: usize = 8;
