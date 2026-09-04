@@ -177,3 +177,4 @@
 - The MCP stdio server recovers from a non-UTF-8 line the same way it already does from invalid JSON, instead of ending the whole session
 - Repeated failed MCP authentication attempts are rate limited even when every attempt uses a different token string
 - The MCP HTTP transport now enforces the same request-size limit the stdio transport already did, instead of a larger framework default
+- A malformed Redis database index (a typo, stray text) refuses the connection instead of silently landing on database 0, usually the production database

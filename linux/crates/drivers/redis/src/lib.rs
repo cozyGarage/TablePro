@@ -44,7 +44,7 @@ impl DatabaseDriver for RedisDriver {
         } else {
             String::new()
         };
-        let db_index = opts.database.parse::<u8>().unwrap_or(0);
+        let db_index = parse_db_index(&opts.database)?;
         let verifies = opts.tls.mode.verifies_cert();
         let suffix = if opts.tls.mode.encrypts() && !verifies {
             "#insecure"
@@ -503,6 +503,19 @@ pub fn split_redis_cli(input: &str) -> Vec<String> {
     out
 }
 
+/// An empty database means "use Redis's default (0)". Anything else must be
+/// a plain non-negative integer -- `"12 "`, `"db3"` and similar previously
+/// fell back to db 0 silently, which is usually the production database.
+fn parse_db_index(database: &str) -> Result<u8, DriverError> {
+    let trimmed = database.trim();
+    if trimmed.is_empty() {
+        return Ok(0);
+    }
+    trimmed
+        .parse::<u8>()
+        .map_err(|_| DriverError::Unsupported(format!("'{database}' is not a valid Redis database index")))
+}
+
 fn urlencoding_lite(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -540,6 +553,27 @@ mod tests {
         assert!(!d.supports_foreign_key_metadata());
         assert!(!source.contains(&["async fn ", "fetch_indexes("].concat()));
         assert!(!source.contains(&["async fn ", "fetch_foreign_keys("].concat()));
+    }
+
+    #[test]
+    fn an_empty_database_defaults_to_zero() {
+        assert_eq!(parse_db_index("").unwrap(), 0);
+        assert_eq!(parse_db_index("   ").unwrap(), 0);
+    }
+
+    #[test]
+    fn a_valid_index_is_used_even_with_surrounding_whitespace() {
+        assert_eq!(parse_db_index("12").unwrap(), 12);
+        assert_eq!(parse_db_index(" 12 ").unwrap(), 12);
+    }
+
+    /// A typo or stray text must refuse the connection, not silently land
+    /// on db 0 -- usually the production database.
+    #[test]
+    fn a_malformed_database_index_is_refused_instead_of_defaulting_to_zero() {
+        for bad in ["db3", "16abc", "-1", "1.5"] {
+            assert!(parse_db_index(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
