@@ -388,6 +388,16 @@ impl BrowseTab {
         self.current_result.clone()
     }
 
+    /// Cell values for the row at `position` in the live grid, which
+    /// reflects the user's current sort and any prepended draft rows.
+    /// `snapshot().rows` is fetch order only: with one pending draft,
+    /// indexing it directly at a grid position off by one row -- position
+    /// 1 (the first persisted row on screen) would read fetch-order row 1
+    /// instead of row 0.
+    pub fn row_cells_at(&self, position: u32) -> Option<Vec<Value>> {
+        self.row_object_at(position).map(|row| row.cells_clone())
+    }
+
     pub fn columns(&self) -> &[ColumnInfo] {
         &self.current_columns
     }

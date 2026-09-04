@@ -100,7 +100,7 @@ impl App {
     }
 
     pub(super) fn on_copy_row_as_insert(&self, tab_id: Uuid, row_position: u32) {
-        let (columns, driver_id, snapshot, table, schema) = {
+        let (columns, driver_id, row, table, schema) = {
             let tabs = self.workspace_tabs.borrow();
             let Some(controller) = tabs.get(&tab_id).and_then(|t| t.browse_controller()) else {
                 return;
@@ -109,21 +109,22 @@ impl App {
             (
                 model.columns().to_vec(),
                 model.driver_id().to_string(),
-                model.snapshot(),
+                // Reads the live grid row at this position (sort order,
+                // any prepended drafts), not `snapshot().rows[row_position]`
+                // -- that's fetch order and drifts by one row per pending
+                // draft, copying a different row's values to the clipboard.
+                model.row_cells_at(row_position),
                 model.table().to_string(),
                 model.schema().map(str::to_owned),
             )
         };
-        let Some(snapshot) = snapshot else { return };
-        let Some(row) = snapshot.rows.get(row_position as usize) else {
-            return;
-        };
+        let Some(row) = row else { return };
         let sql = match tablepro_core::sql_literal::build_insert_literal(
             &driver_id,
             schema.as_deref(),
             &table,
             &columns,
-            row,
+            &row,
         ) {
             Ok(sql) => sql,
             Err(error) => {
