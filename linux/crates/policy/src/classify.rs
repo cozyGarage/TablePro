@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{
-    CopyTarget, Cte, Delete, Expr, FromTable, FunctionArg, FunctionArgExpr, FunctionArguments, Insert, ObjectName,
-    Query, SelectItem, SetExpr, Statement, TableFactor, TableObject, UtilityOption, Value,
+    CopySource, CopyTarget, Cte, Delete, Expr, FromTable, FunctionArg, FunctionArgExpr, FunctionArguments,
+    GrantObjects, Insert, ObjectName, Query, SelectItem, SetExpr, Statement, TableFactor, TableObject, UtilityOption,
+    Value,
 };
 use sqlparser::dialect::{Dialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
@@ -311,18 +312,31 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
         | Statement::Comment { .. }
         | Statement::CreateSchema { .. }
         | Statement::CreateDatabase { .. }
-        | Statement::CreateFunction(_)
         | Statement::CreateTrigger { .. }
         | Statement::DropTrigger { .. }
         | Statement::CreateProcedure { .. }
         | Statement::CreateMacro { .. }
         | Statement::CreateStage { .. }
-        | Statement::Grant { .. }
         | Statement::Deny(_)
-        | Statement::Revoke { .. }
         | Statement::CreateSequence { .. }
         | Statement::CreateDomain(_)
         | Statement::CreateType { .. } => ddl_facts(Vec::new()),
+        Statement::CreateFunction(f) => ddl_facts(object_name_strings(&f.name)),
+        Statement::Grant { objects, .. } | Statement::Revoke { objects, .. } => {
+            ddl_facts(objects.as_ref().map(grant_object_names).unwrap_or_default())
+        }
+        Statement::Merge { table, .. } => StatementFacts {
+            class: StatementClass::Other,
+            writes: true,
+            tables: table_factor_names(table),
+            has_where: true,
+            contains_ddl: false,
+            contains_mutating_dml: false,
+            contains_unscoped_dml: false,
+            contains_unknown_write: true,
+            is_multi_statement: false,
+            parse_error: None,
+        },
         Statement::Kill { .. } => StatementFacts {
             class: StatementClass::Administrative,
             writes: true,
@@ -365,8 +379,12 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
             is_multi_statement: false,
             parse_error: None,
         },
-        Statement::Copy { target, .. } => {
+        Statement::Copy { target, source, .. } => {
             let reaches_the_host = matches!(target, CopyTarget::File { .. } | CopyTarget::Program { .. });
+            let tables = match source {
+                CopySource::Table { table_name, .. } => object_name_strings(table_name),
+                CopySource::Query(query) => classify_query(query).tables,
+            };
             StatementFacts {
                 class: if reaches_the_host {
                     StatementClass::Administrative
@@ -374,7 +392,7 @@ fn classify_statement(stmt: &Statement) -> StatementFacts {
                     StatementClass::Other
                 },
                 writes: true,
-                tables: Vec::new(),
+                tables,
                 has_where: true,
                 contains_ddl: false,
                 contains_mutating_dml: false,
@@ -792,6 +810,22 @@ fn object_name_strings(name: &ObjectName) -> Vec<String> {
     vec![name.to_string()]
 }
 
+/// Named targets of a GRANT/REVOKE, for the approval dialog's object list.
+/// Only the object kinds this project's engines actually have (tables,
+/// views, schemas, databases) are named; a broader grant (all tables in a
+/// schema, a warehouse, a compute pool, and so on) reports no targets here,
+/// same as before this function existed -- the statement is still DDL,
+/// still requires approval, and is still denied to agents either way.
+fn grant_object_names(objects: &GrantObjects) -> Vec<String> {
+    match objects {
+        GrantObjects::Tables(names) | GrantObjects::Views(names) | GrantObjects::Schemas(names) => {
+            names.iter().flat_map(object_name_strings).collect()
+        }
+        GrantObjects::Databases(names) => names.iter().flat_map(object_name_strings).collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn table_factor_names(factor: &TableFactor) -> Vec<String> {
     match factor {
         TableFactor::Table { name, .. } => object_name_strings(name),
@@ -828,6 +862,38 @@ mod tests {
             f.contains_mutating_dml,
             "an unbounded INSERT ... SELECT must still be subject to a blast-radius check"
         );
+    }
+
+    /// A blank object list in the approval dialog is as bad as no dialog at
+    /// all for GRANT, COPY, and MERGE -- the operator can't tell what the
+    /// statement actually touches.
+    #[test]
+    fn grant_copy_and_merge_name_their_targets() {
+        let grant = classify("GRANT ALL ON payments TO evil", "postgres");
+        assert_eq!(grant.tables, vec!["payments".to_string()]);
+        assert_eq!(grant.class, StatementClass::Ddl);
+
+        let revoke = classify("REVOKE ALL ON payments FROM evil", "postgres");
+        assert_eq!(revoke.tables, vec!["payments".to_string()]);
+
+        let copy_from = classify("COPY payments FROM '/tmp/x.csv'", "postgres");
+        assert_eq!(copy_from.tables, vec!["payments".to_string()]);
+
+        let copy_to = classify("COPY payments TO STDOUT", "postgres");
+        assert_eq!(copy_to.tables, vec!["payments".to_string()]);
+
+        let merge = classify(
+            "MERGE INTO payments USING staged ON payments.id = staged.id WHEN MATCHED THEN DELETE",
+            "postgres",
+        );
+        assert_eq!(merge.tables, vec!["payments".to_string()]);
+        assert!(merge.contains_unknown_write, "MERGE stays on the fail-closed catch-all");
+
+        let create_fn = classify(
+            "CREATE FUNCTION audit_hook() RETURNS void AS $$ SELECT 1 $$ LANGUAGE sql",
+            "postgres",
+        );
+        assert_eq!(create_fn.tables, vec!["audit_hook".to_string()]);
     }
 
     #[test]

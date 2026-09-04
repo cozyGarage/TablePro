@@ -171,3 +171,5 @@
 - Saving a Browse tab edit made before a Structure tab dropped or reordered a column now shows a clear "reload and reapply" error instead of crashing the whole application
 - Two windows can no longer open the same saved connection at once; the second is refused with a toast instead of silently taking over the first window's live connection
 - Closing a secondary window now closes its database connection, SSH tunnel, and reconnect monitor, and cancels its health-poll and history-prune timers, instead of leaving them running for the rest of the process
+- GRANT, REVOKE, COPY, MERGE, and CREATE FUNCTION now name the table or object they target in the audit trail and approval dialog instead of showing a blank object list
+- A misspelled policy.toml environment or field name, or a connection override keyed by a UUID typed in a different case, now refuses to load instead of the override silently never applying

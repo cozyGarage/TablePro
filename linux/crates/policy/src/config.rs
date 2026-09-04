@@ -43,6 +43,7 @@ impl Default for EnvPolicy {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EnvPolicyOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_writes: Option<WritePolicy>,
@@ -132,12 +133,14 @@ impl EnvPolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MaskRule {
     /// Glob matched against column names (case-insensitive).
     pub pattern: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyConfig {
     #[serde(default)]
     pub environments: HashMap<String, EnvPolicyOverride>,
@@ -211,13 +214,36 @@ pub fn load_policy() -> Result<PolicyConfig, String> {
     }
 }
 
+const KNOWN_ENVIRONMENT_NAMES: &[&str] = &["local", "dev", "staging", "prod"];
+
 pub fn load_from_path(path: &Path) -> Result<PolicyConfig, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let policy: PolicyConfig = toml::from_str(&text).map_err(|e| e.to_string())?;
+    let mut policy: PolicyConfig = toml::from_str(&text).map_err(|e| e.to_string())?;
     for rule in &policy.mask_patterns {
         glob::Pattern::new(&rule.pattern.to_lowercase())
             .map_err(|e| format!("invalid mask_patterns entry {:?}: {e}", rule.pattern))?;
     }
+    for name in policy.environments.keys() {
+        if !KNOWN_ENVIRONMENT_NAMES.contains(&name.as_str()) {
+            return Err(format!(
+                "[environments.{name}] does not match a known environment ({})",
+                KNOWN_ENVIRONMENT_NAMES.join(", ")
+            ));
+        }
+    }
+    // A connection_overrides key that differs from the connection id's
+    // canonical lowercase-hyphenated form (an uppercase UUID, say) would
+    // otherwise parse without error and then never match at lookup time --
+    // silently dropping the override, including one meant to tighten policy.
+    // Re-key by the canonical form so casing in the file can't matter.
+    let mut canonical_overrides = HashMap::with_capacity(policy.connection_overrides.len());
+    for (key, value) in policy.connection_overrides {
+        let id: uuid::Uuid = key
+            .parse()
+            .map_err(|e| format!("[connection_overrides.{key}] is not a connection id: {e}"))?;
+        canonical_overrides.insert(id.to_string(), value);
+    }
+    policy.connection_overrides = canonical_overrides;
     Ok(policy)
 }
 
@@ -339,6 +365,76 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("policy.toml");
         std::fs::write(&path, r#"mask_patterns = [{ pattern = "*pan[*" }]"#).unwrap();
+        assert!(load_from_path(&path).is_err());
+    }
+
+    #[test]
+    fn a_misspelled_environment_name_is_refused_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.toml");
+        std::fs::write(
+            &path,
+            r#"
+                [environments.production]
+                human_approve_ddl = false
+            "#,
+        )
+        .unwrap();
+        let error = load_from_path(&path).unwrap_err();
+        assert!(error.contains("production"), "{error}");
+    }
+
+    #[test]
+    fn an_unknown_field_in_an_environment_override_is_refused_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.toml");
+        std::fs::write(
+            &path,
+            r#"
+                [environments.prod]
+                human_approve_ddll = false
+            "#,
+        )
+        .unwrap();
+        assert!(load_from_path(&path).is_err());
+    }
+
+    #[test]
+    fn a_connection_override_key_is_case_normalised_so_it_still_matches_at_lookup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.toml");
+        let id = uuid::Uuid::new_v4();
+        std::fs::write(
+            &path,
+            format!(
+                r#"
+                [connection_overrides."{}"]
+                human_approve_ddl = false
+                "#,
+                id.to_string().to_uppercase()
+            ),
+        )
+        .unwrap();
+        let policy = load_from_path(&path).unwrap();
+        let prod = policy.for_connection(&id.to_string(), Environment::Prod);
+        assert!(
+            !prod.human_approve_ddl,
+            "an uppercase connection id in the file must still match a lowercase lookup"
+        );
+    }
+
+    #[test]
+    fn a_connection_override_key_that_is_not_a_uuid_is_refused_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.toml");
+        std::fs::write(
+            &path,
+            r#"
+                [connection_overrides.not-a-uuid]
+                human_approve_ddl = false
+            "#,
+        )
+        .unwrap();
         assert!(load_from_path(&path).is_err());
     }
 }
