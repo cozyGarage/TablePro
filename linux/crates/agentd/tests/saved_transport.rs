@@ -160,6 +160,7 @@ fn agent() -> Principal {
 }
 
 #[tokio::test]
+#[ignore = "requires a running Secret Service; scripts/test-secret-service.sh provides one"]
 async fn a_saved_ssh_hop_is_used_instead_of_dialling_the_database_directly() {
     let _environment = ENV_LOCK.lock().await;
     let config = tempfile::TempDir::new().expect("temporary config directory");
