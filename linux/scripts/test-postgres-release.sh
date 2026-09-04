@@ -55,8 +55,22 @@ wait_for_port 127.0.0.1 8474 "toxiproxy api"
 wait_for_port 127.0.0.1 5433 "postgres path"
 wait_for_port 127.0.0.1 2223 "bastion path"
 
-export XDG_CONFIG_HOME="$STATE/config"
-export TABLEPRO_FIXTURE_POSTGRES_RELEASE=1
-export TABLEPRO_FIXTURE_MATERIALS="$FIXTURE/materials"
+secret_root="$STATE/secret"
+mkdir -p "$secret_root/home" "$secret_root/data" "$secret_root/cache" "$secret_root/state" "$secret_root/runtime"
+chmod 0700 "$secret_root/runtime"
 
-cargo test --locked -p tablepro-release-tests --tests -- --include-ignored --test-threads=1
+cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+CARGO_HOME="$cargo_home" \
+  HOME="$secret_root/home" \
+  XDG_CONFIG_HOME="$STATE/config" \
+  XDG_DATA_HOME="$secret_root/data" \
+  XDG_CACHE_HOME="$secret_root/cache" \
+  XDG_STATE_HOME="$secret_root/state" \
+  XDG_RUNTIME_DIR="$secret_root/runtime" \
+  TABLEPRO_FIXTURE_POSTGRES_RELEASE=1 \
+  TABLEPRO_FIXTURE_MATERIALS="$FIXTURE/materials" \
+  dbus-run-session -- bash -c '
+    set -euo pipefail
+    eval "$(printf "tablepro-test" | gnome-keyring-daemon --daemonize --unlock --components=secrets)"
+    cargo test --locked -p tablepro-release-tests --tests -- --include-ignored --test-threads=1
+  '
