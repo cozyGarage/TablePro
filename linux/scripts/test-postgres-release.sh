@@ -27,6 +27,7 @@ teardown() {
     return
   fi
   compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+  rm -rf -- "${secret_root:-}"
 }
 
 wait_for_port() {
@@ -55,7 +56,11 @@ wait_for_port 127.0.0.1 8474 "toxiproxy api"
 wait_for_port 127.0.0.1 5433 "postgres path"
 wait_for_port 127.0.0.1 2223 "bastion path"
 
-secret_root="$STATE/secret"
+# A forwarded Unix socket's path (under XDG_RUNTIME_DIR) is capped at
+# 100 bytes, so the isolated runtime dir has to stay short -- the
+# fixture's own state directory, deep under the checked-out repo, is
+# already too long for that once a socket name is appended.
+secret_root="$(mktemp -d)"
 mkdir -p "$secret_root/home" "$secret_root/data" "$secret_root/cache" "$secret_root/state" "$secret_root/runtime"
 chmod 0700 "$secret_root/runtime"
 
