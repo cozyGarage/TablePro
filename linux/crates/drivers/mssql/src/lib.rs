@@ -113,6 +113,9 @@ fn build_target(opts: &ConnectOptions) -> MssqlTarget {
         }
         TlsMode::VerifyCa | TlsMode::VerifyFull => {
             config.encryption(EncryptionLevel::Required);
+            if let Some(root_cert) = &opts.tls.root_cert {
+                config.trust_cert_ca(root_cert.display().to_string());
+            }
         }
     }
 
@@ -895,6 +898,35 @@ mod tests {
 
         assert_eq!(target.config.get_addr(), "localhost:1433");
         assert_eq!(target.dial_host, "localhost");
+    }
+
+    #[test]
+    fn verify_ca_with_a_named_authority_does_not_panic_on_conflicting_trust_settings() {
+        // tiberius panics if trust_cert() and trust_cert_ca() are both
+        // called on the same Config -- build_target must route a saved
+        // root_cert into trust_cert_ca() only, never trust_cert(), for
+        // VerifyCa/VerifyFull.
+        let options = ConnectOptions {
+            tls: tablepro_core::TlsConfig {
+                mode: tablepro_core::TlsMode::VerifyCa,
+                root_cert: Some(std::path::PathBuf::from("/etc/ssl/private-ca.pem")),
+                ..Default::default()
+            },
+            ..direct_options()
+        };
+        let _ = build_target(&options);
+    }
+
+    #[test]
+    fn verify_full_without_a_named_authority_does_not_panic() {
+        let options = ConnectOptions {
+            tls: tablepro_core::TlsConfig {
+                mode: tablepro_core::TlsMode::VerifyFull,
+                ..Default::default()
+            },
+            ..direct_options()
+        };
+        let _ = build_target(&options);
     }
 
     #[test]

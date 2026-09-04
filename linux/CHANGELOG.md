@@ -186,3 +186,4 @@
 - Browsing a different Redis database from the sidebar no longer leaves later queries on that connection running against it; the connection's own database is restored afterward
 - A failed row-count query now clears the paginator's total and disables Last Page instead of leaving the previous total on screen as if it were still accurate
 - An approval dialog now appears on the window that owns the connection the statement runs on, instead of whichever window last had keyboard focus
+- SQL Server Verify Ca and Verify Full connections now use a saved certificate authority to verify the server, instead of only ever checking the system trust store
