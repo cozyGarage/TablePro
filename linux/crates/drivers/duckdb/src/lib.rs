@@ -38,20 +38,80 @@ impl DatabaseDriver for DuckdbDriver {
 
     async fn connect(&self, opts: ConnectOptions) -> Result<Box<dyn Connection>, DriverError> {
         let path = opts.database.clone();
-        let conn = tokio::task::spawn_blocking(move || {
-            if path.is_empty() || path == ":memory:" {
-                DuckConnection::open_in_memory()
-            } else {
-                DuckConnection::open(&path)
-            }
-            .map_err(map_duck_error)
-        })
-        .await
-        .map_err(|e| DriverError::Internal(format!("duckdb connect join: {e}")))??;
+        let conn = tokio::task::spawn_blocking(move || open_path(&path))
+            .await
+            .map_err(|e| DriverError::Internal(format!("duckdb connect join: {e}")))??;
         Ok(Box::new(DuckdbConnection {
             conn: Arc::new(Mutex::new(conn)),
         }))
     }
+}
+
+/// A `.duckdb`/`.db` file opens directly. A flat data file (Parquet,
+/// CSV, TSV, JSON) isn't a DuckDB database at all -- open an in-memory
+/// database instead and expose the file as a view through DuckDB's own
+/// file-reading functions, so the rest of the driver (which only knows
+/// how to query DuckDB tables/views) needs no special case.
+fn open_path(path: &str) -> Result<DuckConnection, DriverError> {
+    if path.is_empty() || path == ":memory:" {
+        return DuckConnection::open_in_memory().map_err(map_duck_error);
+    }
+    let Some(reader_fn) = flat_file_reader_fn(path) else {
+        return DuckConnection::open(path).map_err(map_duck_error);
+    };
+    let conn = DuckConnection::open_in_memory().map_err(map_duck_error)?;
+    let sql = format!(
+        "CREATE VIEW {} AS SELECT * FROM {}('{}')",
+        quote_duckdb_ident(&derive_view_name(path)),
+        reader_fn,
+        escape_duckdb_literal(path)
+    );
+    conn.execute(&sql, []).map_err(map_duck_error)?;
+    Ok(conn)
+}
+
+fn flat_file_reader_fn(path: &str) -> Option<&'static str> {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".parquet") {
+        Some("read_parquet")
+    } else if lower.ends_with(".csv") || lower.ends_with(".tsv") {
+        Some("read_csv_auto")
+    } else if lower.ends_with(".json") {
+        Some("read_json_auto")
+    } else {
+        None
+    }
+}
+
+/// The file's stem, sanitized into a safe view name -- falls back to
+/// "data" for a stem that sanitizes away to nothing (an all-symbol
+/// filename, or none at all).
+fn derive_view_name(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(sanitize_ident)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "data".to_string())
+}
+
+fn sanitize_ident(name: &str) -> String {
+    let mut out: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .collect();
+    if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        out.insert(0, '_');
+    }
+    out
+}
+
+fn quote_duckdb_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+fn escape_duckdb_literal(value: &str) -> String {
+    value.replace('\'', "''")
 }
 
 struct DuckdbConnection {
