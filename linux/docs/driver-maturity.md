@@ -2,18 +2,18 @@
 
 Every registered driver reports a `DriverMaturity` (`Stable` or
 `Experimental`). The Connect dialog shows Experimental as a subtitle so
-users are not surprised by missing write or transaction paths.
+users are not surprised by missing write or transaction paths. These are driver declarations, not release approval; see [current verification](stabilization-2026-09.md).
 
 | Driver | Maturity | Connect | Browse | Query | Writes | Params | `begin` / MCP preview | Notes |
 |---|---|---|---|---|---|---|---|---|
 | PostgreSQL | Stable | yes | yes | SQL | yes | yes | yes | all five TLS modes, release-verified |
 | MySQL | Stable | yes | yes | SQL | yes | yes | yes | DDL not transactional; TLS release-verified |
 | SQLite | Stable | yes | yes | SQL | yes | yes | yes | File-based |
-| SQL Server | Stable | yes | yes | SQL | yes | yes | no interactive begin | Tiberius; Verify Ca and Verify Full are identical |
+| SQL Server | Stable | yes | yes | SQL | yes | yes | no interactive begin | Tiberius; custom CA implemented; Verify Ca and Verify Full are identical; server cancellation unsupported |
 | ClickHouse | Stable | yes | yes | SQL | yes | yes | no | Async mutations; no row counts; TLS release-verified |
 | Redis | Experimental | yes | DBs / SCAN | Redis CLI | via query | no | no | TLS release-verified; Verify Ca behaves as Verify Full |
-| MongoDB | Experimental | yes | collections | find / aggregate | insertOne / deleteMany | no | no | TLS release-verified; Verify Ca behaves as Verify Full |
-| DuckDB | Experimental | yes | yes | SQL | yes | yes | no | Cargo feature `duckdb` (large build) |
+| MongoDB | Experimental | yes | collections | find / aggregate | insertOne / deleteMany / drop | no | no | TLS release-verified; Verify Ca behaves as Verify Full |
+| DuckDB | Experimental | yes | yes | SQL | yes | yes | no | Cargo feature `duckdb`; CSV/TSV/JSON/Parquet files; bundled JSON/Parquet; explicit optional CI |
 | Oracle | Broken | no | no | no | no | no | no | Does not compile under `--features odpi` against oracle 0.6.3; see connections.md |
 
 ## Rules

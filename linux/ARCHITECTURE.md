@@ -131,3 +131,13 @@ CI runs GTK checks in an Ubuntu 25.10 container because the selected libadwaita 
 - There is no embedded browser UI.
 - There is no in-process user scripting runtime.
 - An internal Arch package is the first release target. Public AUR/Omarchy and Flatpak publication come later.
+
+## Browse query planning and asynchronous identity
+
+`app::services::browse_query` constructs typed native-fetch or SQL/bound-parameter plans without GTK or database access. Page and count operations validate filters through one path; invalid filters dispatch no SQL. GTK owns request generations, errors and execution through the window's guarded connection.
+
+Delayed sidebar refreshes carry an opaque token backed by a weak reference to the actual session, not only the reusable saved UUID. Results from a retired connection cannot replace the new sidebar. Tab-specific results retain their tab UUID; a connection switch tears down/recreates those tabs. Schema refresh waits for fresh column metadata before scheduling page/count reads.
+
+The daemon's tunnel-owning wrapper forwards ordinary and controlled view metadata explicitly. Connection trait defaults are not evidence that every wrapper forwards a newly added capability; add wrapper contract tests when extending the trait.
+
+Editor schema completion uses the same session token: allocating a fresh policy wrapper no longer invalidates its cache. Reconnect invalidates pending requests before they are applied.

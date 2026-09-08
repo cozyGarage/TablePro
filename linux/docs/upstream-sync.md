@@ -69,3 +69,11 @@ The entry should describe behavior, not file-by-file source movement. There shou
   - The rendered INSERT escaped only quotes. MySQL and ClickHouse read a backslash as an escape, so a stored value ending in one closed the literal early and the rest parsed as SQL. Confirmed against MySQL 8.1, which evaluated the payload as an expression and returned 1.
   - Every SQLite column with no declared type decoded as NULL, so `count(*)` and any expression showed an empty cell.
 - Verification: `tablepro_core::sql_lex` and `sql_literal` unit tests, `crates/core/tests/query_pipeline.rs`, the MySQL, ClickHouse, SQLite and SQL Server container suites, the PostgreSQL release fixture, and the installed GTK suite.
+
+## 2026-09-07: PostgreSQL filters, metadata ownership and offline DuckDB
+
+- Reference reviewed: TableProApp/TablePro v0.72.0 at `6e6396c590bc1cc37f5e71e6d98d563dfcf8a2d6`, including `TableProTests/Core/Database/FilterSQLGeneratorColumnTypeTests.swift`, `Plugins/TableProPluginKit/PluginQueryTiming.swift`, and release fixes for filters, stale sidebar state, transaction ownership and offline extensions.
+- Linux relevance: non-text pattern filters emitted invalid PostgreSQL operators, the daemon view wrapper inherited an empty default, sidebar refresh lacked connection identity, and DuckDB JSON functions required a downloaded extension.
+- Manual port: PostgreSQL text-pattern conversion; ordinary/controlled view forwarding; stale-sidebar rejection; bundled JSON/Parquet. Invalid count fallback and redundant post-DDL browse reads were additional Linux findings. Structure/editor transactions use separate pooled handles; a real-engine regression confirms isolation.
+- Not ported: Apple UI, plugins, licensing, bulk dump/restore behavior without a Linux counterpart. Timing remains a specified follow-up, not fabricated engine time.
+- Verification: [stabilization ledger](stabilization-2026-09.md); [performance evidence](performance-2026-09.md). No Apple source tree was merged.

@@ -1,10 +1,12 @@
 # Production readiness audit
 
-**Updated**: 2026-09-02
+**Updated**: 2026-09-07
 
 **State**: useful for development and personal database work, not yet approved for trusted production writes or unattended agents
 
 This audit describes the Linux Rust and GTK repository. [ROADMAP.md](../ROADMAP.md) tracks broader product work. This document focuses on behavior that must be proven before a public release.
+
+Current stabilization changes and exact local/hosted evidence are recorded in [the September audit](stabilization-2026-09.md). That ledger supersedes historical counts below. A passing base SHA does not verify a changed working tree.
 
 ## Verified foundations
 
@@ -37,7 +39,7 @@ This audit describes the Linux Rust and GTK repository. [ROADMAP.md](../ROADMAP.
 
 The Docker integration suites cover PostgreSQL, MySQL, SQL Server, and ClickHouse against real servers. Unit tests cover shared core, policy, storage, MCP, SSH, driver, and application logic.
 
-The PostgreSQL release fixture adds deterministic transport and safety checks: certificate hostname and authority verification, a verifying session through an SSH tunnel using the original database hostname, read-only denial of data-changing CTEs and administrative functions, batch and interactive rollback, activity and blocking-lock reporting, and reconnect after the database path or the bastion path is cut. MySQL, SQL Server, and ClickHouse have no equivalent fixture, so their TLS and reconnect behavior is implemented but not release-verified.
+The PostgreSQL release fixture adds deterministic transport and safety checks: certificate hostname and authority verification, a verifying session through an SSH tunnel using the original database hostname, read-only denial of data-changing CTEs and administrative functions, batch and interactive rollback, activity and blocking-lock reporting, and reconnect after the database path or the bastion path is cut. The separate driver TLS fixture verifies MySQL, ClickHouse, Redis and MongoDB. SQL Server TLS/Kerberos and cross-driver reconnect behavior still lack equivalent release evidence.
 
 PostgreSQL server-side cancellation is implemented and real-driver verified. Controlled query and execute paths use a separate PostgreSQL control pool to request cancellation. Integration tests start `pg_sleep`, confirm the tagged query is active in `pg_stat_activity`, cancel or time it out, confirm it leaves `pg_stat_activity`, and run another query through the pool. Transaction cancellation is also verified with a later rollback.
 
@@ -102,7 +104,7 @@ Flatpak files exist, but Flatpak publication is later and is not the first relea
 - Stable driver labels cover common connection, browse, query, and write paths. They do not mean every TLS, reconnect, transaction, large-result, and packaging case has passed a release fixture.
 - MCP driver operations, authorization, and controlled rollback are deadline-bound, but durable audit filesystem work can outlive the request deadline. It is not externally cancelled because abandoning an audit append could leave an unconfirmed terminal state. Policy remains fail closed while the request waits.
 - A healthy cached agent session is invalidated when saved endpoint, TLS, authentication mode, or SSH metadata changes. Rotating a Secret Service value or replacing key or certificate contents at the same path does not invalidate that session until it fails a health check or another keyed setting changes.
-- SQL Server still cannot use a saved custom certificate authority. MongoDB and Redis treat Verify Ca as the stricter Verify Full behavior because their current Rust TLS backends do not expose CA-only verification.
+- SQL Server now accepts a saved custom certificate authority, but real-server verification remains outstanding. MongoDB and Redis treat Verify Ca as the stricter Verify Full behavior because their current Rust TLS backends do not expose CA-only verification.
 
 ## Current decision
 

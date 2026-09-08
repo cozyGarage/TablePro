@@ -1,6 +1,6 @@
 # TablePro Linux development plan
 
-Last audited: 2026-09-04
+Last audited: 2026-09-07
 
 This plan is the source of truth for the Linux application. It separates:
 
@@ -13,66 +13,31 @@ The application is a Linux-only native Rust and GTK product. Database drivers ar
 
 ## Current baseline
 
-Audited branch state:
+- Development: `linux`, tracking `origin/linux` in `cozyGarage/TablePro`.
+- Reviewed base: `7d82881323af083dc6e045971f31d505fdf03164`; the stabilization changes are an uncommitted working tree until the maintainer creates a commit.
+- Rust 1.93.1; 19 workspace members. Static drivers, native GTK, no entitlement gates.
+- PostgreSQL has the broadest real-service evidence. Driver `Stable` declarations are not production approval. Redis/MongoDB remain experimental, DuckDB optional, Oracle ODPI broken.
+- [Base-commit CI](https://github.com/cozyGarage/TablePro/actions/runs/34107322448) passed fast, GTK, driver, TLS and PostgreSQL release jobs. It does not verify the new working tree.
+- Current commands, results, limitations and unresolved work are in [the stabilization audit](linux/docs/stabilization-2026-09.md). Historical test counts are not current coverage claims.
+- RC promotion still requires a frozen commit, 30 consecutive retry-free GTK attempts across at least six runs, and installed Arch install/upgrade/rollback on Wayland. No new soak credit is claimed here.
 
-- Safety baseline HEAD before repository extraction: `17a108b1`
-- Tracking branch: `fork/linux`
-- Rust workspace: 19 members and approximately 49,000 lines of Rust
-- Stable drivers: PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse
-- Experimental drivers: Redis, MongoDB, DuckDB; Oracle is excluded because its optional build is broken and unverified
-- No Linux account, subscription, receipt, license-key, or entitlement checks
+## Active sprint: September stabilization (ten developer days)
 
-Verified locally on 2026-08-21 against Arch stable Rust 1.97.1:
+This sprint takes precedence over the historical phase order below. Feature implementation follows stabilization; the feature gap review is part of this sprint.
 
-- File-size guard passes
-- `cargo fmt --all -- --check` passes
-- Full-workspace strict Clippy passes with `-D warnings`
-- The unit tier passes: 575 tests, one ignored Secret Service test
-- The sandbox tier passes: 431 tests, two ignored
-- The installed GTK tier is 14 scenarios, including persist-after-switch and two-window pending-edit isolation. Adding those scenarios restarts the Phase 4 soak ledger.
-- `cargo deny check` reports advisories, bans, licenses, and sources ok
-- All 45 Docker driver integration tests passed on 2026-08-22: PostgreSQL 9, MySQL 7, SQL Server 12, ClickHouse 12, and SQLite 5 without Docker
-- The PostgreSQL release fixture passes 44 tests
+| ID | Budget | Work and acceptance |
+|---|---:|---|
+| S1 | 1 day | Review changes since the prior audit; reproducible command/evidence ledger and generated ignored-test inventory |
+| S2 | 3 days | Reproduce/fix filters, incorrect counts, wrapper metadata and stale responses; regressions for each confirmed defect and transaction isolation |
+| S3 | 1 day | Pure browse request builder shared by count/page; preserve native fetch, parameter ordering, keyset and PK tie-breakers |
+| S4 | 1 day | One warm-up/five samples for million-row first/filtered/deep/wide/capped queries; measured latency, RSS and sampled server activity; retain only evidence-backed optimization |
+| S5 | 1.5 days | Whole-app comparison pinned to macOS 0.72; revalidate old statuses and define dependent follow-up slices |
+| S6 | 1 day | Reconcile README, roadmap, capabilities, driver limits and adoption; retire conflicting historical tasks |
+| S7 | 1.5 days | Final applicable unit, real-driver, optional-feature and GTK validation; report blocked gates and open defects without claiming a release |
 
-Verified on hosted CI on 2026-08-21 at commit `c8f91f06`, the first fully green
-run: preflight and sandbox, fast checks, driver integration, the driver TLS
-fixture, the PostgreSQL release fixture, and the installed GTK safety smoke all
-pass. Before this the GTK gate had never been green, because the Secret Service
-step called `secret-tool` and the job installed `libsecret-1-dev` without
-`libsecret-tools`. The Phase 4 soak ledger starts from this run.
+The implementation/evidence status of each item lives in the audit, not in optimistic completion checkboxes. Critical defects consume contingency and displace optional optimization/refactoring. No public package publication, new drivers, or macOS source merge is included.
 
-The ledger then recorded one failure, at `74d037c3a`, in
-`current_page_csv_export_is_pk_ordered`: the export read back only 24 of 100
-rows. The cause was in the product, not the test. A current-page export wrote
-row by row straight to the destination file, so any reader that opened it after
-the header had landed saw a truncated export; the local machine simply won the
-race. Exports now write to a sibling temporary file and rename over the
-destination, and `tablepro_core::export` carries a test asserting the
-destination cannot be opened while the export is still being written. Two runs
-on 2026-08-22, at `712efeb02` and `9ecd184c8`, are fully green across all six
-jobs.
-
-Note for the ledger: `712efeb02` still carried the non-atomic export and passed
-anyway, which is what makes this class of defect worth a deterministic unit test
-rather than soak attempts.
-
-**The ledger is reset to 0 of 30, and none of the runs above count toward it.**
-The gate asks for consecutive retry-free attempts at one commit, but the daily
-soak checked out `linux` by name, and every `build-linux.yml` job fell back to
-the same branch name on a schedule. A scheduled attempt therefore measured
-whatever the branch tip happened to be, and the three green runs recorded above
-are three different trees rather than three attempts at one candidate. Counting
-them together was wrong.
-
-Both workflows now take an explicit `ref` input, every job prints the commit it
-resolved, and the soak writes the requested ref and resolved commit into its run
-summary. A ledger entry is valid only for a resolved commit, so accumulating the
-30 attempts requires a frozen candidate on a `release/*` branch rather than the
-moving branch tip.
-
-Run `cargo deny check` from `linux/`. It does not accept `--manifest-path`.
-
-The repository pins Rust 1.93, but an OS-packaged `/usr/bin/cargo` does not honor `rust-toolchain.toml` without rustup. CI must test the MSRV, while local development and a scheduled job should also test the current stable compiler.
+Run `cargo deny check` from `linux/`; it does not accept `--manifest-path`. Rustup honors the workspace's Rust 1.93 toolchain. Current-stable CI remains a separate gate.
 
 ## Product contract
 

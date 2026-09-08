@@ -8,7 +8,7 @@ The GTK application supports PostgreSQL, MySQL, SQLite, SQL Server, and ClickHou
 
 Current workflows include saved connections, SSH tunnels, browse and SQL tabs, structure editing, inline row changes, query history, policy checks, MCP access, and the headless `tablepro-agentd` process. See [ROADMAP.md](ROADMAP.md), [docs/connections.md](docs/connections.md), [docs/driver-maturity.md](docs/driver-maturity.md), and [docs/production-audit.md](docs/production-audit.md) for current limits.
 
-The application is suitable for development and personal testing. The audited predecessor passed hosted PostgreSQL, driver, GTK, and Flatpak jobs. The current RC work adds exclusive connection switching, deterministic PostgreSQL browse ordering, direct PostgreSQL Unix sockets, and a required GTK smoke job; the exact RC commit still needs hosted, soak, and installed-package evidence before trusted production use.
+The application is suitable for development and personal testing. Hosted driver, PostgreSQL, GTK and Flatpak jobs passed at `7d8288132`; the [September audit](docs/stabilization-2026-09.md) records newer working-tree verification. Trusted release use still requires a frozen-candidate soak and installed-package evidence. DuckDB now bundles JSON/Parquet functionality and has an explicit optional-feature CI job.
 
 ## Named query parameters
 
@@ -121,6 +121,9 @@ The helper pins the tag's commit archive and verifies a real checksum. It does n
 | Production audit | [docs/production-audit.md](docs/production-audit.md) |
 | Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Rust toolchains on Arch and Omarchy | [docs/toolchains.md](docs/toolchains.md) |
+| September stabilization evidence | [docs/stabilization-2026-09.md](docs/stabilization-2026-09.md) |
+| Ignored-test inventory | [docs/ignored-tests.md](docs/ignored-tests.md) |
+| Whole-app macOS 0.72 gaps | [docs/upstream-adoption.md](docs/upstream-adoption.md) |
 | Optional upstream reference review | [docs/upstream-sync.md](docs/upstream-sync.md) |
 | Adding a database driver | [docs/adding-drivers.md](docs/adding-drivers.md) |
 | Driver maturity | [docs/driver-maturity.md](docs/driver-maturity.md) |

@@ -136,3 +136,9 @@ Relm4 ships test helpers but they require a running GTK main loop, which is awkw
 - Test pure logic by extracting it into plain Rust functions or a separate `services` module. Test those.
 - Do not write component-level tests until we hit a bug that they would have caught.
 - Prefer integration tests at the driver layer and unit tests at the model layer.
+
+## September stabilization
+
+Browse SQL planning is pure and shared between counts and pages. A validation error clears the count through the existing request-generation failure path and surfaces the error; it cannot fall back to an unfiltered total. Delayed sidebar metadata is accepted only for the same connection allocation, so reconnecting the same saved UUID does not make an old response current. See the tests in `services/browse_query.rs` and `services/database_service.rs`.
+
+Editor schema completion uses the same session token: allocating a fresh policy wrapper no longer invalidates its cache. Reconnect invalidates pending requests before they are applied.

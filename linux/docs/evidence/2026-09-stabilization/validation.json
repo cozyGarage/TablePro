@@ -1,0 +1,83 @@
+{
+  "base_commit": "7d82881323af083dc6e045971f31d505fdf03164",
+  "branch": "linux",
+  "state": "uncommitted stabilization working tree; no hosted verification of these changes",
+  "finalized": "2026-09-08",
+  "command_working_directory": "linux",
+  "verification_basis": "Saved completion output; previous process handles expired before finalization. Log paths are local temporary artifacts, not portable evidence.",
+  "checks": [
+    {
+      "gate": "fast",
+      "command": "bash scripts/ci-local.sh",
+      "result": "passed",
+      "local_log": "/tmp/tablepro-fast-verified.log",
+      "log_sha256": "5734c25c3f5d8f2429b0a17e8d82a45a09975e271eda5f8f273b4e9ab4724c56"
+    },
+    {
+      "gate": "postgres",
+      "command": "TABLEPRO_FIXTURE_POSTGRES_RELEASE=1 TABLEPRO_FIXTURE_PROXY_PORT=55433 cargo test --locked -p tablepro-release-tests --test browse_filters --test structure_ddl --test parameters --test policy_transactions --test mcp_tools -- --include-ignored --test-threads=1",
+      "result": "32 passed",
+      "local_log": "/tmp/tablepro-postgres-final.log",
+      "log_sha256": "26d69bac31078691e7cd567befde34c728af2fb9160df623c04e8c1b480bec56"
+    },
+    {
+      "gate": "duckdb",
+      "command": "cargo test --locked -p tablepro-driver-duckdb",
+      "result": "7 passed; see log for feature check",
+      "local_log": "/tmp/tablepro-duckdb.log",
+      "log_sha256": "dbb8b4f92f4756f2f3b17e62d856122f9e413605746d2e4b3716fc592e6d3c7a"
+    },
+    {
+      "gate": "duckdb_app",
+      "command": "cargo build --locked -p tablepro-app --features duckdb",
+      "result": "build finished",
+      "local_log": "/tmp/tablepro-duckdb-app-build.log",
+      "log_sha256": "87b476725e84fcb724b0b83bdb85021556ee5628b02e5fd1e653b3148bd81c0c"
+    },
+    {
+      "gate": "gtk",
+      "command": "bash scripts/test-gtk-safety.sh (temporary Xvfb/pyatspi dependencies supplied via PATH/PYTHONPATH)",
+      "result": "14 scenarios passed",
+      "local_log": "/tmp/tablepro-gtk-complete.log",
+      "log_sha256": "bae78d6c599a3fb3e99ade3a9a10f892b41f6519bd0bbd26455d14dce8a676a2"
+    },
+    {
+      "gate": "dependency_policy",
+      "command": "cargo deny check",
+      "result": "advisories, bans, licenses and sources passed",
+      "local_log": "/tmp/tablepro-deny.log",
+      "log_sha256": "82e9366772903d27c8ce229be00f8c8a8375fae0ff4d68c2b3f6c0a0b32820a6"
+    }
+  ],
+  "source_sha256": {
+    ".github/workflows/build-linux.yml": "4fb520f76f376f49b10ef64de0111aaed1ddbf1b41c6a1abbe5a983b69eb1cfe",
+    "linux/crates/agentd/src/lib.rs": "dd53c7b4f00b363f687de7426527554ee4945ed3cdedfe702b36c8f36d05e3f4",
+    "linux/crates/agentd/src/session_tests.rs": "0d2a43c176ade24a915a815dfd526ab56659ae95717dad064d93e6794c2eeb46",
+    "linux/crates/app/src/services/browse_query.rs": "3ed3287ae7024a7d0e2545cf0f61d0a559090c69e0c99868e6518b9baf131147",
+    "linux/crates/app/src/services/database_service.rs": "1988b582e78d8eaf92e35b180f4f68298b6c3c59c55d59ee1e6b8ec3b5830107",
+    "linux/crates/app/src/services/mod.rs": "90597e2b615713258b0a5bb826aeaae704f60330cf526c0051322341d1c0c41e",
+    "linux/crates/app/src/ui/app/browse.rs": "2466b863ee3c4a92d41573d80a4506300796002fcf404120eec421eb5606b317",
+    "linux/crates/app/src/ui/app/mod.rs": "4f0437943ac3e7ff5c4fb6072f6b64e49090763ea8b5337f297de59a06edd772",
+    "linux/crates/app/src/ui/app/msg.rs": "bb00ddf8686f03a04179bcee7a531a5f9b921918e892d590738b1e9917590d90",
+    "linux/crates/app/src/ui/app/schema_index.rs": "3b3d58dc3cb803ecc1f70f06d1ec1100467b49f8616c8b50bccc198d2d298a3e",
+    "linux/crates/app/src/ui/app/structure.rs": "0d07e2336f2c8187ed8c79d382c527a0851e767fca0fb5b3338fe8533ffbbad0",
+    "linux/crates/app/src/ui/editor/completion.rs": "dfe4eeffc6cddb846f2382787bfd93d42a4cd08bf1bd63f6797f88a3fc5174d0",
+    "linux/crates/app/src/ui/mod.rs": "4fa84da363ea0dfb81cda15f9cd4f291d40a54f92f4990bfb15bd1232030af8a",
+    "linux/crates/app/tests/gtk_safety.py": "eba3622d60b6f15d79a61483858b4ed2e29c72c049bc7107053464d7dddc8121",
+    "linux/crates/core/src/filter.rs": "4f613eaf932eb1896fbff5f8f5028f7034fe3bf37a0f1fcd9afabf44123dfd7d",
+    "linux/crates/drivers/duckdb/Cargo.toml": "50f562422ad7f049049c9c804c739acd3c5dba1d0a1f63197cbe059df4a422f5",
+    "linux/crates/drivers/duckdb/src/lib.rs": "fead29c91524ecd57b1f4f6bd800c3ca678216016908b57de2da35dba3e4adb3",
+    "linux/crates/drivers/postgres/src/lib.rs": "4139606269f4fefa7bd4af9d714c517e771d7f4c45c0c7f98680b6e77dc8db4a",
+    "linux/crates/release-tests/examples/browse_benchmark.rs": "7cedc281bf1a4b62fa2eba91daaeb959166a769409539369e96b83cf31d58ba2",
+    "linux/crates/release-tests/tests/browse_filters.rs": "cedf8849700d93ac5abc2f7a59a509c5b05a85984ccb7ac3b647f0a6d088d698",
+    "linux/crates/release-tests/tests/structure_ddl.rs": "21d67305c8b910b1eaf0769bda2026c936946f88ed8fd849485c31f634033b74",
+    "linux/scripts/inventory-ignored-tests.py": "928cebdf9980fb5b0f1cba17a3519ad8359001d61f2bd8470a8890a5c510d304",
+    "linux/scripts/test-gtk-safety.sh": "78bc693f9311181732a4b2110eb47ef720ea5eeb94325ee615c7d9e9c2dbde71"
+  },
+  "outstanding": [
+    "Full Docker driver/TLS/SSH matrix on this tree: Docker access denied; sudo requires password",
+    "Standalone cargo-audit: tool not installed",
+    "RC soak and installed Arch upgrade/rollback: not performed",
+    "Hosted CI on a committed candidate: not performed"
+  ]
+}

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### September stabilization
+
+- PostgreSQL pattern filters support non-text values without changing typed comparisons; invalid filters no longer produce unfiltered row counts
+- Browse page/count planning is shared outside GTK; schema refresh avoids duplicate reads and retired-connection sidebar results are ignored
+- The agent daemon preserves controlled view metadata through its tunnel-owning connection wrapper
+- DuckDB bundles JSON and Parquet functionality, with flat-file regressions and an explicit optional-feature CI job
+- PostgreSQL decodes rows during streaming and caches column type names, reducing large-result memory; measured development-build latency tradeoff is documented
+- GTK testing isolates D-Bus/AT-SPI/portal state and waits for debounced search results before activating a favorite
+- Documentation now tracks the stabilization evidence, ignored-test inventory and whole-app gaps through macOS 0.72
+
 ### Added
 
 - PostgreSQL views appear in the sidebar as read-only objects, listed through the same policy and timeout path as tables

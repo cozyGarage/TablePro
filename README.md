@@ -8,23 +8,25 @@ Every shipped feature is free to use. TablePro has no account, license, subscrip
 
 The Linux client is under active development. It includes database browsing, SQL editing, structure editing, inline row changes, query history, SSH tunnels, policy checks, audit records, MCP access, and a headless MCP process.
 
-PostgreSQL is the furthest along: server-confirmed cancellation, certificate hostname and authority verification, verified TLS through an SSH tunnel, read-only denial, rollback, blocking-lock reporting, and reconnect run as deterministic container checks. Other engines have container integration tests but no release fixture yet. Packaging is not release-verified. [`linux/ROADMAP.md`](linux/ROADMAP.md) states, per area, whether behavior is implemented, integrated, or release-verified.
+PostgreSQL is the furthest along: server-confirmed cancellation, certificate hostname and authority verification, verified TLS through an SSH tunnel, read-only denial, rollback, blocking-lock reporting, and reconnect run as deterministic container checks. MySQL, ClickHouse, Redis, and MongoDB also have driver TLS fixture evidence; those fixtures do not establish full transport or packaging readiness. Packaging is not release-verified. [`linux/ROADMAP.md`](linux/ROADMAP.md) states, per area, whether behavior is implemented, integrated, or release-verified.
 
 Database support is provided by static Rust crates compiled into the app:
 
 | Database | Status |
 |---|---|
-| PostgreSQL | Stable |
-| MySQL and MariaDB | Stable |
-| SQLite | Stable |
-| Microsoft SQL Server | Stable |
-| ClickHouse | Stable |
+| PostgreSQL | Implemented; PostgreSQL release fixture |
+| MySQL and MariaDB | Implemented; driver and TLS fixtures |
+| SQLite | Implemented; local and GTK tests |
+| Microsoft SQL Server | Implemented; cancellation and authentication limits |
+| ClickHouse | Implemented; driver and TLS fixtures |
 | Redis | Experimental |
 | MongoDB | Experimental |
 | DuckDB | Optional build feature |
-| Oracle Database | Optional ODPI-C build feature |
+| Oracle Database | Not shipped; optional ODPI build is broken |
 
 See [`linux/docs/driver-maturity.md`](linux/docs/driver-maturity.md) for current limits.
+
+See the [September stabilization audit](linux/docs/stabilization-2026-09.md) for current test results and the [macOS 0.72 gap review](linux/docs/upstream-adoption.md) for follow-up features.
 
 ## Architecture
 
@@ -53,7 +55,6 @@ Optional drivers:
 
 ```bash
 cargo run --manifest-path linux/Cargo.toml -p tablepro-app --features duckdb
-cargo run --manifest-path linux/Cargo.toml -p tablepro-app --features odpi
 ```
 
 ## Validate

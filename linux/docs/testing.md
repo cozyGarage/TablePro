@@ -1,6 +1,6 @@
 # Testing
 
-Run test commands from the `linux/` workspace root.
+Run test commands from the `linux/` workspace root. Current results, environment limits and base-commit hosted links are in [the September stabilization audit](stabilization-2026-09.md).
 
 ## Current local checks
 
@@ -31,6 +31,23 @@ To run the same unit-test shape without the helper script:
 
 ```bash
 cargo test --workspace --exclude tablepro-driver-duckdb --lib --bins
+```
+
+## Optional features and ignored tests
+
+The default gate excludes DuckDB. Validate it explicitly:
+
+```bash
+cargo test --locked -p tablepro-driver-duckdb
+cargo build --locked -p tablepro-app --features duckdb
+```
+
+The `duckdb` job in `build-linux.yml` runs both commands. JSON and Parquet extensions are bundled; tests disable extension installation/loading when checking their availability. Flat-file tests cover CSV/TSV/JSON/Parquet, quoted filenames and malformed/missing files. Oracle `odpi` remains broken and is not a supported build or release target.
+
+The [ignored-test inventory](ignored-tests.md) names every declaration, prerequisite and activation command, distinguishing subprocess helpers from external-service tests. Regenerate after adding/removing ignored tests:
+
+```bash
+python3 scripts/inventory-ignored-tests.py > docs/ignored-tests.md
 ```
 
 ## Unit tests
@@ -116,7 +133,7 @@ Run the installed safety suite with:
 ./scripts/test-gtk-safety.sh
 ```
 
-The script builds `tablepro-app`, starts an isolated D-Bus session and Xvfb display, and drives the real application through PyAT-SPI. Each scenario gets temporary XDG directories and a production SQLite saved connection.
+The script builds `tablepro-app`, always starts a private runtime directory, isolated D-Bus session and Xvfb display, and drives the real application through PyAT-SPI. Each scenario gets temporary XDG directories and a production or local SQLite saved connection. The runner uses a standalone AT-SPI D-Bus daemon and passes the Xvfb display to D-Bus activation, so it does not reuse desktop accessibility or portal processes. GTK tests exercise the X11/GTK portal path; they do not replace installed Wayland package testing.
 
 The suite verifies:
 
@@ -131,6 +148,8 @@ The suite verifies:
 9. Current-page CSV export writes exactly the first 100 PK-ordered rows from a 150-row fixture through the real portal chooser.
 
 Each scenario declares its own fixture shape through `environment` and `audit_available` attributes, so a scenario can run against a local or production saved connection.
+
+The Open Quickly scenario waits for the filtered result set before invoking its single action; the already-visible favorite is not proof that the debounced row rebuild has completed. It still requires the window to close and usage to be persisted.
 
 Buttons and rows are invoked only through named AT-SPI actions; there is no Return-key fallback that can land in an unrelated dialog. Keyboard events remain only for the shortcuts under test. Each denial assertion requires the row count to hold for a settle window rather than matching once.
 
@@ -239,3 +258,7 @@ which is exactly the gap mutation testing measures.
 | Ratchet | Recorded maximum | A listed oversized file may not grow past its baseline |
 
 Lower a baseline in the same change when an oversized file shrinks.
+
+## Browse performance
+
+See [the September measurements](performance-2026-09.md) and the `browse_benchmark` example in the release-test crate. One warm-up plus five measured samples cover first, filtered, deep, wide and capped result sets. Run each case in a separate process against a disposable fixture, with builds complete before measuring. Report memory improvements and latency regressions separately.

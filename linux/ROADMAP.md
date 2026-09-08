@@ -1,12 +1,12 @@
 # TablePro Linux roadmap
 
-Last audited: 2026-09-04
+Last audited: 2026-09-07
 
 The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Linux capability backlog. This file is the concise status view.
 
 ## Current state
 
-TablePro Linux is a substantial GTK4/libadwaita database client, not a prototype. Its core daily-driver workflows are implemented. Production approval, fail-closed audit, PostgreSQL cancellation, and PostgreSQL TLS, SSH, lock, and reconnect behavior are release-verified locally. Exclusive connection switching, deterministic PostgreSQL ordering, direct local sockets, the internal Arch recipe, and a required GTK job are implemented in the current candidate. What still blocks an RC is exact-commit CI, 30/30 GTK soak attempts, and installed-package verification.
+TablePro Linux is a substantial GTK4/libadwaita database client, not a prototype. Its core daily-driver workflows are implemented. Production approval, fail-closed audit, PostgreSQL cancellation, and PostgreSQL TLS, SSH, lock, and reconnect behavior are release-verified locally. Exclusive connection switching, deterministic PostgreSQL ordering, direct local sockets, the internal Arch recipe, and a required GTK job are implemented in the current candidate. Base-commit CI passed at `7d8288132`; the stabilization working tree needs its own hosted evidence. RC gates still include 30/30 GTK soak attempts and installed-package verification.
 
 Every claim below states whether it is implemented, integrated, or release-verified. A feature with unit tests only is never described as verified.
 
@@ -31,7 +31,7 @@ Status terms:
 | Structure editor | Implemented | Tables, columns, indexes, and foreign keys |
 | Saved connections and libsecret | Implemented | Keyring failure UX needs hardening |
 | SSH and jump chains | Integrated | A verifying PostgreSQL connection forwards through a private Unix socket and is release-verified, headlessly as well as in the GUI; jump chains are JSON-only in the current GTK form |
-| TLS modes | Partial | Release-verified on PostgreSQL, including `VerifyFull` through SSH. Release-verified on MySQL, ClickHouse, MongoDB, and Redis through the driver TLS fixture. Mapped but untested on SQL Server, which also cannot name a certificate authority. Saved connections carry a certificate authority. See [docs/connections.md](docs/connections.md) |
+| TLS modes | Partial | Release-verified on PostgreSQL, including `VerifyFull` through SSH. Release-verified on MySQL, ClickHouse, MongoDB, and Redis through the driver TLS fixture. Mapped but untested on SQL Server; custom certificate authorities are implemented but their real-server verification remains unproven. Saved connections carry a certificate authority. See [docs/connections.md](docs/connections.md) |
 | Query history | Implemented | MCP access must be isolated before being re-exposed |
 | CSV/JSON export | Implemented | GUI CSV and JSON export the loaded page only; full-table snapshot streaming and Parquet are deferred |
 | Activity and EXPLAIN | Implemented | Administrative classification and numeric session-ID validation are covered |
@@ -163,6 +163,8 @@ Phase 10 is in progress. Slice 10.2 added connection organisation: groups, tags,
 
 ## Next implementation target
 
-The immediate target is the internal Arch RC. The exact-commit hosted jobs first ran fully green on 2026-08-21 at `c8f91f06`, so the Phase 4 soak ledger has started and needs 30 consecutive retry-free attempts across at least six runs. What remains is accumulating that ledger and verifying install/upgrade/rollback on Wayland. Those gates are mostly waiting, so Phase 10 feature work runs in parallel on `linux` while the candidate stays frozen on a release branch. Phase 10 comes before full-table snapshot export and Phase 6 object administration; new drivers come after both.
+The active target is the ten-day stabilization sprint in [PLAN.md](../PLAN.md): correctness, browse-logic separation, measured PostgreSQL memory use, optional DuckDB coverage, and evidence-backed documentation. [The sprint audit](docs/stabilization-2026-09.md) records implementation, checks and unresolved gates.
 
-Which macOS features we take, skip, and in what order is in [docs/upstream-adoption.md](docs/upstream-adoption.md), reviewed through their v0.71.0 release as of 2026-09-04. The next product slice after views is the typed activity console (10.3), then the rest of 10.6. The 2026-09-04 review pass also flagged four upstream bug fixes (MongoDB collection drop, an SSH stale-tunnel-port race, server-owned-column edit refusal, identity-column DEFAULT on insert) to check against our own drivers — see "Since 0.69" in that file.
+Feature work follows the [whole-app adoption review through pinned macOS 0.72](docs/upstream-adoption.md): finish session/activity gaps, then small grid workflows, PostgreSQL catalog/types, timing, and export/transfer foundations. Connection organization and DuckDB flat-file opening already exist and must not be recreated from older backlog entries.
+
+RC release remains separate: freeze a candidate, collect 30 consecutive retry-free GTK attempts at that commit, and verify Arch install/upgrade/rollback under Wayland. The passing base-commit smoke job does not supply that ledger.

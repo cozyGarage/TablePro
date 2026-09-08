@@ -1,124 +1,68 @@
-# Upstream adoption
+# Upstream adoption through macOS 0.72
 
-Last updated: 2026-09-04
+Reviewed: 2026-09-07. Linux baseline: `7d8288132` plus the stabilization changes described in [the sprint audit](stabilization-2026-09.md).
 
-This is the remember-list for taking useful behavior from the macOS product
-(0.62–0.71 and the commits already on their `main` after the v0.71.0 tag)
-without taking their architecture. The 2026-08-30 review covered upstream
-through roughly 0.69; the 2026-09-04 pass reviewed the 48 commits added
-since (`v0.69.0` through `v0.71.0` and unreleased `main`) and added the new
-"Since 0.69" table below. Re-running `git log --oneline main..origin/main`
-after fetching `origin` and diffing against `release: v0.71.0` in that log
-finds the next slice to review.
+Reference is pinned to [v0.72.0](https://github.com/TableProApp/TablePro/releases/tag/v0.72.0), commit `6e6396c590bc1cc37f5e71e6d98d563dfcf8a2d6`. The [pinned README](https://github.com/TableProApp/TablePro/blob/6e6396c590bc1cc37f5e71e6d98d563dfcf8a2d6/README.md), release notes, and the prior 0.62–0.71 review form the whole-product inventory. This is a source/behavior review, not a macOS runtime test. Later `main` changes are excluded. PLAN.md owns sequencing; this file owns parity decisions.
 
-PLAN.md stays the source of truth for sequencing. This file records *what*
-we take from upstream, *why*, and *in what order*, so a later session does
-not have to reconstruct the review.
+## Rules and status
 
-## Rules
+Reimplement relevant behavior in Rust/GTK. Never merge Apple source trees. All database access keeps policy, approval, audit, bounded operations, and owning-connection identity. Drivers remain static; every shipped feature is free without entitlements. Database metadata is untrusted input. Unsupported capabilities and failed reads must be distinguishable.
 
-- Review behavior. Reimplement it. Never merge their source tree.
-- Every connection stays a `PolicyGuard`. GUI, MCP, and `agentd` use
-  `tablepro-transport`.
-- Drivers stay static workspace crates. No runtime plugins.
-- Nothing ships behind an account, license, subscription, or entitlement.
-- Identifiers are dialect-quoted. Database metadata is untrusted input.
-- A failed catalog read must not look like an empty catalog.
-- Phase 10 finishes before Phase 6 object administration (DDL). Phase 6
-  object admin finishes before new drivers (Phase 7).
+**Implemented** means the Linux path exists; **partial** means only part exists; **missing** means no integrated path was found; **unverified** means evidence is insufficient; **intentionally excluded** is a product decision. None means release-approved. Evidence links below identify concrete Linux implementation boundaries.
 
-## Order
+## Whole-app matrix
 
-1. Finish the open Phase 10 holes: restore every referenced connection
-   (last-connection restore already landed), then the typed activity
-   console (10.3).
-2. Phase 10.6 read-only schema review, PostgreSQL first: views, then
-   materialized views, routines, triggers, sequences, extensions, roles,
-   and grants. Capability-declared. No DDL.
-3. Phase 6 structure depth from 0.69: check constraints, generated-column
-   expression and stored/virtual, rename table/database/schema from the
-   tree. MCP `describe_table` gains `check_constraints` and
-   `generation_expression` in the same change, not as a separate agent
-   feature.
-4. Server-side row caps whenever a small safety slice fits. The client
-   already stops materialising at `MAX_QUERY_ROWS`. The engine should
-   stop sending the rest (PostgreSQL `LIMIT`, MySQL `SQL_SELECT_LIMIT`,
-   same idea on other drivers).
-5. SQLite over SSH (read-only remote file) after reusable SSH profiles.
-6. Restore Previous Values later: local snapshot, every rewind is a
-   governed write with audit. Ships with no license.
-7. Copy or duplicate objects across connections only after object admin.
-   Two connections means two policy contexts.
-
-## Take
-
-| Upstream | Linux home | Status |
+| Capability | Linux status and evidence | Next action / acceptance |
 |---|---|---|
-| Triggers, routines, functions in the sidebar, read-only source | 10.6 then Phase 6 object admin | Not started |
-| Views in the object tree | 10.6 first slice | In progress on this branch |
-| Check constraints and generated columns in Structure | Phase 6 structure | Not started |
-| `check_constraints` and `generation_expression` on MCP `describe_table` | Same slice as Structure | Not started |
-| Rename table, database, schema from the tree | Phase 6 object admin | DDL helpers exist; no sidebar action |
-| Server-side row cap (0.68.1) | Bounded operations | Not started |
-| Failed structure read must not look empty | Standing invariant | Indexes and foreign keys done |
-| Edit or delete without a primary key must not update every matching row | Browse writes | Set Null and delete carry `row_key`; remaining write paths still need a pass |
-| Never join metadata into SQL | Standing invariant | Keep when Snowflake or others land |
-| SQLite over SSH, read-only copy | Transport, after SSH profiles | Parked |
-| Restore Previous Values | Browse quality, free, audited | Parked |
-| Copy or duplicate across connections | After object admin | Parked |
-| Pick a foreign key value from the rows it references; show a row as JSON with foreign keys expanded | Browse quality | First slice done: Browse now fetches foreign keys and marks the column header (🔗). The picker dialog itself is the next slice -- deliberately deferred since it means adding a button into the ColumnView cell factory, the most delicate part of grid rendering |
-| Read a binary column holding valid UTF-8 as text instead of raw bytes | Browse quality | Done: display-only, `Value` stays `Bytes` for export/literal/copy paths |
-| Exclude AUTO_INCREMENT/DEFINER from a SQL export, order exports by foreign-key dependency | SQL dump export (Priority A) | Not applicable yet: no bulk SQL dump export exists to fix. Checked whether it applied to Copy Row as INSERT instead -- it doesn't, that helper deliberately keeps auto-increment values by design (see its doc comment in sql_literal.rs) |
-| MSSQL sign-in with Microsoft Entra ID | Connection auth, alongside Kerberos | Not started |
-| Redis Sentinel and Cluster connection modes | Redis driver depth (experimental) | Not started |
-| Open a Parquet/CSV/TSV/JSON file directly as a DuckDB-backed connection | DuckDB driver depth (experimental) | Not started |
-| MongoDB: nested field/array filtering, legacy binary UUID decoding, MQL-aware editor authoring | MongoDB driver depth (experimental) | Not started |
-| Editor: code folding, run-statement-from-gutter, move cursor between statements, Execute All Statements | Editor productivity (Phase 6) | Not started |
-| Find in results, case-sensitive data grid filters, back/forward browse history | Browse quality | Not started |
-| Move the cell editor to the row above/below with arrow keys; close a tab by middle-clicking | Browse/tab quality, small GTK-native wins | Not started |
+| Connections, TLS, SSH | Implemented: [transport](../crates/transport/src/lib.rs), [connection form](../crates/app/src/ui/connect_dialog/mod.rs) | Keep TLS/SSH fixtures; client certificates and editable reusable SSH profiles remain partial |
+| Multiple connections/windows | Implemented: [database service](../crates/app/src/services/database_service.rs), GTK ownership scenarios | Preserve isolation when switching, reconnecting, exporting and approving |
+| Groups, tags, favorites, search, URL import | Implemented: [organization](../crates/storage/src/connection_organization.rs), [URL parsing](../crates/storage/src/connection_url.rs) | Do not recreate old Phase 10.2 tasks; add corruption/save-failure coverage before expanding hierarchy |
+| Workspace restore | Partial: [workspace state](../crates/app/src/services/workspace_state.rs) | Last connection and per-connection tabs restore; prove restart with all referenced connections before marking complete |
+| SQL authoring, completion, parameters | Implemented: [editor](../crates/app/src/ui/editor/mod.rs), [completion](../crates/app/src/ui/editor/completion.rs) | Preserve dialect-aware boundaries and bound parameters; extend PostgreSQL operators/functions after schema metadata |
+| Multiple statement results | Implemented execution, partial UX: [outcomes](../crates/app/src/ui/editor/outcomes.rs) | The run path already splits batches; do not reimplement Execute All as a new engine. Add explicit navigation/gutter actions and GTK multi-result proof |
+| Folding, Vim, multi-cursor, split panes | Missing integrated workflows: editor and workspace UI | Separate GTK feasibility slices; do not assume toolkit support is an implemented feature |
+| Grid editing, undo, sort, filter | Implemented: [browse](../crates/app/src/ui/browse_tab/mod.rs), [change tracker](../crates/app/src/services/change_tracker.rs) | Maintain stable row identity, exact numerics, generated-column refusal and no-PK write refusal |
+| Deep pagination | Implemented: [browse query builder](../crates/app/src/services/browse_query.rs) | Keep PK tie-breakers, keyset/offset equivalence and parameter ordering tests |
+| Grid find, Jump to Column, browse history | Missing integrated workflows: browse UI | First ship column search over existing metadata; map to stable ordinal after hide/show; keyboard and wide-grid GTK tests |
+| FK value selection | Partial: [FK header metadata](../crates/app/src/ui/app/browse.rs) | Next: bounded, paginated reference lookup using owning connection; composite keys/nulls/read-only denial and cancelled requests need tests |
+| Binary UTF-8 display | Implemented: [grid rendering](../crates/app/src/ui/grid/column.rs) | Display only; preserve bytes in export and SQL literals |
+| Structure columns/indexes/FKs | Implemented: [DDL helpers](../crates/core/src/sql_ddl/), [structure tests](../crates/release-tests/tests/structure_ddl.rs) | Keep separate transaction ownership; add check constraints and generated-expression metadata next |
+| Views and schema object review | Partial: PostgreSQL views in sidebar and [controlled metadata](../crates/core/src/connection.rs) | Add materialized views, routines, triggers, sequences, extensions, roles/grants as capability-declared reads before new object mutations |
+| PostgreSQL user types | Missing: current [ColumnInfo](../crates/core/src/query.rs) and connection traits have no type catalog | Add typed enum/composite/domain/range metadata; use same source for sidebar, structure choices and governed MCP `list_types`. Enum edits follow separately |
+| Activity/locks | Partial: [activity dialog](../crates/app/src/ui/activity_dialog.rs), [activity SQL](../crates/core/src/activity.rs) | Existing dialog is not the planned typed operational console; add explicit capabilities and validated session actions |
+| EXPLAIN and insights | Partial: [EXPLAIN dialog](../crates/app/src/ui/explain_dialog.rs); no insights aggregation | First make a pinnable plan tree; later local history aggregation. Defer diagram and charts |
+| Timing breakdown | Missing: [statement outcomes](../crates/app/src/ui/editor/outcomes.rs) record elapsed time only | Add optional metrics with documented driver semantics. Never label elapsed time as server time or unavailable as zero |
+| Query history | Implemented: [SQLite FTS store](../crates/storage/src/query_history.rs) | Add retention, failure, and privacy tests; keep MCP history isolated |
+| Export/import | Partial: [core CSV](../crates/core/src/export.rs), current-page GUI CSV/JSON | Build streaming, progress, cancellation and snapshot contract first; no full SQL dump is currently available |
+| Advanced export options/formats | Missing integrated workflows | After foundation: object selection, per-table selection, conflict modes, file parts, NDJSON, bookmarks, import error report, then other formats/XLSX. Fixtures must prove quoting, ordering and partial outcomes |
+| Cross-connection transfer | Missing | After object administration/export foundation; separate source/destination guards, bounded batches, destination approval, auditable partial completion |
+| Engine-native backup/restore | Missing | Per-engine subprocess adapter with checked availability, safe argv, cancellation, output draining and destructive restore confirmation |
+| Restore Previous Values | Missing | Local snapshot design first; every rewind remains a governed write; no paid gate |
+| MCP and headless access | Implemented: [MCP](../crates/mcp/src/tools.rs), [daemon](../crates/agentd/src/lib.rs) | Extend domain metadata and GUI together; do not add agent-only bypasses |
+| DuckDB local files | Implemented, optional: [driver](../crates/drivers/duckdb/src/lib.rs) | CSV/TSV/JSON/Parquet paths now have tests and bundled extensions; optional CI covers the app build |
+| Redis Sentinel/Cluster | Missing; current driver experimental | Keep separate from default-driver stabilization; topology and failover fixtures required |
+| MongoDB depth | Partial: [driver](../crates/drivers/mongodb/src/lib.rs) | Collection drop fixed; nested filters, binary UUID and MQL authoring remain separate driver slices |
+| Entra authentication and Kerberos | Partial: Kerberos configuration exists; Entra missing | SQL Server auth fixtures before maturity upgrades; real KDC/SPN negotiation remains unverified |
+| Additional engines | Missing or unverified beyond current static crates | Redshift/Cockroach compatibility must be tested, not inferred from PostgreSQL. Trino/Snowflake/BigQuery and other upstream engines wait for existing-driver release work. Oracle ODPI remains broken |
+| Desktop automation | Partial: MCP and connection URL import | OS URL registration is distinct from importing a URL; specify Linux desktop behavior before adding it |
+| AppleScript, iCloud, Apple UI/iOS | Intentionally excluded | Use Linux desktop integration; no Apple service imitation |
+| Runtime plugins, built-in AI, entitlements | Intentionally excluded | Static driver crates, external governed agents, no license/account gates |
 
-## Since 0.69 (through 0.71 and unreleased `main`)
+## 0.72 correctness review
 
-Correctness fixes worth checking against our own drivers now, independent of
-feature-phase ordering — these are bugs, not features, so they do not need
-to wait for Phase 10/6 sequencing:
+The release's filter/type, stale catalog and transaction fixes have direct Linux analogues. This sprint adds PostgreSQL non-text pattern conversion, rejects invalid count filters, forwards daemon view metadata, rejects retired-connection sidebar results, and tests editor/structure transaction separation. DuckDB's bundled extensions remove a reproduced offline dependency.
 
-| Upstream fix | Check | Status |
-|---|---|---|
-| `fix(mongodb): implement dropObjectStatement to support dropping collections` | Does `tablepro-driver-mongodb` support dropping a collection through the structure tab's drop action, or only tables/databases it treats as SQL-shaped? | Confirmed and fixed: `execute()` only recognized `insertOne`/`deleteMany` shell forms, so Drop Table's engine-neutral `DROP TABLE IF EXISTS "name"` failed with `Unsupported`. Added a `DROP TABLE` recognizer that translates to a native collection drop |
-| `fix(connections): wait for a stale tunnel process to exit before reusing its port` | Does `tablepro-ssh`'s local-port allocation risk rebinding a port a just-closed tunnel hasn't released yet? | Not applicable: `bind_local` always binds TCP to port 0 (OS-assigned ephemeral port) for every new tunnel; it never reuses a specific remembered port, so this race has no analog here |
-| `fix(datagrid): refuse edits to server-owned columns at the model boundary` | Generated/identity columns are already read-only in Structure; confirm Browse's inline cell editor also refuses to open an editor on a generated column, not just on save | Already correct: `is_cell_editable` (`ui/grid/column.rs`) excludes `is_generated`/`is_auto_increment`/primary-key columns before a cell editor is ever constructed, with an existing unit test |
-| `fix(datagrid): carry identity columns through so a new row pre-fills DEFAULT` | Does inserting a new Browse row already leave an identity/auto-increment column unset (DEFAULT) rather than sending an explicit value? | Already correct: `build_insert_from_draft` (`core/src/sql_dialect.rs`) unconditionally omits `is_auto_increment`/`is_generated` columns from every generated INSERT, letting the server apply its own default |
+Export-specific quoting, dependency cycles, duplicate FK declarations, destructive restore and partial-import reports are **not applicable to a nonexistent Linux bulk dump/restore path yet**. Carry them as acceptance tests for that future foundation. Existing Copy Row as INSERT remains a different workflow; do not remove identity values from it merely to imitate dump options.
 
-Feature-shaped items from the same slice are folded into the Take table
-above, in their natural category. None of these outrank the existing
-Order; they slot into Browse quality, import/export, or driver depth
-whenever those come up.
+The previous review already closed MongoDB collection drop, generated/identity edits and UTF-8 display. The SSH fixed-port race has no equivalent because Linux allocates fresh ephemeral ports. MongoDB method-named collections use native collection APIs; shell-filter count behavior still needs a dedicated driver fixture. Apple sync conflict/group-cycle fixes do not automatically apply to local sidecar storage, whose malformed-file behavior needs its own tests.
 
-Client certificate import (SSL settings for MySQL/PostgreSQL/Redis) is
-already tracked, not new: see Priority A in PLAN.md and "Known seam" in
-the Agent surface section.
+## Ordered implementation slices
 
-## Do not take
+1. Close stabilization findings and reconcile evidence. Then finish restart/session restoration and typed activity (Phase 10).
+2. Small grid capabilities: Jump to Column, then FK selection. Each gets owning-tab tests and an installed GTK scenario.
+3. Extend read-only schema catalog, including PostgreSQL types. Add driver trait capability, policy forwarding, GUI and MCP read contract in the same slice. Cache by connection identity and refresh after DDL.
+4. Add optional query timing, then plan-tree/insights work; validate units and missing metrics per driver.
+5. Complete object administration, then streaming export/import and snapshot semantics. Validate engine quoting, cyclic dependencies, progress and partial failure before advanced format options.
+6. Cross-connection transfer and engine-native backup/restore become independent projects. New drivers follow existing-driver release evidence.
 
-- Runtime driver plugins (Turso, Kafka as downloadable engines). A static
-  crate only if a real Linux workflow exists.
-- Compare & Sync, seat or license UI, PRO badges, Settings > License.
-- Embedded mongosh, Beancount, Liquid Glass tabs, iOS insert-row, macOS
-  shortcut rebinding.
-- Built-in AI chat.
-
-## First slice (now)
-
-PostgreSQL views, read-only:
-
-- `Connection::list_views` defaults to empty, same pattern as indexes.
-- `DatabaseDriver::supports_view_metadata` is true only when the driver
-  reads the catalog.
-- `PolicyGuard` wraps the list. The GUI uses `list_views_controlled`.
-- The sidebar shows views under a Views heading, with Open only. No
-  Drop, no Edit Structure.
-- A failed view list does not pretend the database has no views.
-
-Next after this slice: typed activity console (10.3), then the rest of
-10.6 (materialized views, routines, triggers).
+No feature in this list bypasses the safety layers. [Upstream sync](upstream-sync.md) records actual behavioral ports; this matrix records gaps without implying they have shipped.

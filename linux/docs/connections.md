@@ -1,6 +1,6 @@
 # Connection handling
 
-Last audited: 2026-08-20
+Last audited: 2026-09-07 (transport table reconciled; historical findings retained)
 
 TablePro is a connection engine before it is a grid. This document records what
 the connection layer actually does today, what is proven, what is known to be
@@ -50,7 +50,7 @@ Two ideas carry most of the security weight:
 |---|---|---|---|---|---|---|---|
 | PostgreSQL | yes | direct local and SSH-forwarded | n/a | all five on TCP; disabled locally | yes | no | pool acquire only |
 | MySQL | yes | no | n/a | all five | yes | no | pool acquire only |
-| SQL Server | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | no | no | 5 s |
+| SQL Server | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | yes (implemented) | no | 5 s |
 | SQLite | n/a | n/a (local file) | n/a | n/a | n/a | n/a | pool acquire only |
 | ClickHouse | n/a | no | yes | Disabled / encrypt / verify (CA and Full identical) | yes | no | 5 s probe |
 | Redis | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | yes | no | 5 s |
@@ -61,9 +61,11 @@ Two ideas carry most of the security weight:
 "Pool acquire only" means the driver bounds how long it waits for a pooled
 connection but does not bound the initial TCP or TLS handshake.
 
+The [September audit](stabilization-2026-09.md) distinguishes base-commit hosted evidence from newer local changes. The driver TLS fixture also covers MySQL, ClickHouse, Redis and MongoDB; it is not a full SSH/reconnect fixture.
+
 ## What is release-verified
 
-Only PostgreSQL, and only through the fixture in
+The complete TLS/SSH/reconnect fixture is PostgreSQL, through the fixture in
 `tests/fixtures/postgres-release`. That fixture proves, against a real server:
 
 - `VerifyFull` succeeds against the certificate hostname and fails against a
@@ -132,9 +134,9 @@ because the driver could only use the bundled root store, and `Require` failed
 too, because asking for encrypt-only silently got full verification against
 roots that do not know a private certificate.
 
-SQL Server still maps Verify Ca and Verify Full to the same configuration and
-has no authority setting, so a privately issued certificate cannot be trusted
-there. On ClickHouse, MongoDB, and Redis the rustls backend offers no CA-only
+SQL Server still maps Verify Ca and Verify Full to the same configuration, but now
+passes a saved custom CA to `trust_cert_ca`. Configuration tests cover this;
+real SQL Server certificate negotiation remains unverified. On ClickHouse, MongoDB, and Redis the rustls backend offers no CA-only
 mode, so Verify Ca verifies the hostname as well; that is stricter than
 requested, never weaker, and is documented in each driver.
 
