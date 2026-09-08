@@ -736,40 +736,46 @@ async fn collect_query_rows<'a, S>(stream: &mut S, limit: usize) -> Result<Query
 where
     S: futures::Stream<Item = Result<PgRow, sqlx::Error>> + Unpin + 'a,
 {
-    let mut collected = Vec::new();
+    let mut columns = Vec::new();
+    let mut type_names = Vec::new();
+    let mut rows = Vec::new();
     let mut truncated = false;
     while let Some(row_result) = stream.next().await {
         let row = row_result.map_err(map_sqlx_error)?;
-        if collected.len() >= limit {
+        if rows.len() >= limit {
             truncated = true;
             break;
         }
-        collected.push(row);
+        if rows.is_empty() {
+            type_names = row
+                .columns()
+                .iter()
+                .map(|column| column.type_info().name().to_ascii_uppercase())
+                .collect::<Vec<_>>();
+            columns = row
+                .columns()
+                .iter()
+                .map(|column| ColumnInfo {
+                    name: column.name().to_string(),
+                    data_type: column.type_info().name().to_string(),
+                    nullable: true,
+                    primary_key: false,
+                    is_auto_increment: false,
+                    default_value: None,
+                    is_generated: false,
+                })
+                .collect();
+        }
+        // Decode while streaming so the wire rows and the final Value matrix
+        // do not both occupy memory for the entire result.
+        rows.push(
+            type_names
+                .iter()
+                .enumerate()
+                .map(|(index, type_name)| extract_value(&row, index, type_name))
+                .collect(),
+        );
     }
-    if collected.is_empty() {
-        return Ok(QueryResult {
-            columns: Vec::new(),
-            rows: Vec::new(),
-            truncated,
-        });
-    }
-    let columns = collected[0]
-        .columns()
-        .iter()
-        .map(|column| ColumnInfo {
-            name: column.name().to_string(),
-            data_type: column.type_info().name().to_string(),
-            nullable: true,
-            primary_key: false,
-            is_auto_increment: false,
-            default_value: None,
-            is_generated: false,
-        })
-        .collect::<Vec<_>>();
-    let rows = collected
-        .iter()
-        .map(|row| (0..columns.len()).map(|index| extract_value(row, index)).collect())
-        .collect();
     Ok(QueryResult {
         columns,
         rows,
@@ -777,9 +783,8 @@ where
     })
 }
 
-fn extract_value(row: &PgRow, idx: usize) -> Value {
-    let type_name = row.columns()[idx].type_info().name().to_ascii_uppercase();
-    match type_name.as_str() {
+fn extract_value(row: &PgRow, idx: usize, type_name: &str) -> Value {
+    match type_name {
         "BOOL" => row.try_get::<bool, _>(idx).map(Value::Bool).unwrap_or(Value::Null),
         "INT2" => row
             .try_get::<i16, _>(idx)
