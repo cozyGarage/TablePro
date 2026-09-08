@@ -360,3 +360,40 @@ jobs:
         run: docker compose version
       - name: PostgreSQL TLS, SSH, lock, and reconnect fixture
         run: ./scripts/test-postgres-release.sh
+
+  duckdb:
+    name: Optional DuckDB driver and GTK feature
+    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:25.10
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'linux') || github.ref }}
+      - name: Record the commit under test
+        run: git rev-parse HEAD
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates curl git pkg-config clang \
+            libgtk-4-dev libadwaita-1-dev libgtksourceview-5-dev libssl-dev libsecret-1-dev libkrb5-dev
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: 1.93
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: linux
+          prefix-key: linux-duckdb
+      - name: Driver tests including offline extensions and flat files
+        run: cargo test --locked -p tablepro-driver-duckdb
+      - name: Build the GTK application with DuckDB
+        run: cargo build --locked -p tablepro-app --features duckdb

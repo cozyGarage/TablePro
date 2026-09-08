@@ -520,4 +520,63 @@ mod tests {
         let rows = conn.fetch_rows(None, "foo", 0, 10).await.unwrap();
         assert_eq!(rows.rows.len(), 2);
     }
+    #[test]
+    fn flat_files_open_with_quoted_paths_and_expected_rows() {
+        let dir = TempDir::new().unwrap();
+        for (extension, contents) in [
+            ("csv", "id,name\n1,Ada\n2,Grace\n"),
+            ("tsv", "id\tname\n1\tAda\n2\tGrace\n"),
+            ("json", "[{\"id\":1,\"name\":\"Ada\"},{\"id\":2,\"name\":\"Grace\"}]"),
+        ] {
+            let path = dir.path().join(format!("1 O'Brien data.{extension}"));
+            std::fs::write(&path, contents).unwrap();
+            let conn = open_path(path.to_str().unwrap()).unwrap();
+            let table = quote_ident(&derive_view_name(path.to_str().unwrap()));
+            let count: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 2, "{extension}");
+        }
+    }
+
+    #[test]
+    fn parquet_and_json_functions_work_without_extension_downloads() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("O'Brien.parquet");
+        let conn = DuckConnection::open_in_memory().unwrap();
+        conn.execute_batch("SET autoinstall_known_extensions=false; SET autoload_known_extensions=false;")
+            .unwrap();
+        let count: i64 = conn
+            .query_row("SELECT json_array_length('[1,2]')", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+        conn.execute_batch(&format!(
+            "COPY (SELECT 1 AS id) TO '{}' (FORMAT PARQUET)",
+            escape_literal(path.to_str().unwrap())
+        ))
+        .unwrap();
+        let reopened = open_path(path.to_str().unwrap()).unwrap();
+        let count: i64 = reopened
+            .query_row(
+                &format!(
+                    "SELECT count(*) FROM {}",
+                    quote_ident(&derive_view_name(path.to_str().unwrap()))
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn malformed_or_missing_flat_files_report_errors() {
+        let dir = TempDir::new().unwrap();
+        for extension in ["json", "parquet"] {
+            let path = dir.path().join(format!("broken.{extension}"));
+            std::fs::write(&path, "not valid data {{{").unwrap();
+            assert!(open_path(path.to_str().unwrap()).is_err());
+        }
+        assert!(open_path(dir.path().join("missing.csv").to_str().unwrap()).is_err());
+    }
 }

@@ -13,7 +13,7 @@ path = "src/lib.rs"
 [dependencies]
 tablepro-core = { path = "../../core" }
 async-trait.workspace = true
-duckdb = { version = "1.10505", features = ["bundled"] }
+duckdb = { version = "1.10505", features = ["bundled", "json", "parquet"] }
 tokio = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
