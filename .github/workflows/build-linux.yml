@@ -376,6 +376,11 @@ jobs:
       run:
         working-directory: linux
     steps:
+      - name: Install Git before checkout
+        working-directory: /tmp
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'linux') || github.ref }}
