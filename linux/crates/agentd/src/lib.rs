@@ -45,6 +45,14 @@ impl Connection for SessionConnection {
         self.inner.list_tables_controlled(control).await
     }
 
+    async fn list_views(&self) -> Result<Vec<TableInfo>, DriverError> {
+        self.inner.list_views().await
+    }
+
+    async fn list_views_controlled(&self, control: &OperationControl) -> Result<Vec<TableInfo>, DriverError> {
+        self.inner.list_views_controlled(control).await
+    }
+
     async fn fetch_columns(&self, schema: Option<&str>, table: &str) -> Result<Vec<ColumnInfo>, DriverError> {
         self.inner.fetch_columns(schema, table).await
     }
@@ -459,3 +467,6 @@ mod tests {
         assert!(raw_lifetime.upgrade().is_none());
     }
 }
+
+#[cfg(test)]
+mod session_tests;
