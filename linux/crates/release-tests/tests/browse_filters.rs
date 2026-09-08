@@ -316,3 +316,86 @@ async fn a_composite_keyset_seeks_past_the_last_seen_pair() {
     let ids: Vec<Value> = page.rows.iter().filter_map(|row| row.first().cloned()).collect();
     assert_eq!(ids, vec![Value::Int(4), Value::Int(5)]);
 }
+
+#[tokio::test]
+#[ignore = "requires the postgres release fixture"]
+async fn postgres_patterns_search_non_text_columns_without_changing_comparisons() {
+    let fixture = Fixture::from_env();
+    let connection = fixture.connect_verified().await;
+    let columns = setup(connection.as_ref()).await;
+    // Expressions supply real PostgreSQL types without shared enum DDL.
+    let cases = [
+        ("uuid", "'550e8400-e29b-41d4-a716-446655440000'::uuid", "550e"),
+        ("numeric", "123.45::numeric", "123"),
+        ("integer", "123::integer", "123"),
+        ("date", "DATE '2026-09-07'", "2026"),
+        ("json", "'{\"label\":\"Alpha\"}'::json", "Alpha"),
+        ("jsonb", "'{\"label\":\"Alpha\"}'::jsonb", "Alpha"),
+        ("integer[]", "ARRAY[123,456]", "123"),
+        ("enum", "'Alpha'::browse_filter_mood", "Alpha"),
+    ];
+    // A fixture-owned enum avoids relying on server-version-specific system enums.
+    connection
+        .execute("DROP TYPE IF EXISTS browse_filter_mood")
+        .await
+        .unwrap();
+    connection
+        .execute("CREATE TYPE browse_filter_mood AS ENUM ('Alpha', 'Beta')")
+        .await
+        .unwrap();
+    for (data_type, expression, search) in cases {
+        let mut column = columns[0].clone();
+        column.name = "value".into();
+        column.data_type = data_type.into();
+        for op in [FilterOp::Contains, FilterOp::Ilike] {
+            let pattern = if op == FilterOp::Ilike {
+                format!("%{}%", search.to_lowercase())
+            } else {
+                search.into()
+            };
+            let set = rule("value", op, Some(FilterValue::Single(pattern)));
+            let (clause, params) = build_filter_where("postgres", &[column.clone()], &set)
+                .unwrap()
+                .unwrap();
+            let sql = format!("SELECT 1 AS matched FROM (SELECT {expression} AS value) t WHERE {clause}");
+            let result = connection
+                .query_params(&sql, &params)
+                .await
+                .unwrap_or_else(|e| panic!("{data_type}: {e}"));
+            assert_eq!(result.rows.len(), 1, "{data_type} {op:?}");
+        }
+    }
+    let set = rule("amount", FilterOp::Gt, Some(FilterValue::Single("20".into())));
+    assert_eq!(ids_matching(connection.as_ref(), &columns, &set).await, vec![3, 4, 5]);
+    connection.execute("DROP TYPE browse_filter_mood").await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires the postgres release fixture"]
+async fn capped_stream_preserves_columns_values_and_connection_reuse() {
+    use std::time::Duration;
+    use tablepro_core::{MAX_QUERY_ROWS, OperationControl};
+    let connection = Fixture::from_env().connect_verified().await;
+    let result = connection
+        .query_controlled(
+            &format!(
+                "SELECT n::bigint AS id, 'kept'::text AS label FROM generate_series(1, {}) n",
+                MAX_QUERY_ROWS + 1
+            ),
+            &OperationControl::with_timeout(Duration::from_secs(60)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        result.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+        ["id", "label"]
+    );
+    assert_eq!(result.rows.len(), MAX_QUERY_ROWS);
+    assert!(result.truncated);
+    assert_eq!(result.rows[0], [Value::Int(1), Value::Text("kept".into())]);
+    assert_eq!(result.rows[MAX_QUERY_ROWS - 1][0], Value::Int(MAX_QUERY_ROWS as i64));
+    drop(result);
+    let next = connection.query("SELECT 42::bigint AS answer").await.unwrap();
+    assert_eq!(next.rows, vec![vec![Value::Int(42)]]);
+    assert!(!next.truncated);
+}

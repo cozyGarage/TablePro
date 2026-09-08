@@ -641,7 +641,7 @@ impl SimpleComponent for App {
             AppMsg::StructureLoadFailed { tab_id, message } => self.on_structure_load_failed(tab_id, message),
             AppMsg::StructureTabDirtyChanged(tab_id, dirty) => self.refresh_structure_tab_dirty(tab_id, dirty),
             AppMsg::SchemaChanged { schema, table } => self.on_schema_changed(schema, table, sender),
-            AppMsg::TablesReloaded(tables) => self.on_tables_reloaded(tables),
+            AppMsg::TablesReloaded(id, identity, tables) => self.on_tables_reloaded(id, identity, tables),
             AppMsg::RowOpStarted => self.set_row_op_in_flight(true),
             AppMsg::ReloadConnections => self.on_reload_connections(sender),
             AppMsg::ConnectionsLoaded(connections) => {

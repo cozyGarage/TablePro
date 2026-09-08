@@ -4,7 +4,7 @@ use std::collections::HashMap;
 pub struct SchemaIndex {
     pub tables: Vec<String>,
     pub columns: HashMap<String, Vec<String>>,
-    connection: Option<std::sync::Weak<dyn tablepro_core::Connection>>,
+    connection: Option<crate::services::database_service::ConnectionIdentity>,
     generation: u64,
 }
 
@@ -26,17 +26,13 @@ pub struct SchemaRequest {
 }
 
 impl SchemaIndex {
-    pub fn sync_connection(&mut self, connection: &std::sync::Arc<dyn tablepro_core::Connection>) -> bool {
-        let unchanged = self
-            .connection
-            .as_ref()
-            .and_then(std::sync::Weak::upgrade)
-            .is_some_and(|current| std::sync::Arc::ptr_eq(&current, connection));
+    pub fn sync_connection(&mut self, connection: &crate::services::database_service::ConnectionIdentity) -> bool {
+        let unchanged = self.connection.as_ref() == Some(connection);
         if unchanged {
             return false;
         }
         self.generation = self.generation.wrapping_add(1);
-        self.connection = Some(std::sync::Arc::downgrade(connection));
+        self.connection = Some(connection.clone());
         self.tables.clear();
         self.columns.clear();
         true

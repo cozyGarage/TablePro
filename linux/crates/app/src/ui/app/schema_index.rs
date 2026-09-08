@@ -4,12 +4,15 @@ use super::{App, AppMsg};
 
 impl App {
     pub(super) fn on_editor_needs_columns(&self, tables: Vec<String>, sender: ComponentSender<Self>) {
-        let Some(conn) = self.window_connection() else {
+        let Some((conn, identity)) = self
+            .connection_id
+            .and_then(|id| crate::services::database_service::instance().get_with_identity(id))
+        else {
             return;
         };
         let pending: Vec<crate::ui::editor::SchemaRequest> = {
             let mut index = self.schema_index.borrow_mut();
-            if index.sync_connection(&conn) {
+            if index.sync_connection(&identity) {
                 self.requested_columns.borrow_mut().clear();
             }
             let mut requested = self.requested_columns.borrow_mut();
@@ -48,8 +51,17 @@ impl App {
         request: crate::ui::editor::SchemaRequest,
         columns: Result<Vec<String>, ()>,
     ) {
+        let Some(identity) = self
+            .connection_id
+            .and_then(|id| crate::services::database_service::instance().identity(id))
+        else {
+            return;
+        };
         let key = crate::ui::editor::table_key(&request.table);
         let mut index = self.schema_index.borrow_mut();
+        if index.sync_connection(&identity) {
+            self.requested_columns.borrow_mut().clear();
+        }
         if !index.accepts(&request) {
             return;
         }
@@ -62,8 +74,10 @@ impl App {
     }
 
     pub(super) fn rebuild_schema_buffer(&self) {
-        if let Some(connection) = self.window_connection()
-            && self.schema_index.borrow_mut().sync_connection(&connection)
+        if let Some(identity) = self
+            .connection_id
+            .and_then(|id| crate::services::database_service::instance().identity(id))
+            && self.schema_index.borrow_mut().sync_connection(&identity)
         {
             self.requested_columns.borrow_mut().clear();
         }

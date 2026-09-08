@@ -19,6 +19,18 @@ pub fn instance() -> &'static DatabaseService {
     SERVICE.get_or_init(DatabaseService::new)
 }
 
+/// Opaque identity of the underlying session, independent of the fresh
+/// PolicyGuard allocated for each request. It grants no database access.
+#[derive(Debug, Clone)]
+pub struct ConnectionIdentity(std::sync::Weak<dyn Connection>);
+
+impl PartialEq for ConnectionIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+}
+impl Eq for ConnectionIdentity {}
+
 pub(super) struct EntryInner {
     pub(super) connection: Arc<dyn Connection>,
     pub(super) tunnel: Option<SshTunnel>,
@@ -233,6 +245,14 @@ impl DatabaseService {
     /// Policy-gated handle. Raw connections are not exposed; the returned
     /// `Arc<dyn Connection>` is always a [`PolicyGuard`].
     pub fn handle(&self, id: Uuid, principal: Principal) -> Option<Arc<dyn Connection>> {
+        self.handle_with_identity(id, principal).map(|(handle, _)| handle)
+    }
+
+    fn handle_with_identity(
+        &self,
+        id: Uuid,
+        principal: Principal,
+    ) -> Option<(Arc<dyn Connection>, ConnectionIdentity)> {
         let entries = self.connections.lock().unwrap_or_else(|e| e.into_inner());
         let entry = entries.get(&id)?;
         let inner = entry.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -250,12 +270,26 @@ impl DatabaseService {
             audit: self.audit.clone(),
             audit_state: self.audit_state.clone(),
         };
-        Some(Arc::new(PolicyGuard::new(inner.connection.clone(), ctx)) as Arc<dyn Connection>)
+        Some((
+            Arc::new(PolicyGuard::new(inner.connection.clone(), ctx)) as Arc<dyn Connection>,
+            ConnectionIdentity(Arc::downgrade(&inner.connection)),
+        ))
     }
 
     /// Alias for [`handle`] with the human GUI principal.
     pub fn get(&self, id: Uuid) -> Option<Arc<dyn Connection>> {
         self.handle(id, Principal::human_gui())
+    }
+
+    pub fn get_with_identity(&self, id: Uuid) -> Option<(Arc<dyn Connection>, ConnectionIdentity)> {
+        self.handle_with_identity(id, Principal::human_gui())
+    }
+
+    pub fn identity(&self, id: Uuid) -> Option<ConnectionIdentity> {
+        let entries = self.connections.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = entries.get(&id)?;
+        let inner = entry.inner.lock().unwrap_or_else(|e| e.into_inner());
+        Some(ConnectionIdentity(Arc::downgrade(&inner.connection)))
     }
 
     pub fn health(&self, id: Uuid) -> Option<ConnectionHealth> {
@@ -435,5 +469,38 @@ mod tests {
 
         assert!(service.metadata(first).is_none());
         assert_eq!(service.metadata(second).map(|m| m.name), Some("second".to_string()));
+    }
+    #[tokio::test]
+    async fn session_identity_survives_new_guards_but_changes_on_reconnect() {
+        let service = DatabaseService::new();
+        let id = open_memory_connection(&service, "identity").await;
+        let (first_guard, first) = service.get_with_identity(id).unwrap();
+        let (second_guard, second) = service.get_with_identity(id).unwrap();
+        assert!(!Arc::ptr_eq(&first_guard, &second_guard));
+        assert_eq!(first, second);
+        let mut index = crate::ui::SchemaIndex::default();
+        assert!(index.sync_connection(&first));
+        index.set_columns("items", vec!["id".into()]);
+        let request = index.request("items".into());
+        assert!(!index.sync_connection(&second));
+        assert!(index.knows_columns("items"));
+        assert!(index.accepts(&request));
+        let replacement = drivers_sqlite::SqliteDriver
+            .connect(ConnectOptions {
+                database: ":memory:".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        {
+            let entries = service.connections.lock().unwrap();
+            entries.get(&id).unwrap().inner.lock().unwrap().connection = Arc::from(replacement);
+        }
+        let current = service.identity(id).unwrap();
+        assert_ne!(first, current);
+        assert!(index.sync_connection(&current));
+        assert!(!index.accepts(&request));
+        service.close(id);
+        assert!(service.identity(id).is_none());
     }
 }

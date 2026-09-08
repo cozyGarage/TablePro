@@ -18,3 +18,5 @@ pub mod structure_tracker;
 pub mod window_registry;
 pub mod window_state;
 pub mod workspace_state;
+
+pub(crate) mod browse_query;

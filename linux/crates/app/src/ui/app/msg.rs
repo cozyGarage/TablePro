@@ -154,7 +154,11 @@ pub enum AppMsg {
         schema: Option<String>,
         table: Option<String>,
     },
-    TablesReloaded(Vec<TableInfo>),
+    TablesReloaded(
+        Uuid,
+        crate::services::database_service::ConnectionIdentity,
+        Vec<TableInfo>,
+    ),
     ReopenClosedTab,
     ShowFilterDialog,
 }

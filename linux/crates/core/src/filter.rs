@@ -193,6 +193,17 @@ fn build_rule_sql(
     params: &mut Vec<Value>,
 ) -> Result<String, BuildFilterError> {
     let col_sql = quote_ident(driver_id, &col.name);
+    // PostgreSQL pattern operators require text. Unknown names include user
+    // enums/domains, so only known built-in text types bypass the cast.
+    let pattern_sql = if driver_id == "postgres"
+        && !matches!(
+            col.data_type.to_ascii_lowercase().as_str(),
+            "text" | "varchar" | "character varying" | "char" | "character" | "bpchar"
+        ) {
+        format!("CAST({col_sql} AS text)")
+    } else {
+        col_sql.clone()
+    };
     match rule.op {
         FilterOp::IsNull => Ok(format!("{col_sql} IS NULL")),
         FilterOp::IsNotNull => Ok(format!("{col_sql} IS NOT NULL")),
@@ -229,7 +240,7 @@ fn build_rule_sql(
             params.push(Value::Text(pattern));
             // Case-sensitive on all drivers. The user picks Ilike
             // explicitly when they want case-insensitive matching.
-            Ok(format!("{col_sql} LIKE {ph}"))
+            Ok(format!("{pattern_sql} LIKE {ph}"))
         }
 
         FilterOp::Like | FilterOp::NotLike => {
@@ -242,7 +253,7 @@ fn build_rule_sql(
             } else {
                 "NOT LIKE"
             };
-            Ok(format!("{col_sql} {kw} {ph}"))
+            Ok(format!("{pattern_sql} {kw} {ph}"))
         }
 
         FilterOp::Ilike => {
@@ -256,7 +267,7 @@ fn build_rule_sql(
             // ILIKE→LIKE on the latter two is the closest equivalent
             // without a dialect-specific function call.
             let op_sql = if driver_id == "postgres" { "ILIKE" } else { "LIKE" };
-            Ok(format!("{col_sql} {op_sql} {ph}"))
+            Ok(format!("{pattern_sql} {op_sql} {ph}"))
         }
 
         FilterOp::Between => {
@@ -486,6 +497,46 @@ mod tests {
             op,
             value,
         }
+    }
+
+    #[test]
+    fn postgres_pattern_search_casts_values_but_typed_comparisons_do_not() {
+        for data_type in [
+            "uuid",
+            "mood",
+            "integer",
+            "numeric",
+            "date",
+            "json",
+            "jsonb",
+            "integer[]",
+        ] {
+            let columns = vec![col("value", data_type)];
+            for op in [
+                FilterOp::Contains,
+                FilterOp::StartsWith,
+                FilterOp::EndsWith,
+                FilterOp::Like,
+                FilterOp::NotLike,
+                FilterOp::Ilike,
+            ] {
+                let set = FilterSet {
+                    rules: vec![rule("value", op, Some(FilterValue::Single("12".into())))],
+                    ..Default::default()
+                };
+                let (sql, params) = build_filter_where("postgres", &columns, &set).unwrap().unwrap();
+                assert!(sql.starts_with("CAST(\"value\" AS text) "), "{data_type}: {sql}");
+                assert!(matches!(params[0], Value::Text(_)));
+            }
+        }
+        let columns = vec![col("value", "integer")];
+        let set = FilterSet {
+            rules: vec![rule("value", FilterOp::Eq, Some(FilterValue::Single("12".into())))],
+            ..Default::default()
+        };
+        let (sql, params) = build_filter_where("postgres", &columns, &set).unwrap().unwrap();
+        assert_eq!(sql, "\"value\" = $1");
+        assert_eq!(params, vec![Value::Int(12)]);
     }
 
     #[test]

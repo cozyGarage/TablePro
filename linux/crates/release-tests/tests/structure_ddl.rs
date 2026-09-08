@@ -311,3 +311,67 @@ async fn a_failed_statement_rolls_back_the_whole_ddl_batch() {
         "the first statement must roll back with the batch: {names:?}"
     );
 }
+
+#[tokio::test]
+#[ignore = "requires the postgres release fixture"]
+async fn structure_batches_do_not_commit_or_rollback_an_editor_transaction() {
+    let connection = Fixture::from_env().connect_verified().await;
+    connection
+        .execute("DROP TABLE IF EXISTS ddl_editor_isolation")
+        .await
+        .unwrap();
+    connection
+        .execute("DROP TABLE IF EXISTS ddl_isolated_structure")
+        .await
+        .unwrap();
+    connection
+        .execute("CREATE TABLE ddl_editor_isolation (id integer PRIMARY KEY)")
+        .await
+        .unwrap();
+    let mut editor = connection.begin().await.unwrap();
+    editor
+        .execute("INSERT INTO ddl_editor_isolation VALUES (1)")
+        .await
+        .unwrap();
+    connection
+        .execute_in_transaction(&[("CREATE TABLE ddl_isolated_structure (id integer)".into(), vec![])])
+        .await
+        .unwrap();
+    // The structure commit must not commit the editor's write.
+    assert_eq!(
+        connection
+            .query("SELECT count(*) FROM ddl_editor_isolation")
+            .await
+            .unwrap()
+            .rows[0][0],
+        Value::Int(0)
+    );
+    assert!(
+        connection
+            .execute_in_transaction(&[("SELECT * FROM no_such_ddl_fixture_table".into(), vec![])])
+            .await
+            .is_err()
+    );
+    // A failing structure batch must not roll back the editor either.
+    assert_eq!(
+        editor
+            .query("SELECT count(*) FROM ddl_editor_isolation")
+            .await
+            .unwrap()
+            .rows[0][0],
+        Value::Int(1)
+    );
+    editor.rollback().await.unwrap();
+    assert_eq!(
+        connection
+            .query("SELECT count(*) FROM ddl_editor_isolation")
+            .await
+            .unwrap()
+            .rows[0][0],
+        Value::Int(0)
+    );
+    connection
+        .execute("DROP TABLE ddl_isolated_structure, ddl_editor_isolation")
+        .await
+        .unwrap();
+}

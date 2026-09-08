@@ -714,31 +714,42 @@ impl App {
                 }
             }
             for id in affected {
+                // ColumnsLoaded schedules the page/count with fresh column types.
                 sender.input(AppMsg::FetchBrowseColumns(id));
-                sender.input(AppMsg::FetchBrowsePage(id));
-                sender.input(AppMsg::FetchBrowseRowCount(id));
             }
         }
         // Sidebar refresh: re-list tables and rebuild the factory.
         let sender_for_cmd = sender.clone();
-        let connection_id = self.connection_id;
+        let Some(connection_id) = self.connection_id else {
+            return;
+        };
+        let Some((conn, identity)) = database_service::instance().get_with_identity(connection_id) else {
+            return;
+        };
         let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         sender.command(move |_, shutdown| {
             shutdown
                 .register(async move {
-                    let Some(conn) = connection_id.and_then(|id| database_service::instance().get(id)) else {
-                        return;
-                    };
                     let control = crate::services::operation_control::bounded(timeout_secs);
                     if let Ok(tables) = conn.list_tables_controlled(&control).await {
-                        sender_for_cmd.input(AppMsg::TablesReloaded(tables));
+                        sender_for_cmd.input(AppMsg::TablesReloaded(connection_id, identity, tables));
                     }
                 })
                 .drop_on_shutdown()
         });
     }
 
-    pub(super) fn on_tables_reloaded(&mut self, tables: Vec<tablepro_core::TableInfo>) {
+    pub(super) fn on_tables_reloaded(
+        &mut self,
+        connection_id: Uuid,
+        identity: database_service::ConnectionIdentity,
+        tables: Vec<tablepro_core::TableInfo>,
+    ) {
+        if self.connection_id != Some(connection_id)
+            || database_service::instance().identity(connection_id).as_ref() != Some(&identity)
+        {
+            return;
+        }
         self.repopulate_sidebar(&tables);
     }
 

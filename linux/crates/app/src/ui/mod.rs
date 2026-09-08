@@ -23,3 +23,6 @@ mod structure_tab_dialogs;
 mod welcome_view;
 
 pub use app::App;
+
+#[cfg(test)]
+pub(crate) use editor::SchemaIndex;

@@ -2,9 +2,10 @@ use relm4::adw::prelude::*;
 use relm4::gtk::gio;
 use relm4::{ComponentController, ComponentSender, adw, gtk};
 
-use tablepro_core::{ColumnInfo, KEYSET_OFFSET_THRESHOLD, QueryResult, keyset_order_by, keyset_where_clause};
+use tablepro_core::{ColumnInfo, QueryResult};
 use uuid::Uuid;
 
+use crate::services::browse_query::{BrowseTarget, PageQuery};
 use crate::ui::browse_tab::{BrowseLoadFailure, BrowsePageRequest, BrowseRowCountRequest, BrowseTabInput};
 
 use super::{App, AppMsg, ExportFormat, OpenMode, render_json};
@@ -59,27 +60,26 @@ impl App {
             ));
             return;
         };
-        let order_by = resolved_order_by(&driver_id, &columns, sort);
-
-        let where_result = tablepro_core::build_filter_where(&driver_id, &columns, &filter);
-        let (where_sql, mut params) = match where_result {
-            Ok(Some((sql, p))) => (Some(sql), p),
-            Ok(None) => (None, Vec::new()),
-            Err(e) => {
-                sender.input(AppMsg::ShowToast(format!("{e}")));
+        let target = BrowseTarget {
+            driver_id: &driver_id,
+            schema: schema.as_deref(),
+            table: &table,
+            columns: &columns,
+            filter: &filter,
+        };
+        let query = match target.page(offset, limit, sort, keyset_cursor.as_deref()) {
+            Ok(query) => query,
+            Err(message) => {
+                sender.input(AppMsg::LoadFailed(
+                    Some(tab_id),
+                    BrowseLoadFailure {
+                        request: Some(request),
+                        message,
+                    },
+                ));
                 return;
             }
         };
-
-        let pk_names: Vec<String> = columns
-            .iter()
-            .filter(|c| c.primary_key)
-            .map(|c| c.name.clone())
-            .collect();
-        let use_keyset = offset >= KEYSET_OFFSET_THRESHOLD
-            && sort.is_none()
-            && !pk_names.is_empty()
-            && keyset_cursor.as_ref().is_some_and(|c| c.len() == pk_names.len());
 
         let timeout_secs = crate::services::operation_control::configured_timeout_secs();
         let sender_clone = sender.clone();
@@ -87,78 +87,14 @@ impl App {
             shutdown
                 .register(async move {
                     let control = crate::services::operation_control::bounded(timeout_secs);
-                    let result = if let Some(cursor) = keyset_cursor.filter(|_| use_keyset) {
-                        let qualified = match &schema {
-                            Some(s) => format!(
-                                "{}.{}",
-                                tablepro_core::sql_dialect::quote_ident(&driver_id, s),
-                                tablepro_core::sql_dialect::quote_ident(&driver_id, &table)
-                            ),
-                            None => tablepro_core::sql_dialect::quote_ident(&driver_id, &table),
-                        };
-                        let mut sql = format!("SELECT * FROM {qualified}");
-                        let mut clauses: Vec<String> = Vec::new();
-                        if let Some(w) = &where_sql {
-                            clauses.push(w.clone());
+                    let result = match query {
+                        PageQuery::Native => {
+                            conn.fetch_rows_controlled(schema.as_deref(), &table, offset, limit, &control)
+                                .await
                         }
-                        let pk_refs: Vec<&str> = pk_names.iter().map(String::as_str).collect();
-                        match keyset_where_clause(&driver_id, &pk_refs, &cursor, params.len()) {
-                            Ok((ks, ks_params)) => {
-                                clauses.push(ks);
-                                params.extend(ks_params);
-                            }
-                            Err(e) => {
-                                sender_clone.input(AppMsg::LoadFailed(
-                                    Some(tab_id),
-                                    BrowseLoadFailure {
-                                        request: Some(request),
-                                        message: e.to_string(),
-                                    },
-                                ));
-                                return;
-                            }
+                        PageQuery::Sql(query) => {
+                            conn.query_params_controlled(&query.sql, &query.params, &control).await
                         }
-                        if !clauses.is_empty() {
-                            sql.push_str(" WHERE ");
-                            sql.push_str(&clauses.join(" AND "));
-                        }
-                        let order_sql = keyset_order_by(&driver_id, &pk_refs);
-                        let order_inner = order_sql
-                            .trim()
-                            .strip_prefix("ORDER BY")
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty());
-                        sql.push_str(&tablepro_core::sql_dialect::build_order_and_pagination(
-                            &driver_id,
-                            order_inner,
-                            limit,
-                            0,
-                        ));
-                        conn.query_params_controlled(&sql, &params, &control).await
-                    } else if where_sql.is_none() && order_by.is_none() {
-                        conn.fetch_rows_controlled(schema.as_deref(), &table, offset, limit, &control)
-                            .await
-                    } else {
-                        let qualified = match &schema {
-                            Some(s) => format!(
-                                "{}.{}",
-                                tablepro_core::sql_dialect::quote_ident(&driver_id, s),
-                                tablepro_core::sql_dialect::quote_ident(&driver_id, &table)
-                            ),
-                            None => tablepro_core::sql_dialect::quote_ident(&driver_id, &table),
-                        };
-                        let mut sql = format!("SELECT * FROM {qualified}");
-                        if let Some(w) = &where_sql {
-                            sql.push_str(" WHERE ");
-                            sql.push_str(w);
-                        }
-                        sql.push_str(&tablepro_core::sql_dialect::build_order_and_pagination(
-                            &driver_id,
-                            order_by.as_deref(),
-                            limit,
-                            offset,
-                        ));
-                        conn.query_params_controlled(&sql, &params, &control).await
                     };
                     match result {
                         Ok(query_result) => sender_clone.input(AppMsg::RowsLoaded(tab_id, request, query_result)),
@@ -263,9 +199,20 @@ impl App {
             return;
         };
 
-        let (where_sql, params) = match tablepro_core::build_filter_where(&driver_id, &columns, &filter) {
-            Ok(Some((sql, p))) => (Some(sql), p),
-            _ => (None, Vec::new()),
+        let target = BrowseTarget {
+            driver_id: &driver_id,
+            schema: schema.as_deref(),
+            table: &table,
+            columns: &columns,
+            filter: &filter,
+        };
+        let query = match target.count() {
+            Ok(query) => query,
+            Err(error) => {
+                sender.input(AppMsg::RowCountFailed(tab_id, request));
+                sender.input(AppMsg::ShowToast(error));
+                return;
+            }
         };
 
         let timeout_secs = crate::services::operation_control::configured_timeout_secs();
@@ -274,23 +221,10 @@ impl App {
             shutdown
                 .register(async move {
                     let control = crate::services::operation_control::bounded(timeout_secs);
-                    let qualified = match schema {
-                        Some(s) => format!(
-                            "{}.{}",
-                            tablepro_core::sql_dialect::quote_ident(&driver_id, &s),
-                            tablepro_core::sql_dialect::quote_ident(&driver_id, &table)
-                        ),
-                        None => tablepro_core::sql_dialect::quote_ident(&driver_id, &table),
-                    };
-                    let mut sql = format!("SELECT COUNT(*) FROM {qualified}");
-                    if let Some(w) = &where_sql {
-                        sql.push_str(" WHERE ");
-                        sql.push_str(w);
-                    }
-                    let qr_result = if where_sql.is_some() {
-                        conn.query_params_controlled(&sql, &params, &control).await
+                    let qr_result = if query.params.is_empty() {
+                        conn.query_controlled(&query.sql, &control).await
                     } else {
-                        conn.query_controlled(&sql, &control).await
+                        conn.query_params_controlled(&query.sql, &query.params, &control).await
                     };
                     let count = qr_result.ok().and_then(|qr| row_count_from_result(&qr));
                     match count {
@@ -545,34 +479,10 @@ fn row_count_from_result(result: &QueryResult) -> Option<u64> {
     }
 }
 
-fn resolved_order_by(driver_id: &str, columns: &[ColumnInfo], sort: Option<(usize, bool)>) -> Option<String> {
-    let mut terms = Vec::new();
-    let selected = sort.and_then(|(index, ascending)| {
-        columns.get(index).map(|column| {
-            let direction = if ascending { "ASC" } else { "DESC" };
-            terms.push(format!(
-                "{} {direction}",
-                tablepro_core::sql_dialect::quote_ident(driver_id, &column.name)
-            ));
-            column.name.as_str()
-        })
-    });
-    for column in columns.iter().filter(|column| column.primary_key) {
-        if selected == Some(column.name.as_str()) {
-            continue;
-        }
-        terms.push(format!(
-            "{} ASC",
-            tablepro_core::sql_dialect::quote_ident(driver_id, &column.name)
-        ));
-    }
-    (!terms.is_empty()).then(|| terms.join(", "))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{resolved_order_by, row_count_from_result};
-    use tablepro_core::{ColumnInfo, QueryResult, Value};
+    use super::row_count_from_result;
+    use tablepro_core::{QueryResult, Value};
 
     fn scalar_result(row: Option<Value>) -> QueryResult {
         QueryResult {
@@ -608,49 +518,5 @@ mod tests {
             row_count_from_result(&scalar_result(Some(Value::Text("x".into())))),
             None
         );
-    }
-
-    fn column(name: &str, primary_key: bool) -> ColumnInfo {
-        ColumnInfo {
-            name: name.into(),
-            data_type: "text".into(),
-            nullable: false,
-            primary_key,
-            is_auto_increment: false,
-            default_value: None,
-            is_generated: false,
-        }
-    }
-
-    #[test]
-    fn default_order_uses_every_primary_key_column() {
-        let columns = vec![column("tenant", true), column("name", false), column("id", true)];
-        assert_eq!(
-            resolved_order_by("postgres", &columns, None).as_deref(),
-            Some("\"tenant\" ASC, \"id\" ASC")
-        );
-    }
-
-    #[test]
-    fn explicit_sort_appends_primary_key_tie_breakers() {
-        let columns = vec![column("tenant", true), column("name", false), column("id", true)];
-        assert_eq!(
-            resolved_order_by("postgres", &columns, Some((1, false))).as_deref(),
-            Some("\"name\" DESC, \"tenant\" ASC, \"id\" ASC")
-        );
-    }
-
-    #[test]
-    fn sorted_primary_key_is_not_duplicated() {
-        let columns = vec![column("tenant", true), column("id", true)];
-        assert_eq!(
-            resolved_order_by("postgres", &columns, Some((0, false))).as_deref(),
-            Some("\"tenant\" DESC, \"id\" ASC")
-        );
-    }
-
-    #[test]
-    fn table_without_pk_or_sort_has_no_promised_order() {
-        assert_eq!(resolved_order_by("postgres", &[column("name", false)], None), None);
     }
 }
