@@ -749,7 +749,24 @@ def favorite_round_trips_through_open_quickly(_database, base):
     press_x11_key("p", modifiers=["Control_L"])
     wait_for_node(name="smoke favorite")
     press_x11_text("smoke")
+    # SearchEntry debounces filtering and rebuilds the rows. The favorite is
+    # already present before filtering, so waiting for its name alone can
+    # activate a detached accessibility node. Wait for the actual result set,
+    # then perform exactly one action against its current row.
+    deadline = time.monotonic() + WAIT_SECONDS
+    while time.monotonic() < deadline:
+        window = find_node(name="Open quickly", role=pyatspi.ROLE_FRAME)
+        names = [] if window is None else [
+            node_name(node) for node in descendants(window)
+            if node_role(node) == pyatspi.ROLE_LIST_ITEM
+        ]
+        if names == ["smoke favorite"]:
+            break
+        time.sleep(POLL_SECONDS)
+    else:
+        raise AssertionError(f"Open quickly did not finish filtering: {accessible_snapshot()}")
     invoke_named_action_within("smoke favorite", "Open smoke favorite")
+    wait_for_node(name="Open quickly", role=pyatspi.ROLE_FRAME, present=False)
     wait_for_favorites(
         base,
         lambda favorites: any(item.get("last_used_at") for item in favorites),
