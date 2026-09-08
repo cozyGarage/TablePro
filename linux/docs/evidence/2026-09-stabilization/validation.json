@@ -1,7 +1,7 @@
 {
   "base_commit": "7d82881323af083dc6e045971f31d505fdf03164",
   "branch": "linux",
-  "state": "uncommitted stabilization working tree; no hosted verification of these changes",
+  "state": "Committed and pushed to origin/linux; source hashes match the locally validated implementation. Hosted CI remains pending.",
   "finalized": "2026-09-08",
   "command_working_directory": "linux",
   "verification_basis": "Saved completion output; previous process handles expired before finalization. Log paths are local temporary artifacts, not portable evidence.",
@@ -78,6 +78,15 @@
     "Full Docker driver/TLS/SSH matrix on this tree: Docker access denied; sudo requires password",
     "Standalone cargo-audit: tool not installed",
     "RC soak and installed Arch upgrade/rollback: not performed",
-    "Hosted CI on a committed candidate: not performed"
-  ]
+    "Hosted CI on committed candidate: triggered, results pending; follow latest linux branch runs after the documentation follow-up"
+  ],
+  "candidate_commit": "751a458293eca384e8747d7661db1fe9f713401b",
+  "post_push_review": {
+    "date": "2026-09-08",
+    "result": "No new blocking defects found in changed browse planning, session identity, metadata forwarding, PostgreSQL streaming, DuckDB coverage and GTK harness paths. This review is not independent approval.",
+    "hosted_status_at_review": "Build Linux and Flatpak in progress; the documentation follow-up push can supersede these branch runs.",
+    "build_run": "https://github.com/cozyGarage/TablePro/actions/runs/34272620179",
+    "flatpak_run": "https://github.com/cozyGarage/TablePro/actions/runs/34272619924",
+    "latest_runs": "https://github.com/cozyGarage/TablePro/actions?query=branch%3Alinux"
+  }
 }

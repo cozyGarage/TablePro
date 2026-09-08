@@ -1,6 +1,6 @@
 # PostgreSQL browse measurements — September 2026
 
-Base: `7d8288132`. Candidate: September stabilization working tree. PostgreSQL 18.6 on an isolated localhost TLS connection, same machine and Rust 1.93.1 development build for both binaries. This is a driver benchmark, not a GTK responsiveness or release-build benchmark.
+Base: `7d8288132`. Candidate: `751a458293eca384e8747d7661db1fe9f713401b` (source hashes match the measured stabilization tree). PostgreSQL 18.6 on an isolated localhost TLS connection, same machine and Rust 1.93.1 development build for both binaries. This is a driver benchmark, not a GTK responsiveness or release-build benchmark.
 
 The baseline binary was rebuilt with the PostgreSQL driver source from `7d8288132`; the candidate uses streaming decoding and caches type names once per result. Both use the same committed benchmark example. No release-profile or server SQL rewrite was introduced.
 

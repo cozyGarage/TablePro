@@ -14,10 +14,10 @@ The application is a Linux-only native Rust and GTK product. Database drivers ar
 ## Current baseline
 
 - Development: `linux`, tracking `origin/linux` in `cozyGarage/TablePro`.
-- Reviewed base: `7d82881323af083dc6e045971f31d505fdf03164`; the stabilization changes are an uncommitted working tree until the maintainer creates a commit.
+- Reviewed base: `7d82881323af083dc6e045971f31d505fdf03164`; stabilization candidate `751a458293eca384e8747d7661db1fe9f713401b` is committed and pushed to `origin/linux`.
 - Rust 1.93.1; 19 workspace members. Static drivers, native GTK, no entitlement gates.
 - PostgreSQL has the broadest real-service evidence. Driver `Stable` declarations are not production approval. Redis/MongoDB remain experimental, DuckDB optional, Oracle ODPI broken.
-- [Base-commit CI](https://github.com/cozyGarage/TablePro/actions/runs/34107322448) passed fast, GTK, driver, TLS and PostgreSQL release jobs. It does not verify the new working tree.
+- [Base-commit CI](https://github.com/cozyGarage/TablePro/actions/runs/34107322448) passed fast, GTK, driver, TLS and PostgreSQL release jobs. Candidate CI has started; a successful candidate result is still required.
 - Current commands, results, limitations and unresolved work are in [the stabilization audit](linux/docs/stabilization-2026-09.md). Historical test counts are not current coverage claims.
 - RC promotion still requires a frozen commit, 30 consecutive retry-free GTK attempts across at least six runs, and installed Arch install/upgrade/rollback on Wayland. No new soak credit is claimed here.
 

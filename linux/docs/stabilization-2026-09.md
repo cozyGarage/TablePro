@@ -1,6 +1,6 @@
 # September Linux stabilization audit
 
-Reviewed base: `7d82881323af083dc6e045971f31d505fdf03164`, branch `linux`, tracking `cozyGarage/TablePro:linux`. Review date: 2026-09-07; verification ledger finalized 2026-09-08. Changes described here are the stabilization working tree; they have not been committed, pushed or independently verified by hosted CI.
+Reviewed base: `7d82881323af083dc6e045971f31d505fdf03164`, branch `linux`, tracking `cozyGarage/TablePro:linux`. Review date: 2026-09-07; verification ledger finalized 2026-09-08. Stabilization candidate `751a458293eca384e8747d7661db1fe9f713401b` is committed and pushed to `origin/linux`. Local evidence below matches its implementation source hashes. Hosted candidate validation is pending.
 
 [PLAN.md](../../PLAN.md) owns the ten-day sprint and subsequent phase order. [Upstream adoption](upstream-adoption.md) owns the whole-app comparison through pinned macOS 0.72. [Performance measurements](performance-2026-09.md) contain the reproducible raw samples.
 
@@ -45,7 +45,7 @@ Toolchain: Rust/Cargo 1.93.1; GTK 4.22.4, libadwaita 1.9.3, GtkSourceView 5.20.0
 | Full Docker/TLS/SSH matrix on this working tree | Not rerun: Docker socket permission denied even outside sandbox; sudo requires a password. The local PostgreSQL alternative covers SQL/TLS-to-localhost behavior, not the bastion/Toxiproxy/other-engine fixtures |
 | RC soak / installed Arch package | Not performed; no candidate tag, publication or 30-attempt soak credit |
 
-The [validation manifest](evidence/2026-09-stabilization/validation.json) records commands, saved-log hashes and source hashes for this uncommitted tree. The temporary PostgreSQL server was confirmed stopped during finalization. Prior process handles expired between sessions, so finalization verified saved completion output rather than recovering process exit codes.
+The [validation manifest](evidence/2026-09-stabilization/validation.json) records commands, saved-log hashes and source hashes for the locally tested tree, now mapped to the committed candidate. The temporary PostgreSQL server was confirmed stopped during finalization. Prior process handles expired between sessions, so finalization verified saved completion output rather than recovering process exit codes.
 
 The [generated ignored-test ledger](ignored-tests.md) lists exact tests and their activation requirements. Subprocess helpers are counted separately. Test counts are evidence inventory, not proof of defect absence.
 
@@ -65,7 +65,7 @@ The local server also used `tests/fixtures/postgres-release/seed/01-seed.sql` an
 
 | Item | Severity / reproduction | Impact | Next action and acceptance |
 |---|---|---|---|
-| Full external-driver validation | Release gate: run the Docker/TLS/SSH scripts on this tree | Local PostgreSQL subset cannot prove other drivers or tunnel recovery | Commit candidate, run existing hosted jobs and record exact resolved SHA; all relevant jobs green |
+| Full external-driver validation | Release gate: run the Docker/TLS/SSH scripts on this tree | Local PostgreSQL subset cannot prove other drivers or tunnel recovery | Candidate pushed; inspect existing hosted jobs and record exact resolved SHA with all relevant jobs green |
 | Optional Oracle ODPI build | Known unsupported feature: build with odpi | Not a shippable driver | Keep unsupported; repair in separate driver project with a real fixture before advertising |
 | Large-result latency tradeoff | P2: capped benchmark in performance report | Lower RSS, approximately 12% slower development-build median | Profile release binaries and evaluate decode batching; preserve row cap, cancellation, values and memory bound |
 | PostgreSQL server-side row cap | P2: query beyond MAX_QUERY_ROWS | Client still has to stop receiving/discard remaining rows; memory optimization does not impose a server LIMIT | Design a driver/protocol solution with server-activity and pool-reuse tests; never blindly append LIMIT to arbitrary SQL |
@@ -77,3 +77,9 @@ The local server also used `tests/fixtures/postgres-release/seed/01-seed.sql` an
 ## Sprint disposition
 
 S1–S3 and S5–S6 have concrete code, regressions and documentation. S4 delivers a measured memory optimization with its latency limitation. S7 supplies runnable local evidence; externally blocked release gates remain explicit follow-up work. This sprint adds no feature-parity promise, runtime plugins, new engines, entitlements or Apple code merge.
+
+## Post-push review — 2026-09-08
+
+Reviewed the committed browse planner, filter grouping and binding order, guarded session identity, asynchronous metadata delivery, streaming decoder, optional-driver workflow and GTK isolation changes. No new blocking defects were found. This is a continuation of the implementation review, not independent approval; the unresolved items above remain open. All implementation hashes in the validation manifest match the committed files, and `git diff --check` passed.
+
+The changes were split into focused daemon, browse/ownership, PostgreSQL memory, DuckDB, GTK-test and documentation commits. [Build Linux](https://github.com/cozyGarage/TablePro/actions/runs/34272620179) and [Flatpak](https://github.com/cozyGarage/TablePro/actions/runs/34272619924) started for the candidate and were in progress when this review was recorded. The documentation follow-up push may supersede those runs under branch concurrency rules; use the [latest linux branch runs](https://github.com/cozyGarage/TablePro/actions?query=branch%3Alinux) for final results. No candidate CI success or release approval is claimed.
