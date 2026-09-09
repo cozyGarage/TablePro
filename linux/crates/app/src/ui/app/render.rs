@@ -25,7 +25,14 @@ fn value_to_json(v: &Value) -> serde_json::Value {
         Value::Int(i) => J::from(*i),
         Value::Float(f) => J::from(*f),
         Value::Text(s) => J::String(s.clone()),
-        Value::Bytes(b) => J::String(format!("<{} bytes>", b.len())),
+        Value::Bytes(b) => {
+            use std::fmt::Write;
+            let mut encoded = String::from("\\x");
+            for byte in b {
+                let _ = write!(encoded, "{byte:02x}");
+            }
+            J::String(encoded)
+        }
         Value::Date(d) => J::String(d.to_string()),
         Value::Time(t) => J::String(t.to_string()),
         Value::DateTime(dt) => J::String(dt.to_string()),
@@ -40,5 +47,20 @@ pub(super) fn qualified_label(schema: Option<&str>, table: &str) -> String {
     match schema {
         Some(s) => format!("{s}.{table}"),
         None => table.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_export_preserves_binary_contents_including_empty_values() {
+        assert_eq!(
+            value_to_json(&Value::Bytes(vec![0, 0xff, 0x41])),
+            serde_json::json!("\\x00ff41")
+        );
+        assert_eq!(value_to_json(&Value::Bytes(vec![])), serde_json::json!("\\x"));
+        assert_eq!(value_to_json(&Value::Null), serde_json::Value::Null);
     }
 }

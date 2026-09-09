@@ -414,9 +414,24 @@ fn clamp(state: &mut WorkspaceState) {
 }
 
 fn clamp_connection(conn: &mut ConnectionWorkspaceState) {
-    // Drop forward-compat Unknown variants up front so they never
-    // contribute to the tab count or the active_idx selection.
-    conn.tabs.retain(|t| !matches!(t, WorkspaceTabRecord::Unknown));
+    // Preserve the identity of the selected tab when forward-compatible
+    // records are removed. A removed selection falls back to the first tab.
+    let selected = conn.active_idx as usize;
+    let mut original_index = 0;
+    let mut retained_index = 0;
+    let mut active_index = None;
+    conn.tabs.retain(|tab| {
+        let keep = !matches!(tab, WorkspaceTabRecord::Unknown);
+        if keep {
+            if original_index == selected {
+                active_index = Some(retained_index);
+            }
+            retained_index += 1;
+        }
+        original_index += 1;
+        keep
+    });
+    conn.active_idx = active_index.unwrap_or(0);
     if conn.tabs.len() > MAX_TABS_PER_CONNECTION {
         conn.tabs.truncate(MAX_TABS_PER_CONNECTION);
     }
@@ -514,6 +529,28 @@ fn floor_char_boundary(s: &str, idx: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropping_unknown_tabs_preserves_the_selected_editor() {
+        let mut state = ConnectionWorkspaceState {
+            tabs: vec![WorkspaceTabRecord::Unknown, editor("selected"), editor("other")],
+            active_idx: 1,
+        };
+        clamp_connection(&mut state);
+        assert!(
+            matches!(&state.tabs[state.active_idx as usize], WorkspaceTabRecord::Editor { query } if query == "selected")
+        );
+    }
+
+    #[test]
+    fn a_removed_active_tab_falls_back_to_the_first_retained_tab() {
+        let mut state = ConnectionWorkspaceState {
+            tabs: vec![editor("first"), WorkspaceTabRecord::Unknown, editor("last")],
+            active_idx: 1,
+        };
+        clamp_connection(&mut state);
+        assert_eq!(state.active_idx, 0);
+    }
 
     fn browse(table: &str) -> WorkspaceTabRecord {
         WorkspaceTabRecord::Browse {

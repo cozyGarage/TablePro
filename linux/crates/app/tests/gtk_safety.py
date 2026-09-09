@@ -572,7 +572,7 @@ def write_fixture(base, audit_available=True, environment="prod"):
     return database, environment
 
 
-def start_application(binary, environment):
+def start_application(binary, environment, restored=False):
     process = subprocess.Popen(
         [str(binary)],
         env=environment,
@@ -581,7 +581,10 @@ def start_application(binary, environment):
         text=True,
     )
     try:
-        wait_for_node(name=CONNECTION_NAME)
+        if restored:
+            wait_for_frame_containing(" — TablePro")
+        else:
+            wait_for_node(name=CONNECTION_NAME)
         return process
     except Exception:
         process.terminate()
@@ -591,7 +594,7 @@ def start_application(binary, environment):
             process.kill()
             process.wait(timeout=5)
         stderr = process.stderr.read() if process.stderr is not None else ""
-        raise AssertionError(f"application did not expose the welcome screen: {stderr}")
+        raise AssertionError(f"application did not expose its expected window: {stderr}")
 
 
 def stop_application(process):
@@ -632,7 +635,19 @@ def run_scenario(binary, scenario):
         )
         process = start_application(binary, environment)
         open_editor()
-        scenario(database, base)
+        def restart():
+            nonlocal process, stderr
+            invoke_accessible_action("win.quit")
+            process.wait(timeout=WAIT_SECONDS)
+            assert process.returncode == 0, "graceful quit failed"
+            stderr += stop_application(process)
+            wait_for_frame_containing(" — TablePro", present=False)
+            process = start_application(binary, environment, restored=True)
+
+        if getattr(scenario, "needs_restart", False):
+            scenario(database, base, restart)
+        else:
+            scenario(database, base)
     except Exception as error:
         failure = error
     finally:
@@ -649,7 +664,7 @@ def run_scenario(binary, scenario):
                     check=False,
                 )
         if process is not None:
-            stderr = stop_application(process)
+            stderr += stop_application(process)
         if artifact_dir is not None:
             (artifact_dir / f"{scenario.__name__}-stderr.txt").write_text(stderr, encoding="utf-8")
         shutil.rmtree(base, ignore_errors=True)
@@ -903,6 +918,72 @@ def current_page_csv_export_is_pk_ordered(database, base):
 current_page_csv_export_is_pk_ordered.environment = "local"
 
 
+def current_page_json_export_preserves_values(database, base):
+    notes = {1: 'a,"b"\n\\', 2: "Grüße 東京", 3: "", 4: None}
+    blobs = {1: b"\x00\xffA", 2: b"", 3: b"hello"}
+    with sqlite3.connect(database) as connection:
+        connection.execute("ALTER TABLE safety_items ADD COLUMN payload BLOB")
+        connection.executemany(
+            "INSERT INTO safety_items(id, note, payload) VALUES (?, ?, ?)",
+            ((i, notes.get(i), blobs.get(i)) for i in range(150, 0, -1)),
+        )
+    invoke_named_action_within("safety_items", "Open safety_items")
+    wait_for_node(name="Rows 1 – 100 of 150")
+    invoke_accessible_action("win.export-json")
+    export = base / "home" / "current-page.json"
+    set_visible_editable_within("Export current page as JSON", FILE_CHOOSER_ROLES, str(export))
+    invoke(wait_for_node(name="Save", role=pyatspi.ROLE_PUSH_BUTTON))
+    deadline = time.monotonic() + WAIT_SECONDS
+    while time.monotonic() < deadline and not export.exists():
+        time.sleep(POLL_SECONDS)
+    assert export.exists(), "JSON export was not created"
+    rows = json.loads(export.read_text(encoding="utf-8"))
+    assert rows == [
+        {"id": i, "note": notes.get(i), "payload": "\\x" + blobs[i].hex() if i in blobs else None}
+        for i in range(1, 101)
+    ], f"JSON export lost values or page order: {rows[:5]}"
+
+
+current_page_json_export_preserves_values.environment = "local"
+
+
+def restart_restores_active_editor_and_connection(database, base, restart):
+    database_b = base / "safety-b.sqlite"
+    with sqlite3.connect(database_b) as connection:
+        connection.executemany("INSERT INTO safety_items(id) VALUES (?)", [(1,), (2,), (3,)])
+    open_saved_connection(CONNECTION_B_NAME)
+    wait_for_frame_containing(f"{CONNECTION_B_NAME} — TablePro")
+    invoke_named_action_within("safety_items", "Open safety_items")
+    wait_for_node(name="Rows 1 – 3 of 3")
+    invoke_accessible_action("win.open-editor")
+    wait_for_node(name="Run", role=pyatspi.ROLE_PUSH_BUTTON)
+    query = "INSERT INTO safety_items(id, note) VALUES (901, 'restored editor')"
+    set_editor_text(query)
+    # Close immediately: the normal close path must flush pending workspace saves.
+    restart()
+    window = wait_for_frame_containing(f"{CONNECTION_B_NAME} — TablePro")
+    wait_within(window, name="Run", role=pyatspi.ROLE_PUSH_BUTTON)
+    texts = []
+    for node in descendants(window):
+        if node_role(node) == pyatspi.ROLE_TEXT:
+            try:
+                texts.append(node.queryText().getText(0, -1))
+            except Exception:
+                pass
+    assert query in texts, f"active editor text was not restored: {texts}"
+    assert database_ids(database_b) == [1, 2, 3], "restoration executed the saved query"
+    invoke(wait_within(window, name="Run", role=pyatspi.ROLE_PUSH_BUTTON))
+    wait_for_database_count(database_b, 4)
+    assert database_ids(database_b) == [1, 2, 3, 901]
+    assert database_ids(database) == [], "restored editor wrote to the other connection"
+    invoke_named_action_within("safety_items", "Open safety_items")
+    wait_for_node_containing("Rows 1 – 3")
+
+
+restart_restores_active_editor_and_connection.environment = "local"
+restart_restores_active_editor_and_connection.needs_restart = True
+
+
 def pending_edits_gate_a_connection_switch(database, base):
     invoke_named_action_within("safety_items", "Open safety_items")
     wait_for_node(name="No rows on this page")
@@ -1068,6 +1149,8 @@ def main():
         failed_switch_preserves_the_old_workspace,
         running_query_is_cancelled_before_switch,
         current_page_csv_export_is_pk_ordered,
+        current_page_json_export_preserves_values,
+        restart_restores_active_editor_and_connection,
         pending_edits_gate_a_connection_switch,
         a_browse_tab_reads_the_new_connection_after_a_switch,
         two_windows_hold_two_connections,
