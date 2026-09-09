@@ -147,8 +147,26 @@ impl Connection for SessionConnection {
         self.inner.fetch_indexes(schema, table).await
     }
 
+    async fn fetch_indexes_controlled(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        control: &OperationControl,
+    ) -> Result<Vec<IndexInfo>, DriverError> {
+        self.inner.fetch_indexes_controlled(schema, table, control).await
+    }
+
     async fn fetch_foreign_keys(&self, schema: Option<&str>, table: &str) -> Result<Vec<ForeignKeyInfo>, DriverError> {
         self.inner.fetch_foreign_keys(schema, table).await
+    }
+
+    async fn fetch_foreign_keys_controlled(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        control: &OperationControl,
+    ) -> Result<Vec<ForeignKeyInfo>, DriverError> {
+        self.inner.fetch_foreign_keys_controlled(schema, table, control).await
     }
 
     async fn begin(&self) -> Result<Box<dyn Transaction>, DriverError> {
