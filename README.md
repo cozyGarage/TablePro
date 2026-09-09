@@ -24,11 +24,10 @@ Database support is provided by static Rust crates compiled into the app:
 | Redis | Experimental |
 | MongoDB | Experimental |
 | DuckDB | Optional build feature |
-| Oracle Database | Not shipped; optional ODPI build is broken |
 
 See [`linux/docs/driver-maturity.md`](linux/docs/driver-maturity.md) for current limits.
 
-See the [September stabilization audit](linux/docs/stabilization-2026-09.md) for current test results and the [macOS 0.72 gap review](linux/docs/upstream-adoption.md) for follow-up features.
+See the [bug and consistency audit](linux/docs/bug-consistency-2026-09.md) for current test results and the [macOS 0.72 gap review](linux/docs/upstream-adoption.md) for follow-up features.
 
 ## Architecture
 

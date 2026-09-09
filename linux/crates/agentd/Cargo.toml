@@ -17,7 +17,6 @@ path = "src/main.rs"
 [features]
 default = []
 duckdb = ["dep:tablepro-driver-duckdb"]
-odpi = ["tablepro-driver-oracle/odpi"]
 
 [dependencies]
 tablepro-core = { path = "../core" }
@@ -31,7 +30,6 @@ tablepro-driver-duckdb = { path = "../drivers/duckdb", optional = true }
 tablepro-driver-mongodb = { path = "../drivers/mongodb" }
 tablepro-driver-mssql = { path = "../drivers/mssql" }
 tablepro-driver-mysql = { path = "../drivers/mysql" }
-tablepro-driver-oracle = { path = "../drivers/oracle" }
 tablepro-driver-postgres = { path = "../drivers/postgres" }
 tablepro-driver-redis = { path = "../drivers/redis" }
 tablepro-driver-sqlite = { path = "../drivers/sqlite" }

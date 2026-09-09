@@ -42,7 +42,7 @@ cargo test --locked -p tablepro-driver-duckdb
 cargo build --locked -p tablepro-app --features duckdb
 ```
 
-The `duckdb` job in `build-linux.yml` runs both commands. JSON and Parquet extensions are bundled; tests disable extension installation/loading when checking their availability. Flat-file tests cover CSV/TSV/JSON/Parquet, quoted filenames and malformed/missing files. Oracle `odpi` remains broken and is not a supported build or release target.
+The `duckdb` job in `build-linux.yml` runs both commands. JSON and Parquet extensions are bundled; tests disable extension installation/loading when checking their availability. Flat-file tests cover CSV/TSV/JSON/Parquet, quoted filenames and malformed/missing files.
 
 The [ignored-test inventory](ignored-tests.md) names every declaration, prerequisite and activation command, distinguishing subprocess helpers from external-service tests. Regenerate after adding/removing ignored tests:
 

@@ -26,7 +26,6 @@ const SCHEMES: &[(&str, &str, u16)] = &[
     ("clickhouse", "clickhouse", 8123),
     ("mongodb", "mongodb", 27017),
     ("redis", "redis", 6379),
-    ("oracle", "oracle", 1521),
 ];
 
 /// A connection URL after parsing. The password never reaches

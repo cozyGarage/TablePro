@@ -16,7 +16,6 @@ members = [
     "crates/drivers/mongodb",
     "crates/drivers/mssql",
     "crates/drivers/mysql",
-    "crates/drivers/oracle",
     "crates/drivers/postgres",
     "crates/drivers/redis",
     "crates/drivers/sqlite",

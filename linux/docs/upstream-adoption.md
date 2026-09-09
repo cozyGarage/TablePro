@@ -1,6 +1,6 @@
 # Upstream adoption through macOS 0.72
 
-Reviewed: 2026-09-07. Linux baseline: `7d8288132` plus the stabilization changes described in [the sprint audit](stabilization-2026-09.md).
+Reviewed: 2026-09-07. Linux baseline: `7d8288132` plus the stabilization changes described in the [historical sprint audit](stabilization-2026-09.md).
 
 Reference is pinned to [v0.72.0](https://github.com/TableProApp/TablePro/releases/tag/v0.72.0), commit `6e6396c590bc1cc37f5e71e6d98d563dfcf8a2d6`. The [pinned README](https://github.com/TableProApp/TablePro/blob/6e6396c590bc1cc37f5e71e6d98d563dfcf8a2d6/README.md), release notes, and the prior 0.62–0.71 review form the whole-product inventory. This is a source/behavior review, not a macOS runtime test. Later `main` changes are excluded. PLAN.md owns sequencing; this file owns parity decisions.
 
@@ -43,7 +43,7 @@ Reimplement relevant behavior in Rust/GTK. Never merge Apple source trees. All d
 | Redis Sentinel/Cluster | Missing; current driver experimental | Keep separate from default-driver stabilization; topology and failover fixtures required |
 | MongoDB depth | Partial: [driver](../crates/drivers/mongodb/src/lib.rs) | Collection drop fixed; nested filters, binary UUID and MQL authoring remain separate driver slices |
 | Entra authentication and Kerberos | Partial: Kerberos configuration exists; Entra missing | SQL Server auth fixtures before maturity upgrades; real KDC/SPN negotiation remains unverified |
-| Additional engines | Missing or unverified beyond current static crates | Redshift/Cockroach compatibility must be tested, not inferred from PostgreSQL. Trino/Snowflake/BigQuery and other upstream engines wait for existing-driver release work. Oracle ODPI remains broken |
+| Additional engines | Missing or unverified beyond current static crates | Redshift/Cockroach compatibility must be tested, not inferred from PostgreSQL. Trino/Snowflake/BigQuery and other upstream engines wait for existing-driver release work. |
 | Desktop automation | Partial: MCP and connection URL import | OS URL registration is distinct from importing a URL; specify Linux desktop behavior before adding it |
 | AppleScript, iCloud, Apple UI/iOS | Intentionally excluded | Use Linux desktop integration; no Apple service imitation |
 | Runtime plugins, built-in AI, entitlements | Intentionally excluded | Static driver crates, external governed agents, no license/account gates |

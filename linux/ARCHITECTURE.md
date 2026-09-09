@@ -23,7 +23,7 @@ linux/
 └── scripts/                 local checks, integration tests, and package helpers
 ```
 
-The workspace currently has these driver crates: PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse, Redis, MongoDB, DuckDB, and Oracle.
+The workspace currently has these driver crates: PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse, Redis, MongoDB, and DuckDB.
 
 ## Dependency direction
 

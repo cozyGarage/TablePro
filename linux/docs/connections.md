@@ -1,6 +1,6 @@
 # Connection handling
 
-Last audited: 2026-09-07 (transport table reconciled; historical findings retained)
+Historical connection audit: 2026-09-07. The current source and verification record is the [bug and consistency audit](bug-consistency-2026-09.md).
 
 TablePro is a connection engine before it is a grid. This document records what
 the connection layer actually does today, what is proven, what is known to be
@@ -56,12 +56,11 @@ Two ideas carry most of the security weight:
 | Redis | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | yes | no | 5 s |
 | MongoDB | yes | no | n/a | Disabled / encrypt / verify (CA and Full identical) | yes | no | 5 s |
 | DuckDB | n/a | n/a (local file) | n/a | n/a | n/a | n/a | n/a |
-| Oracle | yes | no | n/a | not applied | no | no | 15 s (does not compile, see below) |
 
 "Pool acquire only" means the driver bounds how long it waits for a pooled
 connection but does not bound the initial TCP or TLS handshake.
 
-The [September audit](stabilization-2026-09.md) distinguishes base-commit hosted evidence from newer local changes. The driver TLS fixture also covers MySQL, ClickHouse, Redis and MongoDB; it is not a full SSH/reconnect fixture.
+The [bug and consistency audit](bug-consistency-2026-09.md) records the current source baseline; the [September audit](stabilization-2026-09.md) distinguishes historical base-commit hosted evidence from newer local changes. The driver TLS fixture also covers MySQL, ClickHouse, Redis and MongoDB; it is not a full SSH/reconnect fixture.
 
 ## What is release-verified
 
@@ -140,11 +139,11 @@ real SQL Server certificate negotiation remains unverified. On ClickHouse, Mongo
 mode, so Verify Ca verifies the hostname as well; that is stricter than
 requested, never weaker, and is documented in each driver.
 
-### 6. No connect timeout on the SSH path or on Oracle — fixed
+### 6. No connect timeout on the SSH path — fixed
 
 **Closed on 2026-08-19.** The SSH handshake is bounded at ten seconds and
 authentication at twenty, each failing with an error that names the host and
-port. Oracle is bounded at fifteen seconds, MongoDB and Redis at five. The SSH
+port. MongoDB and Redis are bounded at five seconds. The SSH
 bound has a sandbox regression test that connects to a listener which completes
 the TCP handshake and then never sends a banner; a refused port returns
 instantly and proves nothing.
@@ -164,24 +163,7 @@ the GUI, the agent daemon, and each test binary that links more than one driver.
 A driver that names its own provider, as ClickHouse now does, is unaffected
 either way.
 
-### 8. The Oracle driver does not compile under its own feature
-
-`cargo check -p tablepro-driver-oracle --features odpi` fails with three errors
-against `oracle` 0.6.3: `Statement::row_count` now returns a `Result` and is
-cast directly to `u64` in two places, and `SqlValue` no longer implements
-`FromSql`, which the row reader depends on. The driver is registered only when
-the feature is on, so nothing catches this: the default build compiles a stub
-that returns `Unsupported`. Every claim that Oracle works "with Instant Client"
-is therefore untested and currently false. The value-mapping error cannot be
-fixed blind; it needs a real Oracle to verify against. A host
-that accepts a connection and then goes silent — a dropped packet filter, a
-half-open NAT entry, a hung bastion — leaves the attempt hanging on whatever the
-underlying library defaults to. The GUI keeps this off the main thread, so the
-window stays responsive, but the connection attempt itself may never resolve.
-The existing regression tests use a refused port, which returns immediately and
-does not exercise this path.
-
-### 7. No local Unix socket connections — fixed
+### 8. No local Unix socket connections — fixed
 
 **Closed on 2026-08-20 for PostgreSQL.** Saved records carry an optional socket
 directory without a schema-version bump. The GTK form exposes Network and Unix
@@ -191,7 +173,7 @@ relative paths, non-socket targets, TLS, SSH, and unsupported drivers. GUI and
 agentd both assemble the same `ConnectOptions`; a disposable real PostgreSQL
 socket fixture covers query, write, cancellation, close, and reconnect.
 
-### 8. The agent daemon and the GUI recover differently
+### 9. The agent daemon and the GUI recover differently
 
 The GUI runs a monitor that pings every 30 seconds and reconnects with backoff
 from 5 to 60 seconds. The agent daemon's session cache validates with a ping on
@@ -199,7 +181,7 @@ use and reconnects lazily, with no monitor and no backoff. A tool call that
 arrives during an outage retries as fast as the caller retries, bounded only by
 the MCP rate limiter.
 
-### 9. An unknown SSH host key is trusted without asking
+### 10. An unknown SSH host key is trusted without asking
 
 Not fixed. Recorded as a deliberate, documented posture rather than an
 oversight, because closing it needs a user-facing decision.
@@ -261,8 +243,7 @@ Ordered by how much risk the gap carries.
 | Area | Current coverage |
 |---|---|
 | TLS on SQL Server | none — the container tests connect in plaintext |
-| TLS on Oracle | none |
-| Redis, MongoDB, DuckDB, Oracle | no integration test file at all |
+| Redis, MongoDB, DuckDB | no integration test file at all |
 | SSH jump chains of more than one hop | none — the fixture has a single bastion |
 | SSH password and passphrase authentication | none — every test uses an unencrypted private key |
 | Accepting an unknown SSH host key | the learning and refusal paths are unit-tested; there is no confirmation step to test |
@@ -270,8 +251,7 @@ Ordered by how much risk the gap carries.
 | Custom certificate authority from a saved connection | assembly and driver fixture coverage; installed GTK selection remains untested |
 | Client certificates and pinned fingerprints | not implemented |
 | Reconnect on any driver but PostgreSQL | none |
-| The Oracle driver under its `odpi` feature | does not compile |
-| Cancellation on Redis, MongoDB, DuckDB, Oracle | none; PostgreSQL, MySQL, ClickHouse and SQLite are verified against a real engine, and SQL Server is verified to retire its connection instead |
+| Cancellation on Redis, MongoDB, DuckDB | none; PostgreSQL, MySQL, ClickHouse and SQLite are verified against a real engine, and SQL Server is verified to retire its connection instead |
 | Concurrent connections to the same host over one tunnel | none |
 | IPv6 literals on any driver | none |
 
@@ -283,8 +263,8 @@ that would have caught both.
 1. ~~**Root certificate on saved connections.**~~ Done on 2026-08-19.
 2. ~~**MongoDB TLS.**~~ Done on 2026-08-19.
 3. ~~**Redis TLS.**~~ Done on 2026-08-19.
-4. **Connect timeouts.** Bound the SSH handshake and Oracle; MongoDB and Redis
-   are now bounded at five seconds. Add a fixture case that black-holes packets
+4. **Connect timeouts.** The SSH handshake, MongoDB, and Redis are bounded;
+   add a fixture case that black-holes packets
    rather than refusing them.
 5. **Remove or implement the dead TLS fields.** `client_cert`, `client_key`, and
    `pinned_fingerprint` should either work or not exist.

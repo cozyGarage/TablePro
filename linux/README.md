@@ -6,7 +6,7 @@ TablePro is a Linux-only database client built with Rust, GTK4, libadwaita, and 
 
 ## Status
 
-The GTK application supports PostgreSQL, MySQL, SQLite, SQL Server, and ClickHouse. Redis and MongoDB are experimental, and DuckDB is an optional build feature. Oracle is not shipped: its optional `odpi` implementation does not currently compile or have a release fixture.
+The GTK application supports PostgreSQL, MySQL, SQLite, SQL Server, and ClickHouse. Redis and MongoDB are experimental, and DuckDB is an optional build feature.
 
 Current workflows include saved connections, SSH tunnels, browse and SQL tabs, structure editing, inline row changes, query history, policy checks, MCP access, and the headless `tablepro-agentd` process. See [ROADMAP.md](ROADMAP.md), [docs/connections.md](docs/connections.md), [docs/driver-maturity.md](docs/driver-maturity.md), and [docs/production-audit.md](docs/production-audit.md) for current limits.
 
@@ -123,7 +123,7 @@ The helper pins the tag's commit archive and verifies a real checksum. It does n
 | Production audit | [docs/production-audit.md](docs/production-audit.md) |
 | Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Rust toolchains on Arch and Omarchy | [docs/toolchains.md](docs/toolchains.md) |
-| September stabilization evidence | [docs/stabilization-2026-09.md](docs/stabilization-2026-09.md) |
+| Historical September stabilization evidence | [docs/stabilization-2026-09.md](docs/stabilization-2026-09.md) |
 | Ignored-test inventory | [docs/ignored-tests.md](docs/ignored-tests.md) |
 | Whole-app macOS 0.72 gaps | [docs/upstream-adoption.md](docs/upstream-adoption.md) |
 | Optional upstream reference review | [docs/upstream-sync.md](docs/upstream-sync.md) |

@@ -16,7 +16,7 @@ The application is a Linux-only native Rust and GTK product. Database drivers ar
 - Development starts from `linux` at `89979e51a3d70b52c2a4082d0fa44ac72528c8ea`. Verified implementation after this pass: `f8a0ba7055dfe609308aa5326fb10c82982c70b9`.
 - That commit passed hosted default, driver, TLS, PostgreSQL, GTK, and Flatpak checks; its optional DuckDB job failed at Git ownership validation before compilation.
 - The active findings and validation ledger are in [the bug and consistency audit](linux/docs/bug-consistency-2026-09.md). The [previous stabilization audit](linux/docs/stabilization-2026-09.md) is historical evidence for its recorded source tree.
-- PostgreSQL has the broadest fixture evidence. Redis/MongoDB remain experimental, DuckDB optional, and Oracle ODPI unsupported.
+- PostgreSQL has the broadest fixture evidence. Redis/MongoDB remain experimental and DuckDB is optional.
 - Package promotion remains separate: a frozen SHA, 30 consecutive retry-free GTK attempts across six runs, and installed Arch/Wayland install, upgrade, and rollback evidence are still required.
 
 ## Active work: bugs and behavioral consistency only
@@ -367,7 +367,7 @@ Track capabilities as planned, implemented, integrated, release-verified, deferr
 - SQL dump export and true large-result streaming
 - Connection URL import, groups, tags, and favorites
 - Reusable SSH profiles and custom CA/client certificates
-- Connection-layer risks tracked in `linux/docs/connections.md`: SQL Server verification semantics, real Kerberos negotiation, client certificates, IPv6 URL construction, multi-hop/password SSH fixtures, secondary-driver cancellation/reconnect, and the broken optional Oracle build
+- Connection-layer risks tracked in `linux/docs/connections.md`: SQL Server verification semantics, real Kerberos negotiation, client certificates, IPv6 URL construction, multi-hop/password SSH fixtures, and secondary-driver cancellation/reconnect
 
 ### Priority B: platform transports and data systems
 

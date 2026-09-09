@@ -33,7 +33,6 @@ CRATES=(
   tablepro-driver-clickhouse
   tablepro-driver-redis
   tablepro-driver-mongodb
-  tablepro-driver-oracle
   tablepro-release-tests
   tablepro-driver-tls-tests
 )

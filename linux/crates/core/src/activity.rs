@@ -191,7 +191,6 @@ mod tests {
             "duckdb",
             "mongodb",
             "redis",
-            "oracle",
         ] {
             for kind in ActivityQuery::ALL {
                 assert_eq!(

@@ -9,7 +9,6 @@ Persona order used for the Stage 5 engines:
 2. Redis (Experimental)
 3. DuckDB (Experimental, `--features duckdb`)
 4. MongoDB (Experimental)
-5. Oracle (Experimental, `--features odpi`)
 
 For each engine:
 

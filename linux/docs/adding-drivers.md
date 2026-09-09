@@ -11,7 +11,7 @@ End to end, adding a driver is six steps:
 5. Register the driver in `app::main` and `agentd` (Cargo-feature-gate when connect needs native libs or a huge build)
 6. Add tests
 
-Each step is small. The whole task takes between half a day (PG-shaped engines) and a week (Oracle-shaped engines that need C FFI).
+Each step is small. The whole task takes between half a day for a PG-shaped engine and a week for an engine that needs native FFI.
 
 ## 1. Pick the Rust library
 
@@ -21,7 +21,6 @@ Each step is small. The whole task takes between half a day (PG-shaped engines) 
 | MySQL / MariaDB | `sqlx` with `mysql` feature | Same shape as PostgreSQL. |
 | SQLite | `sqlx` with `sqlite` feature | File-based, no network. |
 | MSSQL | `tiberius` | Pure Rust TDS. Watch governance. `praxiomlabs/rust-mssql-driver` is a credible alternative. |
-| Oracle | `oracle` (rust-oracle, kubo) | Wraps ODPI-C. Requires Oracle Instant Client on the build host. |
 | ClickHouse | official `clickhouse` crate | HTTP interface (8123). Dynamic results streamed via `FORMAT JSONCompactEachRowWithNamesAndTypes`. |
 | Redis | `fred` | Modern tokio rewrite of redis-rs. |
 | MongoDB | official `mongodb` | Mature, OpenTelemetry support. |

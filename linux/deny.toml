@@ -10,7 +10,7 @@ all-features = true
 
 [advisories]
 yanked = "warn"
-# paste (clickhouse/oracle) and similar are transitive only.
+# paste and similar are transitive only.
 unmaintained = "workspace"
 ignore = [
     # No fixed release. Pulled by russh (SSH) and sqlx-mysql (auth plugins).

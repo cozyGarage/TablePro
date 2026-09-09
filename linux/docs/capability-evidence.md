@@ -1,12 +1,12 @@
 # Capability evidence
 
-Last audited: 2026-09-07
+Historical capability audit: 2026-09-07. The current source and verification record is the [bug and consistency audit](bug-consistency-2026-09.md).
 
 `PLAN.md` lists ten capabilities as "Already useful on Linux". This file records
 what actually proves each one, so the list is a claim backed by evidence rather
 than an assertion. Status terms match [ROADMAP.md](../ROADMAP.md).
 
-Current results and limits are in [the stabilization audit](stabilization-2026-09.md); historical numeric counts below describe the earlier audit, not current totals.
+Current results and limits are in [the bug and consistency audit](bug-consistency-2026-09.md); historical numeric counts below describe the earlier audit, not current totals.
 
 Evidence tiers are the regression tiers in [testing.md](testing.md):
 `unit`, `sandbox`, `driver`, `release`, `gtk`.

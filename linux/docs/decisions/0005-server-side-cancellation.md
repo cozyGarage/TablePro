@@ -59,6 +59,6 @@ Gained:
 
 **Treating a dispatched cancellation as confirmation.** Rejected. It would clear the poison flag while a write might still be running, which is the failure mode the audit rules exist to prevent.
 
-**Leaving non-PostgreSQL drivers on the dropped-future default and hiding Stop.** Rejected for PostgreSQL, MySQL, ClickHouse and SQLite, where a real mechanism exists. Retained for SQL Server, Redis, MongoDB, DuckDB and Oracle, which declare the capability as false.
+**Leaving non-PostgreSQL drivers on the dropped-future default and hiding Stop.** Rejected for PostgreSQL, MySQL, ClickHouse and SQLite, where a real mechanism exists. Retained for SQL Server, Redis, MongoDB, and DuckDB, which declare the capability as false.
 
 **`KILL <spid>` for SQL Server.** Deferred, not rejected. It does stop the statement and roll it back, and the session's disappearance from `sys.dm_exec_sessions` would be real confirmation. It also ends the session, so Stop would cost the user their connection, and confirmation would come from the cancellation request rather than from the statement's own error - a weaker proof than the rule above allows. Both need deciding before it ships.

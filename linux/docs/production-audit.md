@@ -2,13 +2,13 @@
 
 Current bug-fix scope and validation: [bug and consistency audit](bug-consistency-2026-09.md). It supersedes older candidate-status statements below; package release approval remains separate.
 
-**Updated**: 2026-09-07
+**Historical audit update**: 2026-09-07. The current source and verification record is the [bug and consistency audit](bug-consistency-2026-09.md).
 
 **State**: useful for development and personal database work, not yet approved for trusted production writes or unattended agents
 
 This audit describes the Linux Rust and GTK repository. [ROADMAP.md](../ROADMAP.md) tracks broader product work. This document focuses on behavior that must be proven before a public release.
 
-Current stabilization changes and exact local/hosted evidence are recorded in [the September audit](stabilization-2026-09.md). That ledger supersedes historical counts below. A passing base SHA does not verify a changed working tree.
+Current corrections and exact local/hosted evidence are recorded in [the bug and consistency audit](bug-consistency-2026-09.md). The September audit is historical evidence for its recorded source tree. A passing base SHA does not verify a changed working tree.
 
 ## Verified foundations
 

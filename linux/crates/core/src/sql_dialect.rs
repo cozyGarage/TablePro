@@ -697,7 +697,7 @@ mod tests {
 
     #[test]
     fn explain_is_unsupported_for_engines_without_a_single_statement_plan() {
-        for driver_id in ["mssql", "oracle", "mongodb", "redis"] {
+        for driver_id in ["mssql", "mongodb", "redis"] {
             assert_eq!(explain_statement(driver_id, "SELECT 1"), None, "driver: {driver_id}");
         }
     }

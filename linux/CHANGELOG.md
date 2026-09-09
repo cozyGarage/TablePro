@@ -11,6 +11,7 @@
 - Daemon index and foreign-key metadata calls preserve the driver's controlled path
 - GTK regressions cover JSON page contents and process restart; local driver checks include Redis, and fixture scripts resolve their workspace and isolate keyring sessions
 - Optional DuckDB CI trusts only its checked-out workspace for Git ownership validation
+- Retired the unshippable Oracle/ODPI driver path, which had no working build or runtime support
 
 ### September stabilization
 
@@ -42,13 +43,13 @@
 - Current-page CSV export with explicit non-snapshot semantics, written so another program never reads a half-finished file
 - EXPLAIN plan dialog from the SQL editor and main menu
 - Server version cached on connect and shown in the window subtitle
-- ClickHouse, Redis, DuckDB, and MongoDB drivers; Oracle remains excluded until its optional implementation and fixture work
+- ClickHouse, Redis, DuckDB, and MongoDB drivers
 - Preferences → MCP token pairing (libsecret + loopback endpoint)
 - Multi-window via New Window, with each window connecting on its own
 - Saved connections can be put in a group, tagged, and starred as favourites, searched by any of those or by driver, and created by pasting a connection URL, whose password goes to the keyring rather than to disk
 - Flathub submission notes and screenshot capture guide
 - Rust file-size guardrail in preflight: soft 1200 / hard 1800 lines, with ratchet ceilings in `file-size-baselines.txt`
-- Driver maturity labels in the Connect dialog (Experimental subtitle for Redis, MongoDB, DuckDB, and Oracle)
+- Driver maturity labels in the Connect dialog (Experimental subtitle for Redis, MongoDB, and DuckDB)
 - Driver maturity matrix in `docs/driver-maturity.md`
 - Drivers declare whether they can report indexes and foreign keys, so an engine that has none is no longer indistinguishable from a table that has none
 - Windows integrated authentication for SQL Server through the current Kerberos ticket cache
@@ -92,7 +93,6 @@
 - Arbitrary SQL query soft row cap raised to 1,000,000 (truncated flag still set); browse pagination remains uncapped by that constant
 - Agentd approval strategies are deny (default) or interactive TTY; automatic approval is test-only
 - DuckDB driver is an optional `duckdb` Cargo feature (bundled build is large)
-- Oracle appears in the driver list only when built with `--features odpi`
 - Linux CI runs a non-GTK preflight job before the full GTK checks; local `./scripts/preflight.sh` mirrors that gate
 - Policy evaluation takes the resolved connection EnvPolicy once; connection overrides no longer re-run evaluate
 - Connect dialog TLS control is a mode picker (Disabled / Prefer / Require / Verify CA / Verify Full), defaulting to Verify Full for network drivers

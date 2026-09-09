@@ -76,4 +76,4 @@ The entry should describe behavior, not file-by-file source movement. There shou
 - Linux relevance: non-text pattern filters emitted invalid PostgreSQL operators, the daemon view wrapper inherited an empty default, sidebar refresh lacked connection identity, and DuckDB JSON functions required a downloaded extension.
 - Manual port: PostgreSQL text-pattern conversion; ordinary/controlled view forwarding; stale-sidebar rejection; bundled JSON/Parquet. Invalid count fallback and redundant post-DDL browse reads were additional Linux findings. Structure/editor transactions use separate pooled handles; a real-engine regression confirms isolation.
 - Not ported: Apple UI, plugins, licensing, bulk dump/restore behavior without a Linux counterpart. Timing remains a specified follow-up, not fabricated engine time.
-- Verification: [stabilization ledger](stabilization-2026-09.md); [performance evidence](performance-2026-09.md). No Apple source tree was merged.
+- Historical verification: [stabilization ledger](stabilization-2026-09.md); [performance evidence](performance-2026-09.md). No Apple source tree was merged.

@@ -2,13 +2,13 @@
 
 Current bug-fix scope and validation: [bug and consistency audit](docs/bug-consistency-2026-09.md). It supersedes older candidate-status statements below; package release approval remains separate.
 
-Last audited: 2026-09-07
+The current source and verification record is the [bug and consistency audit](docs/bug-consistency-2026-09.md); dated audits linked below are historical evidence only.
 
 The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Linux capability backlog. This file is the concise status view.
 
 ## Current state
 
-TablePro Linux is a substantial GTK4/libadwaita database client, not a prototype. Its core daily-driver workflows are implemented. Production approval, fail-closed audit, PostgreSQL cancellation, and PostgreSQL TLS, SSH, lock, and reconnect behavior are release-verified locally. Exclusive connection switching, deterministic PostgreSQL ordering, direct local sockets, the internal Arch recipe, and a required GTK job are implemented in the current candidate. Hosted default and driver checks passed at `89979e51a`; its DuckDB setup failure is corrected locally and needs new hosted evidence. RC gates still include 30/30 GTK soak attempts and installed-package verification.
+TablePro Linux is a substantial GTK4/libadwaita database client, not a prototype. Its core daily-driver workflows are implemented. Production approval, fail-closed audit, PostgreSQL cancellation, and PostgreSQL TLS, SSH, lock, and reconnect behavior are release-verified locally. Exclusive connection switching, deterministic PostgreSQL ordering, direct local sockets, the internal Arch recipe, and a required GTK job are implemented. A release candidate must be frozen before its hosted, soak, and installed-package evidence can be attributed to it.
 
 Every claim below states whether it is implemented, integrated, or release-verified. A feature with unit tests only is never described as verified.
 
@@ -26,7 +26,6 @@ Status terms:
 |---|---|---|
 | PostgreSQL, MySQL, SQLite, SQL Server, ClickHouse | Implemented | PostgreSQL is release-verified through the fixture; the other engines have container integration tests only. Server-side cancellation is verified against a real engine on PostgreSQL, MySQL, ClickHouse and SQLite; SQL Server declares it unsupported because tiberius cannot send the TDS attention packet |
 | Redis, MongoDB, DuckDB | Implemented | Experimental; DuckDB requires a Cargo feature. Redis and MongoDB TLS is release-verified |
-| Oracle | Broken | Does not compile under its `odpi` feature against oracle 0.6.3 |
 | Browse/edit/filter/sort/pagination | Implemented | Keyset helper exists; integers wider than 2^53 edit exactly; large-result behavior needs release tests |
 | SQL editor and multiple result tabs | Integrated | PostgreSQL timeout and cancel stop the server query and wait for terminal audit state. One dialect-aware lexer sets statement boundaries, so a PostgreSQL function body runs whole |
 | Bounded operations | Integrated | Every database call the interface starts carries a deadline, gated by `scripts/check-bounded-operations.sh` |
@@ -57,7 +56,7 @@ Status terms:
 - [x] Pin Linux GitHub Actions to immutable commits
 - [x] Log upstream reconciliations from 2026-08-10 onward
 
-Phase 0 is complete locally. Rust 1.93 CI is green, current stable Clippy passes locally, and the first hosted current-stable schedule is expected after push. Real SQL Server TLS and Kerberos negotiation remain release-fixture work in Phase 3.
+Phase 0 is complete locally. Real SQL Server TLS and Kerberos negotiation remain release-fixture work in Phase 3.
 
 ### 1: Authorization and approval
 
@@ -118,7 +117,7 @@ Phase 4 has a required PR smoke job and a separate daily five-attempt soak. Prom
 - [x] Keep external planning research advisory rather than authoritative
 - [x] Distinguish implementation from release verification in every product claim
 
-Phase 5 documentation is current as of 2026-08-18. Keeping it current is a standing rule for every change, not a one-time task.
+Phase 5 documentation is maintained as part of each change, not as a one-time task.
 
 ### 6: DBA and data-engineering depth
 
@@ -165,7 +164,7 @@ Phase 10 is in progress. Slice 10.2 added connection organisation: groups, tags,
 
 ## Next implementation target
 
-The active target is the ten-day stabilization sprint in [PLAN.md](../PLAN.md): correctness, browse-logic separation, measured PostgreSQL memory use, optional DuckDB coverage, and evidence-backed documentation. [The sprint audit](docs/stabilization-2026-09.md) records implementation, checks and unresolved gates.
+The active target is the bug-and-consistency scope in [PLAN.md](../PLAN.md). Its [current audit](docs/bug-consistency-2026-09.md) records corrections, checks, and unresolved release gates; the September stabilization audit is historical evidence for its own source tree.
 
 Feature work follows the [whole-app adoption review through pinned macOS 0.72](docs/upstream-adoption.md): finish session/activity gaps, then small grid workflows, PostgreSQL catalog/types, timing, and export/transfer foundations. Connection organization and DuckDB flat-file opening already exist and must not be recreated from older backlog entries.
 
