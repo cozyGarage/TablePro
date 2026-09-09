@@ -295,6 +295,73 @@ mod tests {
     }
 
     #[test]
+    fn blast_radius_limit_is_inclusive_and_unknown_estimates_are_not_allowed() {
+        let policy = EnvPolicy {
+            agent_writes: WritePolicy::Allow,
+            blast_radius_max_rows: Some(10),
+            human_approve_writes: false,
+            ..env_policy(Environment::Local)
+        };
+        let facts = classify("UPDATE items SET value = 1 WHERE id > 0", "postgres");
+        let agent = Principal::Agent {
+            token: "test".into(),
+            client: None,
+            model: None,
+        };
+        for (rows, agent_rule, human_rule) in [
+            (Some(9), "agent_write_allow", "human_write_allow"),
+            (Some(10), "agent_write_allow", "human_write_allow"),
+            (Some(11), "blast_radius_exceeded", "blast_radius_approve"),
+            (None, "blast_radius_unknown", "blast_radius_unknown"),
+        ] {
+            let agent_decision = evaluate(&agent, Environment::Local, &facts, false, &policy, rows);
+            let human_decision = evaluate(
+                &Principal::human_gui(),
+                Environment::Local,
+                &facts,
+                false,
+                &policy,
+                rows,
+            );
+            assert_eq!(agent_decision.rule_name(), agent_rule);
+            assert_eq!(human_decision.rule_name(), human_rule);
+            let within_limit = rows.is_some_and(|rows| rows <= 10);
+            assert_eq!(agent_decision.is_allow(), within_limit);
+            assert_eq!(human_decision.is_allow(), within_limit);
+            if !within_limit {
+                assert!(matches!(agent_decision, Decision::Deny { .. }));
+                assert!(matches!(human_decision, Decision::RequireApproval { .. }));
+            }
+        }
+    }
+
+    #[test]
+    fn human_unscoped_and_ddl_approval_survive_permissive_write_defaults() {
+        let policy = EnvPolicy {
+            human_approve_writes: false,
+            human_approve_ddl: true,
+            blast_radius_max_rows: None,
+            ..env_policy(Environment::Local)
+        };
+        for (sql, expected) in [
+            ("DELETE FROM items", "human_unscoped_dml"),
+            ("DROP TABLE items", "human_ddl_approve"),
+        ] {
+            let decision = evaluate(
+                &Principal::human_gui(),
+                Environment::Local,
+                &classify(sql, "postgres"),
+                false,
+                &policy,
+                Some(1),
+            );
+            assert!(matches!(decision, Decision::RequireApproval { .. }));
+            assert!(!decision.is_allow());
+            assert_eq!(decision.rule_name(), expected);
+        }
+    }
+
+    #[test]
     fn deny_write_policy_denies_every_agent_write_route() {
         let policy = EnvPolicy {
             agent_writes: WritePolicy::Deny,
@@ -345,6 +412,7 @@ mod tests {
             Some(1),
         );
         assert!(d.is_allow(), "{d:?}");
+        assert_eq!(d.rule_name(), "human_write_allow");
     }
 
     #[test]
@@ -359,6 +427,8 @@ mod tests {
             None,
         );
         assert!(matches!(d, Decision::Deny { ref rule, .. } if rule == "connection_read_only"));
+        assert!(!d.is_allow(), "denial is not authorization");
+        assert_eq!(d.rule_name(), "connection_read_only");
     }
 
     #[test]

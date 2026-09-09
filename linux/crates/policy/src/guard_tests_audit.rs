@@ -63,7 +63,9 @@ async fn dropped_write_future_poisons_shared_state() {
     );
 
     let task = tokio::spawn(async move { guard.execute("INSERT INTO jobs(id) VALUES (1)").await });
-    dispatched.notified().await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), dispatched.notified())
+        .await
+        .expect("the permitted write must reach the driver before it is aborted");
     task.abort();
     task.await.expect_err("write task must be cancelled");
 
