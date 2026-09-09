@@ -29,6 +29,57 @@ async fn connect_file(directory: &TempDir) -> Arc<dyn Connection> {
 const LONG_QUERY: &str = "WITH RECURSIVE counter(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM counter WHERE x < 400000000) \
      SELECT count(*) FROM counter";
 
+#[tokio::test]
+async fn nullable_blob_columns_distinguish_null_empty_and_binary_values() {
+    let directory = TempDir::new().expect("temp dir");
+    let connection = connect_file(&directory).await;
+    connection
+        .execute("CREATE TABLE blobs (id INTEGER PRIMARY KEY, payload BLOB)")
+        .await
+        .unwrap();
+    connection
+        .execute("INSERT INTO blobs VALUES (1, NULL), (2, X''), (3, X'00ff41')")
+        .await
+        .unwrap();
+    let expected = vec![
+        vec![Value::Null],
+        vec![Value::Bytes(vec![])],
+        vec![Value::Bytes(vec![0, 255, 65])],
+    ];
+    let query = connection.query("SELECT payload FROM blobs ORDER BY id").await.unwrap();
+    assert_eq!(query.rows, expected);
+    let control = OperationControl::with_timeout(Duration::from_secs(5));
+    let bound = connection
+        .query_params_controlled(
+            "SELECT payload FROM blobs WHERE id > ? ORDER BY id",
+            &[Value::Int(0)],
+            &control,
+        )
+        .await
+        .unwrap();
+    assert_eq!(bound.rows, expected);
+}
+
+#[tokio::test]
+async fn declared_types_preserve_nulls_and_binary_affinity_mismatches() {
+    let directory = TempDir::new().expect("temp dir");
+    let connection = connect_file(&directory).await;
+    connection
+        .execute("CREATE TABLE typed (i INTEGER, r REAL, b BOOLEAN, d DATE, t TIME, dt DATETIME, payload BLOB)")
+        .await
+        .unwrap();
+    connection.execute("INSERT INTO typed DEFAULT VALUES").await.unwrap();
+    assert_eq!(
+        connection.query("SELECT * FROM typed").await.unwrap().rows,
+        vec![vec![Value::Null; 7]]
+    );
+    connection.execute("UPDATE typed SET r = X'00ff41'").await.unwrap();
+    assert_eq!(
+        connection.query("SELECT r FROM typed").await.unwrap().rows,
+        vec![vec![Value::Bytes(vec![0, 255, 65])]]
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_driver_declares_server_side_cancellation() {
     let directory = TempDir::new().expect("temp dir");

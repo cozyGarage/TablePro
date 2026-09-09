@@ -4,7 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
-use sqlx::{Column, Pool, Row, Sqlite, TypeInfo};
+use sqlx::{Column, Pool, Row, Sqlite, TypeInfo, ValueRef};
 
 use futures::stream::StreamExt;
 
@@ -512,6 +512,11 @@ fn rows_into_result(collected: &[SqliteRow], truncated: bool) -> QueryResult {
 }
 
 fn extract_value(row: &SqliteRow, idx: usize) -> Value {
+    // SQLite's non-optional decoders turn NULL into zero/empty values.
+    // Inspect the storage value before using the declared column type.
+    if row.try_get_raw(idx).is_ok_and(|value| value.is_null()) {
+        return Value::Null;
+    }
     let type_name = row.columns()[idx].type_info().name().to_ascii_uppercase();
     match type_name.as_str() {
         "INTEGER" => row
@@ -576,13 +581,7 @@ fn untyped_value(row: &SqliteRow, idx: usize) -> Value {
 /// value is genuinely NULL or just stored as text/bytes instead, so a
 /// real value is never silently shown as an empty cell.
 fn decode_fallback(row: &SqliteRow, idx: usize) -> Value {
-    if let Ok(Some(text)) = row.try_get::<Option<String>, _>(idx) {
-        return Value::Text(text);
-    }
-    if let Ok(Some(bytes)) = row.try_get::<Option<Vec<u8>>, _>(idx) {
-        return Value::Text(bytes.iter().map(|b| format!("{b:02x}")).collect());
-    }
-    Value::Null
+    untyped_value(row, idx)
 }
 
 fn bind_sqlite_params<'q>(
