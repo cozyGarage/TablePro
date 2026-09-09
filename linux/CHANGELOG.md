@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Bug and consistency follow-up
+
+- SQLite preserves NULL in declared numeric, boolean, date/time, and blob columns, and preserves binary values on type mismatch
+- JSON page export writes actual binary contents as `\x`-prefixed hexadecimal instead of a byte-count label
+- Export writes use unique private temporary files, preventing overlapping exports and pre-existing symlinks from corrupting files
+- Workspace restoration keeps the selected editor when unknown saved tab types are removed
+- Daemon index and foreign-key metadata calls preserve the driver's controlled path
+- GTK regressions cover JSON page contents and process restart; local driver checks include Redis, and fixture scripts resolve their workspace and isolate keyring sessions
+- Optional DuckDB CI trusts only its checked-out workspace for Git ownership validation
+
 ### September stabilization
 
 - PostgreSQL pattern filters support non-text values without changing typed comparisons; invalid filters no longer produce unfiltered row counts

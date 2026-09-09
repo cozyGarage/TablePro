@@ -1,5 +1,7 @@
 # TablePro
 
+Current bug-fix scope and validation: [bug and consistency audit](linux/docs/bug-consistency-2026-09.md). It supersedes older candidate-status statements below; package release approval remains separate.
+
 TablePro is a native Linux database client built with Rust, GTK4, libadwaita, GtkSourceView, and Relm4. Current development is on the `linux` branch. The Cargo workspace is under `linux/` and requires Rust 1.93.
 
 Every shipped feature is free to use. TablePro has no account, license, subscription, paid-tier, or remote entitlement gate.

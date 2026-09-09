@@ -1,5 +1,7 @@
 # TablePro Linux
 
+Current bug-fix scope and validation: [bug and consistency audit](docs/bug-consistency-2026-09.md). It supersedes older candidate-status statements below; package release approval remains separate.
+
 TablePro is a Linux-only database client built with Rust, GTK4, libadwaita, and Relm4. The Rust workspace is rooted in this `linux/` directory.
 
 ## Status
@@ -8,7 +10,7 @@ The GTK application supports PostgreSQL, MySQL, SQLite, SQL Server, and ClickHou
 
 Current workflows include saved connections, SSH tunnels, browse and SQL tabs, structure editing, inline row changes, query history, policy checks, MCP access, and the headless `tablepro-agentd` process. See [ROADMAP.md](ROADMAP.md), [docs/connections.md](docs/connections.md), [docs/driver-maturity.md](docs/driver-maturity.md), and [docs/production-audit.md](docs/production-audit.md) for current limits.
 
-The application is suitable for development and personal testing. Hosted driver, PostgreSQL, GTK and Flatpak jobs passed at `7d8288132`; the [September audit](docs/stabilization-2026-09.md) records newer working-tree verification. Trusted release use still requires a frozen-candidate soak and installed-package evidence. DuckDB now bundles JSON/Parquet functionality and has an explicit optional-feature CI job.
+The Linux client remains under development. The [bug and consistency audit](docs/bug-consistency-2026-09.md) records the current corrections and verification. Hosted checks at `89979e51a` passed except for DuckDB's Git ownership setup; its correction still needs hosted confirmation. Package release approval requires the separate frozen-candidate soak and installed-package evidence.
 
 ## Named query parameters
 

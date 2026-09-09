@@ -1,0 +1,154 @@
+{
+  "base_commit": "89979e51a3d70b52c2a4082d0fa44ac72528c8ea",
+  "branch": "linux",
+  "date": "2026-09-09",
+  "state": "Locally verified implementation; all listed functional gates passed. New hosted CI and package release approval remain pending.",
+  "toolchain": "Rust/Cargo 1.93.1; GTK 4.22.4; libadwaita 1.9.3; GtkSourceView 5.20.0; cargo-mutants 27.1.0",
+  "verification_basis": "Checks executed in this session; commands requiring local listeners, Docker or D-Bus ran outside the filesystem/network sandbox. Original baseline sandbox failure was EPERM binding loopback; its unsandboxed rerun passed.",
+  "working_directory": "repository root unless command specifies otherwise",
+  "checks": [
+    {
+      "gate": "baseline",
+      "command": "bash linux/scripts/ci-local.sh",
+      "log": "/tmp/tablepro-stabilization-baseline.log",
+      "log_sha256": "d94ad0b2e0227d6fe528be38d5cbec20f5dd83dfd652d196f5b3a0f54dbc82a7",
+      "result": "passed",
+      "basis": "observed command completion and saved output; mutation counts described below"
+    },
+    {
+      "gate": "final-fast",
+      "command": "bash linux/scripts/ci-local.sh",
+      "log": "/tmp/tablepro-stabilization-final-fast.log",
+      "log_sha256": "17616144e19c31e9976168c4e758f14fc5628b972a92fe29381d4c098b7cd987",
+      "result": "passed",
+      "basis": "observed command completion and saved output; mutation counts described below"
+    },
+    {
+      "gate": "integration",
+      "command": "bash linux/scripts/ci-local.sh integration",
+      "log": "/tmp/tablepro-stabilization-integration.log",
+      "log_sha256": "4b30bb611b0408708c97db99f71796f73f81c9243c85d21b757239a0778668cb",
+      "result": "passed: 46 tests across PostgreSQL, Unix socket, MySQL, SQL Server, ClickHouse, Redis",
+      "basis": "observed command completion and saved output; mutation counts described below"
+    },
+    {
+      "gate": "postgres",
+      "command": "bash linux/scripts/test-postgres-release.sh",
+      "log": "/tmp/tablepro-stabilization-postgres.log",
+      "log_sha256": "ba2b6c0eb2cbeb1e3ab0da5c656c4286479355a6cc8e2ec0e650c50ab01c5014",
+      "result": "passed: 51 tests",
+      "basis": "observed command completion and saved output; mutation counts described below"
+    },
+    {
+      "gate": "tls",
+      "command": "bash linux/scripts/test-driver-tls.sh",
+      "log": "/tmp/tablepro-stabilization-tls.log",
+      "log_sha256": "dce0361e874f18b7557f029a96a5f7b9f666a362bb964dcbe3ba02415e0d9e22",
+      "result": "passed: 23 tests",
+      "basis": "observed command completion and saved output; mutation counts described below"
+    },
+    {
+      "gate": "secret-service",
+      "command": "bash linux/scripts/test-secret-service.sh",
+      "log": "/tmp/tablepro-stabilization-secret-service.log",
+      "log_sha256": "911156dd5c45a51225cd36277d87038af72b1b44ad7c938dcc1f29a29c5f946e",
+      "result": "passed: one real Secret Service round-trip",
+      "basis": "observed command completion and saved output; mutation counts described below"
+    },
+    {
+      "gate": "gtk",
+      "command": "PATH=/tmp/tablepro-gtk-runtime/usr/bin:$PATH PYTHONPATH=/tmp/tablepro-gtk-runtime/usr/lib/python3.14/site-packages TABLEPRO_GTK_ARTIFACT_DIR=/tmp/tablepro-stabilization-gtk-artifacts bash linux/scripts/test-gtk-safety.sh",
+      "log": "/tmp/tablepro-stabilization-gtk.log",
+      "log_sha256": "2d98b9567dfbabb9df39d8b8186891c2f5454348b32c73b854b60f288a2df1c1",
+      "result": "passed: all 16 installed GTK scenarios",
+      "basis": "observed command completion and saved output; mutation counts described below"
+    },
+    {
+      "gate": "duckdb-final",
+      "command": "cargo test --manifest-path linux/Cargo.toml --locked -p tablepro-driver-duckdb && cargo build --manifest-path linux/Cargo.toml --locked -p tablepro-app --features duckdb",
+      "log": "/tmp/tablepro-stabilization-duckdb-final.log",
+      "log_sha256": "0e87f52661a4c785727c00701d53b54c20e235d4821598f4ae1759efb684660e",
+      "result": "passed: 7 driver tests and optional application build",
+      "basis": "observed command completion and saved output; mutation counts described below"
+    },
+    {
+      "gate": "deny",
+      "command": "cd linux && cargo deny check",
+      "log": "/tmp/tablepro-stabilization-deny.log",
+      "log_sha256": "0505b8af39491c824fb44e7dbe909d7490ca7149903f12a064c3e2cefdab345d",
+      "result": "passed",
+      "basis": "observed command completion and saved output; mutation counts described below"
+    },
+    {
+      "gate": "mutants-core-final",
+      "command": "cargo mutants --dir linux --package tablepro-core --file crates/core/src/export.rs --re write_atomically --test-tool cargo --timeout 60 --output /tmp/tablepro-mutants-core-final -- --lib",
+      "log": "/tmp/tablepro-stabilization-mutants-core-final.log",
+      "log_sha256": "f5ae4a212cfeda9dc3e9b4c5ecbb3f32553dfb94035a657302a95afcc8f0e615",
+      "result": "2 caught, 0 missed",
+      "basis": "observed command completion and saved output; mutation counts described below"
+    },
+    {
+      "gate": "mutants-policy-final",
+      "command": "cargo mutants --dir linux --package tablepro-policy --file crates/policy/src/rules.rs --test-tool cargo --timeout 60 --output /tmp/tablepro-mutants-policy-final -- --lib",
+      "log": "/tmp/tablepro-stabilization-mutants-policy-final.log",
+      "log_sha256": "5726e695b3e17da933862617826bf19848ea28be42c68bd170fd7501f2002729",
+      "result": "28 caught, 10 unviable, 2 timeouts, 0 missed; timeout cases subsequently fixed and rerun",
+      "basis": "observed command completion and saved output; mutation counts described below"
+    },
+    {
+      "gate": "mutants-policy-bounded",
+      "command": "cargo mutants --dir linux --package tablepro-policy --file crates/policy/src/rules.rs --re \"56:29|71:57\" --test-tool cargo --timeout 60 --output /tmp/tablepro-mutants-policy-bounded -- --lib",
+      "log": "/tmp/tablepro-stabilization-mutants-policy-bounded.log",
+      "log_sha256": "fb2dc6a23238ff285189a9c8d01cde338798dc1bee0992d92ff8c0eac9ee8606",
+      "result": "2 caught; bounded audit-test wait replaces previous hangs",
+      "basis": "observed command completion and saved output; mutation counts described below"
+    }
+  ],
+  "source_fingerprint_sha256": "c93978523755463b0d318c43913ce765736b413e7727941ead16ad169c919c1f",
+  "source_fingerprint_definition": "SHA256 of sorted tracked implementation paths, a space, file SHA256, newline; include linux/ and .github/workflows/ files with .rs .toml .lock .sh .py .sql .yml .yaml suffixes. Exclude documentation and generated ignored fixtures.",
+  "source_fingerprint_file_count": 258,
+  "changed_source_sha256": {
+    ".github/workflows/build-linux.yml": "57500e38bbaf858782e3fcb620cc3b52148466c62c8bf47e37ae66c93cdac1af",
+    ".github/workflows/linux-quality.yml": "11337df7f535ced94890b74fdbb68624fdbaa572d79be12f1ca3050a49ef1af3",
+    "linux/crates/agentd/src/lib.rs": "351f0aa2469d98d9eec819b4fe1b09ef046ba122cfd37087807290f0b8f98762",
+    "linux/crates/agentd/src/session_tests.rs": "7a05df4f250ce07f31e6b882c8c113d73ec0620a96edbbab4f35115d5e16c3d8",
+    "linux/crates/app/src/services/workspace_state.rs": "059a3ff6ecdf193cb85720d4ed69cc6be293596c591c20c6c9f3b901ebaa8bdd",
+    "linux/crates/app/src/ui/app/render.rs": "3233ba697b938c043b990362ea5c5d190f808f04b1d4b8129d54c60aeb4aa24b",
+    "linux/crates/app/tests/gtk_safety.py": "c3211171084f6b04c30cf8597bdfafe689d46a2a4523085c872d4188c0e35566",
+    "linux/crates/core/Cargo.toml": "5819fe542a953d9a7c2c65facff89780ff9bb942eaf80e9550dc67efd027a396",
+    "linux/crates/core/src/export.rs": "b3bb782e2bd4e87c6c8ebd55b9d99232f78c78e9f4170a661fab56cf22d972f3",
+    "linux/crates/drivers/sqlite/src/lib.rs": "41dfccc786ddefad296e7cb1274e1ba7bec90465c48816188a01fa48c35a017c",
+    "linux/crates/drivers/sqlite/tests/integration.rs": "5cc1df7cf986d75b08b6fc649eecef5c157657da8c7ba54d737f01d5473a7826",
+    "linux/crates/policy/src/guard_tests_audit.rs": "594a07de1e2cb70267c27485f2e45325b746611aa56df555077e2acfa5a50d3b",
+    "linux/crates/policy/src/rules.rs": "9c658675c1452536738ff6089ab1a19043c8decca9be34af678621c1f6b9fe40",
+    "linux/scripts/ci-local.sh": "d431c6e0cc60667a92f13f5c7e77bf28b3b9b0787d2d67bd9c9292d39c8b2e10",
+    "linux/scripts/test-gtk-safety.sh": "791a59f37c37592e36db461f84051f0305ab9a09af855fd99cb24c928b254c78",
+    "linux/scripts/test-secret-service.sh": "37d04f071ca4ae6c83572e2fc0db79c98919073641369a2d43ac7358d35502f4"
+  },
+  "additional_checks": [
+    "git diff --check passed; bash -n for all changed fixture scripts; GTK Python parsed successfully",
+    "Ignored-test inventory regeneration matches committed inventory; no ignored-test declarations changed",
+    "DuckDB Git ownership error reproduced with GIT_TEST_ASSUME_DIFFERENT_OWNER=1; trusting only the exact checkout succeeds using a temporary global config",
+    "Mutation workflow summary executed against real report files and a missing-report case; correct counts and unavailable-evidence message asserted"
+  ],
+  "scope_notes": [
+    "GTK release binary includes every production fix. Subsequent changes were policy/core tests, CI/reporting, and documentation; final fast and mutation runs cover those test additions.",
+    "Initial policy mutation run: 10 missed, 18 caught, 10 unviable, 2 timeouts. Added assertions; final combined evidence: 30 caught, 10 unviable, no remaining misses or timeouts among the selected 40.",
+    "Initial atomic export mutation run: 1 missed, 1 caught. Final: both caught.",
+    "No line coverage percentage or standalone cargo-audit pass claimed; cargo-deny advisories passed.",
+    "Local temporary log paths are not durable hosted artifacts."
+  ],
+  "pending": [
+    "New hosted Build Linux for the corrected workflows",
+    "Installed Arch/Wayland package verification and 30-attempt GTK release soak",
+    "Automatic credential/certificate revision invalidation contract",
+    "PostgreSQL server-side result cap design",
+    "SQL Server TLS/Kerberos fixture; Oracle remains unsupported"
+  ],
+  "hosted_base": {
+    "build": "https://github.com/cozyGarage/TablePro/actions/runs/34272811689",
+    "flatpak": "https://github.com/cozyGarage/TablePro/actions/runs/34272811661",
+    "result": "All relevant default jobs passed; optional DuckDB failed at dubious Git ownership before compilation"
+  },
+  "candidate_commit": "f8a0ba7055dfe609308aa5326fb10c82982c70b9"
+}

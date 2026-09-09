@@ -1,12 +1,14 @@
 # TablePro Linux roadmap
 
+Current bug-fix scope and validation: [bug and consistency audit](docs/bug-consistency-2026-09.md). It supersedes older candidate-status statements below; package release approval remains separate.
+
 Last audited: 2026-09-07
 
 The repository-level [`PLAN.md`](../PLAN.md) is the source of truth for sequencing, detailed acceptance criteria, and the Linux capability backlog. This file is the concise status view.
 
 ## Current state
 
-TablePro Linux is a substantial GTK4/libadwaita database client, not a prototype. Its core daily-driver workflows are implemented. Production approval, fail-closed audit, PostgreSQL cancellation, and PostgreSQL TLS, SSH, lock, and reconnect behavior are release-verified locally. Exclusive connection switching, deterministic PostgreSQL ordering, direct local sockets, the internal Arch recipe, and a required GTK job are implemented in the current candidate. Base-commit CI passed at `7d8288132`; the stabilization working tree needs its own hosted evidence. RC gates still include 30/30 GTK soak attempts and installed-package verification.
+TablePro Linux is a substantial GTK4/libadwaita database client, not a prototype. Its core daily-driver workflows are implemented. Production approval, fail-closed audit, PostgreSQL cancellation, and PostgreSQL TLS, SSH, lock, and reconnect behavior are release-verified locally. Exclusive connection switching, deterministic PostgreSQL ordering, direct local sockets, the internal Arch recipe, and a required GTK job are implemented in the current candidate. Hosted default and driver checks passed at `89979e51a`; its DuckDB setup failure is corrected locally and needs new hosted evidence. RC gates still include 30/30 GTK soak attempts and installed-package verification.
 
 Every claim below states whether it is implemented, integrated, or release-verified. A feature with unit tests only is never described as verified.
 

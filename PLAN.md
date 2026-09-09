@@ -1,6 +1,6 @@
 # TablePro Linux development plan
 
-Last audited: 2026-09-07
+Last audited: 2026-09-09
 
 This plan is the source of truth for the Linux application. It separates:
 
@@ -13,31 +13,26 @@ The application is a Linux-only native Rust and GTK product. Database drivers ar
 
 ## Current baseline
 
-- Development: `linux`, tracking `origin/linux` in `cozyGarage/TablePro`.
-- Reviewed base: `7d82881323af083dc6e045971f31d505fdf03164`; stabilization candidate `751a458293eca384e8747d7661db1fe9f713401b` is committed and pushed to `origin/linux`.
-- Rust 1.93.1; 19 workspace members. Static drivers, native GTK, no entitlement gates.
-- PostgreSQL has the broadest real-service evidence. Driver `Stable` declarations are not production approval. Redis/MongoDB remain experimental, DuckDB optional, Oracle ODPI broken.
-- [Base-commit CI](https://github.com/cozyGarage/TablePro/actions/runs/34107322448) passed fast, GTK, driver, TLS and PostgreSQL release jobs. Candidate CI has started; a successful candidate result is still required.
-- Current commands, results, limitations and unresolved work are in [the stabilization audit](linux/docs/stabilization-2026-09.md). Historical test counts are not current coverage claims.
-- RC promotion still requires a frozen commit, 30 consecutive retry-free GTK attempts across at least six runs, and installed Arch install/upgrade/rollback on Wayland. No new soak credit is claimed here.
+- Development starts from `linux` at `89979e51a3d70b52c2a4082d0fa44ac72528c8ea`. Verified implementation after this pass: `f8a0ba7055dfe609308aa5326fb10c82982c70b9`.
+- That commit passed hosted default, driver, TLS, PostgreSQL, GTK, and Flatpak checks; its optional DuckDB job failed at Git ownership validation before compilation.
+- The active findings and validation ledger are in [the bug and consistency audit](linux/docs/bug-consistency-2026-09.md). The [previous stabilization audit](linux/docs/stabilization-2026-09.md) is historical evidence for its recorded source tree.
+- PostgreSQL has the broadest fixture evidence. Redis/MongoDB remain experimental, DuckDB optional, and Oracle ODPI unsupported.
+- Package promotion remains separate: a frozen SHA, 30 consecutive retry-free GTK attempts across six runs, and installed Arch/Wayland install, upgrade, and rollback evidence are still required.
 
-## Active sprint: September stabilization (ten developer days)
+## Active work: bugs and behavioral consistency only
 
-This sprint takes precedence over the historical phase order below. Feature implementation follows stabilization; the feature gap review is part of this sprint.
+This pass supersedes the September feature-comparison sprint and takes precedence over the historical phases below. Feature adoption, redesign, broad refactoring, and package release approval are deferred.
 
-| ID | Budget | Work and acceptance |
-|---|---:|---|
-| S1 | 1 day | Review changes since the prior audit; reproducible command/evidence ledger and generated ignored-test inventory |
-| S2 | 3 days | Reproduce/fix filters, incorrect counts, wrapper metadata and stale responses; regressions for each confirmed defect and transaction isolation |
-| S3 | 1 day | Pure browse request builder shared by count/page; preserve native fetch, parameter ordering, keyset and PK tie-breakers |
-| S4 | 1 day | One warm-up/five samples for million-row first/filtered/deep/wide/capped queries; measured latency, RSS and sampled server activity; retain only evidence-backed optimization |
-| S5 | 1.5 days | Whole-app comparison pinned to macOS 0.72; revalidate old statuses and define dependent follow-up slices |
-| S6 | 1 day | Reconcile README, roadmap, capabilities, driver limits and adoption; retire conflicting historical tasks |
-| S7 | 1.5 days | Final applicable unit, real-driver, optional-feature and GTK validation; report blocked gates and open defects without claiming a release |
+1. Establish an exact baseline and distinguish confirmed defects, verification gaps, and existing limitations.
+2. Review data values and transaction boundaries, session/async ownership, policy/audit entry points, persistence, and browse/export behavior in that order.
+3. Reproduce each confirmed defect, add a failing regression, and apply the smallest compatible fix. Retain existing fixes unless a reproduction justifies correction or reversal.
+4. Extend real SQLite and GTK coverage for NULL/binary values, JSON export, and process restart. Reconcile local/hosted gate selection and fixture isolation.
+5. Validate the final source with the full fast, driver, TLS, PostgreSQL, Secret Service, GTK, and optional DuckDB gates. Use targeted mutation results to improve assertions rather than chase a coverage score.
+6. Record commands, outcomes, source hashes, blocked checks, and known limitations. A passing older commit does not verify modified files.
 
-The implementation/evidence status of each item lives in the audit, not in optimistic completion checkboxes. Critical defects consume contingency and displace optional optimization/refactoring. No public package publication, new drivers, or macOS source merge is included.
+The pass preserves saved-state formats, MCP interfaces, intentional permission differences, and supported-driver limitations. The GUI JSON export correction encodes binary values as `\x`-prefixed hexadecimal, matching existing CSV and MCP behavior. Export temporary files are unique and private; concurrent complete exports use last-completed replacement semantics.
 
-Run `cargo deny check` from `linux/`; it does not accept `--manifest-path`. Rustup honors the workspace's Rust 1.93 toolchain. Current-stable CI remains a separate gate.
+Run `cargo deny check` from `linux/`; it does not accept `--manifest-path`. Rust 1.93 remains the supported toolchain; current-stable CI is separate.
 
 ## Product contract
 

@@ -1,6 +1,6 @@
 # Testing
 
-Run test commands from the `linux/` workspace root. Current results, environment limits and base-commit hosted links are in [the September stabilization audit](stabilization-2026-09.md).
+Run test commands from the `linux/` workspace root. Current results and limits are in [the bug and consistency audit](bug-consistency-2026-09.md); [the earlier September audit](stabilization-2026-09.md) records historical evidence.
 
 ## Current local checks
 
@@ -58,7 +58,7 @@ The full `--lib --bins` command builds and runs tests from library crates and bi
 
 ## Storage tests
 
-Storage tests use temporary directories and explicit file paths for JSON and audit behavior. Query-history tests use SQLite. The Secret Service round-trip test is ignored by default because it needs a working desktop keyring session.
+Storage tests use temporary directories and explicit file paths for JSON and audit behavior. Query-history tests use SQLite. The Secret Service round-trip test is ignored by default because it needs a keyring. `scripts/test-secret-service.sh` always creates an isolated D-Bus/keyring session, even when invoked from a desktop session.
 
 Tests that change XDG environment variables must avoid racing with other tests. Prefer internal functions that accept a path when the module already provides them.
 
@@ -78,6 +78,7 @@ cargo test --test integration -p tablepro-driver-postgres -- --include-ignored -
 cargo test --test integration -p tablepro-driver-mysql -- --include-ignored --test-threads=1
 cargo test --test integration -p tablepro-driver-mssql -- --include-ignored --test-threads=1
 cargo test --test integration -p tablepro-driver-clickhouse -- --include-ignored --test-threads=1
+cargo test --test integration -p tablepro-driver-redis -- --include-ignored --test-threads=1
 ```
 
 These tests require Docker or a compatible Podman API socket. Keep each container handle alive for the full test because dropping it stops the container.
@@ -146,6 +147,13 @@ The suite verifies:
 7. A failed candidate connection leaves the original editor and database usable.
 8. A running read is cancelled and fully settles before the candidate connection is activated; subsequent writes reach only the new database.
 9. Current-page CSV export writes exactly the first 100 PK-ordered rows from a 150-row fixture through the real portal chooser.
+10. Pending edits gate a connection switch; discarding does not write to either database.
+11. A browse tab reopened after switching reads the new connection.
+12. Two windows keep queries attached to their own databases.
+13. Switching away and back after the persistence debounce preserves workspace tabs.
+14. Switching one window preserves another window's pending edits.
+15. Current-page JSON export preserves order, Unicode, escaped text, empty text, NULL, and binary values; binary values use `\x`-prefixed hexadecimal, including `\x` for an empty blob.
+16. Graceful quit and a new process restore the last connection and selected editor text without executing it; a subsequent explicit Run writes only to that connection. The saved browse tab also reopens.
 
 Each scenario declares its own fixture shape through `environment` and `audit_available` attributes, so a scenario can run against a local or production saved connection.
 
@@ -161,6 +169,8 @@ sudo pacman -S --needed dbus xorg-server-xvfb at-spi2-core python-atspi
 
 Ubuntu CI uses `dbus-daemon`, `gnome-keyring`, `xvfb`, `xauth`, `at-spi2-core`, `python3-pyatspi`, and `scrot`. The PR smoke job is required. A separate daily workflow runs five retry-free attempts and uploads stdout, stderr, accessibility snapshots, and screenshots on failure. RC promotion requires 30 consecutive attempts across at least six runs. Service-level tests still cover pure state and policy behavior, but they do not replace these cross-layer tests.
 
+SQLite integration regressions also distinguish NULL from zero, false, empty text, and empty blobs in declared columns, and preserve binary values despite declared-type affinity mismatches. Export unit tests overlap writers deterministically and check that pre-existing temporary symlinks cannot redirect writes. Workspace tests preserve active-tab identity when unknown records are removed.
+
 For ordinary UI changes, test the affected flow manually and include before and after screenshots. Add deterministic automation when a regression can be reproduced without timing or desktop-session assumptions.
 
 ## CI
@@ -170,10 +180,11 @@ For ordinary UI changes, test the affected flow manually and include before and 
 1. Preflight on Rust 1.93 without the GTK application.
 2. GTK formatting, Clippy, and `cargo test --workspace --exclude tablepro-driver-duckdb --lib --bins` in Ubuntu 25.10.
 3. Required installed GTK safety smoke under Xvfb and PyAT-SPI, including a real Secret Service round-trip.
-4. PostgreSQL, MySQL, SQL Server, and ClickHouse integration tests on Docker.
+4. PostgreSQL, MySQL, SQL Server, ClickHouse, and Redis integration tests on Docker.
 5. The PostgreSQL release fixture with TLS, an SSH bastion, and Toxiproxy on Docker.
 6. Scheduled and manually triggered Clippy on current stable Rust.
 7. Supply-chain checks with `cargo deny` and `cargo audit` in the GTK job.
+8. Driver TLS fixtures for MySQL, ClickHouse, Redis, and MongoDB, plus the optional DuckDB driver and application build.
 
 `.github/workflows/gtk-soak.yml` supplies the independent daily five-attempt soak ledger.
 
@@ -262,3 +273,5 @@ Lower a baseline in the same change when an oversized file shrinks.
 ## Browse performance
 
 See [the September measurements](performance-2026-09.md) and the `browse_benchmark` example in the release-test crate. One warm-up plus five measured samples cover first, filtered, deep, wide and capped result sets. Run each case in a separate process against a disposable fixture, with builds complete before measuring. Report memory improvements and latency regressions separately.
+
+The [bug and consistency audit](bug-consistency-2026-09.md) records the newer targeted mutation findings. cargo-mutants creates its report beneath `<output>/mutants.out/`; CI summaries distinguish missing reports from zero findings and retain the measurement step outcome.
