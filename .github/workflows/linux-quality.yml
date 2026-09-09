@@ -58,13 +58,17 @@ jobs:
       # an environment the runner lacks. They are also the two crates
       # whose defects reach SQL and authorization decisions.
       - name: Mutate tablepro-core
+        id: mutate-core
+        continue-on-error: true
         run: |
           cargo mutants --package tablepro-core --test-tool cargo \
-            --output mutants-core --timeout 60 --no-shuffle -- --lib || true
+            --output mutants-core --timeout 60 --no-shuffle -- --lib
       - name: Mutate tablepro-policy
+        id: mutate-policy
+        continue-on-error: true
         run: |
           cargo mutants --package tablepro-policy --test-tool cargo \
-            --output mutants-policy --timeout 60 --no-shuffle -- --lib || true
+            --output mutants-policy --timeout 60 --no-shuffle -- --lib
       - name: Summarise surviving mutants
         if: always()
         run: |
@@ -74,17 +78,25 @@ jobs:
             echo "A surviving mutant is a change to the code that no test noticed."
             echo "Some are equivalent to the original and can never be caught; the"
             echo "rest are behaviour with no test behind it."
+            echo "Core step outcome: ${{ steps.mutate-core.outcome }}"
+            echo "Policy step outcome: ${{ steps.mutate-policy.outcome }}"
+            echo "A failed measurement can mean surviving mutants, timeouts, or infrastructure failure; inspect its logs."
             for crate in core policy; do
-              caught="mutants-$crate/caught.txt"
-              missed="mutants-$crate/missed.txt"
-              timeout="mutants-$crate/timeout.txt"
+              report="mutants-$crate/mutants.out"
+              caught="$report/caught.txt"
+              missed="$report/missed.txt"
+              timeout="$report/timeout.txt"
+              unviable="$report/unviable.txt"
               echo
               echo "#### tablepro-$crate"
               echo
-              printf 'caught: %s, missed: %s, timeout: %s\n' \
-                "$(wc -l <"$caught" 2>/dev/null || echo 0)" \
-                "$(wc -l <"$missed" 2>/dev/null || echo 0)" \
-                "$(wc -l <"$timeout" 2>/dev/null || echo 0)"
+              if [[ ! -f "$caught" || ! -f "$missed" || ! -f "$timeout" || ! -f "$unviable" ]]; then
+                echo "Measurement unavailable: missing report files; inspect the step log."
+                continue
+              fi
+              printf 'caught: %s, missed: %s, timeout: %s, unviable: %s\n' \
+                "$(wc -l <"$caught")" "$(wc -l <"$missed")" \
+                "$(wc -l <"$timeout")" "$(wc -l <"$unviable")"
               if [[ -s "$missed" ]]; then
                 echo
                 echo '```'

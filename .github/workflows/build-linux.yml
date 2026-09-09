@@ -385,7 +385,9 @@ jobs:
         with:
           ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'linux') || github.ref }}
       - name: Record the commit under test
-        run: git rev-parse HEAD
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git rev-parse HEAD
       - name: Install build dependencies
         run: |
           apt-get update

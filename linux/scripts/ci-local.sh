@@ -64,6 +64,8 @@ run_integration() {
   cargo test --test integration -p tablepro-driver-mssql -- --include-ignored --test-threads=1
   echo "==> ClickHouse integration"
   cargo test --test integration -p tablepro-driver-clickhouse -- --include-ignored --test-threads=1
+  echo "==> Redis integration"
+  cargo test --test integration -p tablepro-driver-redis -- --include-ignored --test-threads=1
   echo "Integration checks passed."
 }
 

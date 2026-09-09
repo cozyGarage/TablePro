@@ -33,13 +33,13 @@ if [[ "${TABLEPRO_GTK_DBUS_ACTIVE:-0}" != "1" ]]; then
   trap cleanup_gtk_runtime EXIT
   env -u NO_AT_BRIDGE TABLEPRO_GTK_DBUS_ACTIVE=1 XDG_RUNTIME_DIR="$gtk_runtime" \
     ATSPI_DBUS_IMPLEMENTATION=dbus-daemon XDG_CURRENT_DESKTOP=GNOME \
-    dbus-run-session -- "$0" "$@"
+    dbus-run-session -- "$ROOT/scripts/test-gtk-safety.sh" "$@"
   exit $?
 fi
 
 if [[ "${TABLEPRO_GTK_XVFB_ACTIVE:-0}" != "1" ]]; then
   exec env TABLEPRO_GTK_XVFB_ACTIVE=1 \
-    xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24 -nolisten tcp" "$0" "$@"
+    xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24 -nolisten tcp" "$ROOT/scripts/test-gtk-safety.sh" "$@"
 fi
 
 export GDK_BACKEND=x11
