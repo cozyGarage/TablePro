@@ -2,9 +2,10 @@
 //! full result set; Parquet is stubbed until arrow/parquet deps are
 //! justified by compile-time cost.
 
+#[cfg(test)]
 use std::fs;
 use std::io::{self, BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::connection::Connection;
 use crate::error::DriverError;
@@ -75,7 +76,8 @@ pub async fn stream_table_to_csv(
 }
 
 /// Stream rows from an arbitrary SELECT by re-running with LIMIT/OFFSET
-/// pages. The RC browse UI uses these helpers for its loaded-page export.
+/// pages. This legacy helper does not establish a snapshot or stable order;
+/// the GUI exports its already loaded result instead.
 pub async fn stream_query_to_csv(
     conn: &dyn Connection,
     driver_id: &str,
@@ -123,41 +125,21 @@ pub fn write_atomically<F>(path: &Path, fill: F) -> io::Result<()>
 where
     F: FnOnce(&mut dyn Write) -> io::Result<()>,
 {
-    let temporary = temporary_sibling(path)?;
-    let outcome = (|| {
-        let file = fs::File::create(&temporary)?;
-        let mut writer = BufWriter::new(file);
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".tablepro-export-")
+        .tempfile_in(directory)?;
+    {
+        let mut writer = BufWriter::new(temporary.as_file_mut());
         fill(&mut writer)?;
         writer.flush()?;
-        writer.into_inner().map_err(io::Error::other)?.sync_all()
-    })();
-    if let Err(error) = outcome {
-        let _ = fs::remove_file(&temporary);
-        return Err(error);
     }
-    if let Err(error) = fs::rename(&temporary, path) {
-        let _ = fs::remove_file(&temporary);
-        return Err(error);
-    }
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
     Ok(())
-}
-
-fn temporary_sibling(path: &Path) -> io::Result<PathBuf> {
-    let directory = path.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{} has no parent directory", path.display()),
-        )
-    })?;
-    let name = path.file_name().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{} has no file name", path.display()),
-        )
-    })?;
-    let mut temporary = name.to_os_string();
-    temporary.push(".tablepro-part");
-    Ok(directory.join(temporary))
 }
 
 /// Parquet export is not wired yet (arrow/parquet inflate compile time).
@@ -212,6 +194,72 @@ fn value_to_csv_text(value: &Value) -> String {
 #[cfg(test)]
 mod atomic_write_tests {
     use super::*;
+
+    #[test]
+    fn overlapping_exports_publish_complete_independent_files() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("page.csv");
+        fs::write(&path, "original").expect("existing export");
+
+        write_atomically(&path, |outer| {
+            outer.write_all(b"outer export")?;
+            write_atomically(&path, |inner| inner.write_all(b"inner"))?;
+            assert_eq!(fs::read_to_string(&path)?, "inner");
+            Ok(())
+        })
+        .expect("both exports complete");
+
+        assert_eq!(fs::read_to_string(&path).expect("read export"), "outer export");
+        assert_eq!(fs::read_dir(directory.path()).expect("list").count(), 1);
+    }
+
+    #[test]
+    fn a_failed_export_preserves_an_existing_destination() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("page.csv");
+        fs::write(&path, "original").expect("existing export");
+        assert!(
+            write_atomically(&path, |writer| {
+                writer.write_all(b"replacement")?;
+                Err(io::Error::other("export failed"))
+            })
+            .is_err()
+        );
+        assert_eq!(fs::read_to_string(&path).expect("read export"), "original");
+        assert_eq!(fs::read_dir(directory.path()).expect("list").count(), 1);
+    }
+
+    #[test]
+    fn export_staging_stays_on_the_destination_filesystem() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("page.csv");
+        write_atomically(&path, |writer| {
+            // Atomic rename requires staging beside the destination, even
+            // when the destination is on a different mount from the cwd.
+            assert_eq!(fs::read_dir(directory.path())?.count(), 1);
+            assert!(!path.exists());
+            writer.write_all(b"complete export")
+        })
+        .expect("export");
+        assert_eq!(fs::read_to_string(path).expect("read export"), "complete export");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_temporary_symlink_cannot_redirect_an_export() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("page.csv");
+        let unrelated = directory.path().join("unrelated.txt");
+        fs::write(&unrelated, "keep me").expect("unrelated file");
+        std::os::unix::fs::symlink(&unrelated, directory.path().join("page.csv.tablepro-part"))
+            .expect("preexisting symlink");
+
+        write_atomically(&path, |writer| writer.write_all(b"export")).expect("export");
+
+        assert_eq!(fs::read_to_string(&unrelated).expect("unrelated file"), "keep me");
+        assert_eq!(fs::read_to_string(&path).expect("export file"), "export");
+        assert!(!path.is_symlink());
+    }
 
     #[test]
     fn a_completed_write_lands_at_the_destination_and_leaves_no_leftovers() {
